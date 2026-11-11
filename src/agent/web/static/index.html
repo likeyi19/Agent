@@ -35,6 +35,34 @@
       </div>
     </header>
 
+    <nav class="mode-switch" aria-label="Agent mode">
+      <button id="mode-research" type="button" aria-pressed="true">AI Research</button>
+      <button id="mode-native" type="button" class="secondary" aria-pressed="false">Native Functions</button>
+    </nav>
+
+    <section id="native-workspace" hidden aria-label="Native Functions">
+      <div class="native-layout">
+        <form id="native-form" class="panel">
+          <h2>Native Functions</h2>
+          <p class="muted small">Choose an installed function, supply its inputs, and run it directly.</p>
+          <label for="native-package">Package</label>
+          <select id="native-package"><option value="">Choose a package…</option></select>
+          <label for="native-function">Function</label>
+          <select id="native-function" disabled><option value="">Choose a function…</option></select>
+          <p id="native-description" class="muted small"></p>
+          <div id="native-inputs"></div>
+          <details id="native-parameters"><summary>Parameters</summary><p class="muted small">Unchanged arguments use native defaults. Enable a parameter to supply a value or explicit null.</p><div id="native-fields"></div></details>
+          <p id="native-error" role="alert" class="turn-error"></p>
+          <div class="composer-actions"><button id="native-run" type="submit" disabled>Run function</button><button id="native-cancel" type="button" class="secondary" hidden>Cancel</button></div>
+          <p id="native-status" role="status" aria-live="polite"></p>
+        </form>
+        <section class="panel native-results" aria-label="Native results">
+          <div class="section-heading"><h2>Results</h2><button id="native-new" type="button" class="secondary">New workspace</button></div>
+          <div id="native-call-results"><p class="muted">Your function results will appear here.</p></div>
+        </section>
+      </div>
+    </section>
+
     <p id="client-error" class="error-banner" role="alert" hidden></p>
 
     <nav class="workspace-switch" aria-label="Workspace view">

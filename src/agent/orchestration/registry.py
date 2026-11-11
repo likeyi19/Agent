@@ -713,6 +713,11 @@ class ScientificDeliverySpec:
     projected_roles: tuple[str, ...] = ()
     h5ad_roles: tuple[str, ...] = ()
     figure: tuple[str, str] | None = None
+    produced_files: Callable | None = None
+
+    def file_definitions(self, manifest=None):
+        return dict(self.files) if self.produced_files is None or manifest is None else {
+            **self.files, **self.produced_files(manifest)}
 
     def __post_init__(self):
         if not self.contract or not self.artifact_type or not self.files:
@@ -722,6 +727,8 @@ class ScientificDeliverySpec:
                 raise ValueError('Invalid scientific delivery file declaration.')
         if not callable(self.publication) or not callable(self.prepare):
             raise TypeError('Scientific delivery callbacks must be callable.')
+        if self.produced_files is not None and not callable(self.produced_files):
+            raise TypeError('Produced file descriptions must be publication-owned.')
         if (set(self.h5ad_roles + self.projected_roles) - set(self.files)
                 or self.figure and self.figure[0] not in self.files):
             raise ValueError('Scientific delivery roles must name reviewed files.')
@@ -1215,10 +1222,7 @@ class ToolRegistry:
         spec = self.get(name)
         from agent.tools._native_process import NativeExecutionError
         if isinstance(exception, NativeExecutionError):
-            classification = ErrorClassification(
-                ErrorCategory.ENVIRONMENT_ERROR if exception.code == 'NATIVE_EXECUTION_UNAVAILABLE'
-                else ErrorCategory.TOOL_EXECUTION_ERROR if exception.code == 'NATIVE_EXECUTION_FAILED'
-                else ErrorCategory.RESOURCE_ERROR, exception.code)
+            classification = _classify_tool_exception(exception)
         else:
             classification = spec.exception_classifier(exception)
         retryable = classification.code in spec.retryable_error_codes
@@ -1238,6 +1242,12 @@ class ToolRegistry:
 
 
 def _classify_tool_exception(exception: Exception) -> ErrorClassification:
+    from agent.tools._native_process import NativeExecutionError
+    if isinstance(exception, NativeExecutionError):
+        return ErrorClassification(
+            ErrorCategory.ENVIRONMENT_ERROR if exception.code == 'NATIVE_EXECUTION_UNAVAILABLE'
+            else ErrorCategory.TOOL_EXECUTION_ERROR if exception.code == 'NATIVE_EXECUTION_FAILED'
+            else ErrorCategory.RESOURCE_ERROR, exception.code)
     if isinstance(exception, FileNotFoundError):
         return ErrorClassification(ErrorCategory.RESOURCE_ERROR, "RESOURCE_NOT_FOUND")
     if isinstance(exception, FileExistsError):
@@ -3558,7 +3568,9 @@ def build_default_tool_registry() -> ToolRegistry:
     from .chromap_registry import tool_spec as chromap_native_tool_spec
     from .chromvar_native_registry import tool_spec as chromvar_native_tool_spec
     from .sequence_registry import tool_specs as sequence_tool_specs
+    from .native_callable_registry import tool_spec as native_callable_tool_spec
     specs = (
+        native_callable_tool_spec(),
         inspect_spec,
         chromvar_tool_spec(),
         motifmatchr_tool_spec(),

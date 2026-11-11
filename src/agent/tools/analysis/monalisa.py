@@ -1,5 +1,4 @@
 """Native monaLisa sequence-bin enrichment; no inferred differential analysis."""
-import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -16,7 +15,7 @@ from agent.tools._file_identity import file_closure
 from . import motifmatchr, peak_h5ad, sequence_reference
 from .native_matrix import arguments, native_kwargs, NativeInvocationError
 from .native_publication import NativePublication
-from .sequence_prediction import library, read, write
+from .sequence_prediction import read, write
 
 package = 'monaLisa'
 TOOL = 'run_monalisa'
@@ -115,7 +114,8 @@ def execute(values, execution_identity=None):
     for prefix in ('input', 'bins'):
         if args.get(prefix + '_sha256') and next(p['sha256'] for p in sources if p['path'] == args[prefix + '_path']) != args[prefix + '_sha256']:
             raise AuthorityError('Selected enrichment source changed')
-    executable = Path(os.environ.get('AGENT_MONALISA_RSCRIPT') or library().root.parent / 'runtimes/archr-1/env/bin/Rscript')
+    from .native_runtimes import rscript
+    executable = rscript('monaLisa')
     script = Path(__file__).parent / 'r/monalisa_v1.R'
     implementation = file_closure([executable, script])
     with tempfile.TemporaryDirectory(prefix='.monalisa-', dir=root) as temp:

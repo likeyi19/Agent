@@ -1,7 +1,6 @@
 """Native genomic tables: managed files/objects, shared publication and delivery."""
 import csv
 import math
-import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -12,7 +11,7 @@ from agent.tools.data.authority_context import current
 from agent.tools._file_identity import file_closure
 from .native_matrix import arguments, NativeInvocationError
 from .native_publication import NativePublication
-from .sequence_prediction import library, read, write
+from .sequence_prediction import read, write
 
 FACT_FIELDS = ('function_name', 'n_rows', 'result_format', 'measurement', 'parameters',
     'source_identity', 'software_versions', 'limitations')
@@ -127,7 +126,8 @@ class TablePackage:
     def native(self, args, stage):
         kw = self.native_arguments(args); name = args['function_name']
         if self.package == 'MACS3':
-            executable = Path(os.environ.get('AGENT_MACS3_EXECUTABLE') or library().root.parent / 'runtimes/macs3/env/bin/macs3').resolve()
+            from .native_runtimes import macs3
+            executable = macs3().resolve()
             runtime_path = executable.parent.parent.parent / 'runtime.json'
             runtime = read(runtime_path)
             if runtime['version'] != self.version or file_closure(p['path'] for p in runtime['files']) != runtime['files']:
@@ -163,7 +163,8 @@ class TablePackage:
                 command += ['condition2.tsv', 'common.tsv']
             request_sha = write(stage / 'request.json', dict(function_name=name, kwargs=kw))
         else:
-            executable = Path(os.environ.get('AGENT_CICERO_RSCRIPT') or library().root.parent / 'runtimes/cicero-1/env/bin/Rscript')
+            from .native_runtimes import rscript
+            executable = rscript('cicero')
             script = Path(__file__).parent / 'r/cicero_functions_v1.R'
             implementation = file_closure([executable, script])
             request_sha = write(stage / 'request.json', dict(stage=str(stage), function_name=name,

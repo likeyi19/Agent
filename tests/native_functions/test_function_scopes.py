@@ -152,7 +152,7 @@ def test_upload_guard_rejects_literal_substitution_and_changed_upload(tmp_path):
 
 
 @pytest.mark.parametrize('tool,function', [('run_scanpy','pp.neighbors'),('run_signac','Jaccard')])
-def test_function_scope_does_not_replace_a_grounded_choice_value(tool,function):
+def test_original_choice_literal_outranks_model_value_without_inventing_a_choice(tool,function):
     registry=build_default_tool_registry()
     text=f'Run {function}.'
     raw=dict(tool=tool,argument='function_name',native_function=function,literal=function,evidence=function)
@@ -166,7 +166,9 @@ def test_function_scope_does_not_replace_a_grounded_choice_value(tool,function):
     assert _bind_arguments(registry,text,{},valid)=={input_name(tool,function,'function_name'):function}
     other=next(fn for fn in registry.get(tool).required_arguments['function_name'].choices if fn!=function)
     wrong=_scientific_arguments([_ground_declaration(dict(raw,value=other),text)])
-    with pytest.raises(IntentError):_bind_arguments(registry,text,{},wrong)
+    assert _bind_arguments(registry,text,{},wrong)=={input_name(tool,function,'function_name'):function}
+    # Saved old declarations retain their historical value and scope checks.
+    with pytest.raises(IntentError):_bind_arguments(registry,text,{},wrong,historical=True)
 
 
 def compile_scoped_functions(tmp_path, *, registered_choice=False, crossed=False):
@@ -219,13 +221,14 @@ def test_prerequisite_projection_preserves_scopes_and_never_mutates_request():
     assert prerequisite_inputs(tool,dict(inputs,kwargs={'n_comps':9})) is None
     ordinary={'input_path':'original.h5ad','kwargs':{'n_comps':8}}
     assert prerequisite_inputs(tool,ordinary)==ordinary
-    from agent.application.dialogue_execution import _requested_parameters, _missing_parameter_inputs
+    from agent.application.dialogue_execution import _read_requested_parameters, _missing_parameter_inputs
+    from agent.application.structured_parameters import parameter_slots, missing_slots
     registry=build_default_tool_registry()
     admitted={'tool':tool.name,'inputs':inputs}
     assert _missing_parameter_inputs(registry,tool.name,['kwargs'],inputs)==[]
-    with pytest.raises(IntentError):_requested_parameters(registry,admitted,['kwargs'])
+    assert missing_slots(registry,parameter_slots(registry,tool.name,['kwargs']),inputs)==[]
     # The earlier false question remains readable, not new question authority.
-    assert _requested_parameters(registry,admitted,['kwargs'],historical=True)==['kwargs']
+    assert _read_requested_parameters(registry,admitted,['kwargs'])==['kwargs']
 
 
 def test_function_scope_is_distinct_from_direct_original_source_scope(tmp_path):

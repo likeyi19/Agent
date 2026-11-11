@@ -82,9 +82,12 @@ execution, disables swap for that unit, and retains cancellation/timeouts. Nativ
 execution requires the working user systemd manager; it does not fall back to
 uncontrolled execution. PCA fitting and its existing verifier use that boundary.
 
-Both the JSON resource field and `AGENT_SCIENTIFIC_RESOURCE_ROOT` select the same
-shared library: the application uses its scoped owner and isolated workers inherit
-the explicit environment location. Native runtimes and qualified references stay
+The JSON resource field selects the application-scoped shared library. The existing
+native process owner carries that selected location into isolated workers; it takes
+precedence over an inherited `AGENT_SCIENTIFIC_RESOURCE_ROOT` for that operation.
+The environment setting remains the fallback for standalone native calls. The block
+above sets both to the same deployment location. Memory and timeout budgets remain
+explicit operator environment settings. Native runtimes and qualified references stay
 in their existing installation locations. Nothing is copied into the test workspace.
 
 The upload limit is per file (4 GiB). Scientific delivery controls are separate:

@@ -132,7 +132,7 @@ def test_r_exchange_preserves_quotes_na_and_numeric_text_ids(source, tmp_path, m
     a.write_h5ad(source['input_path'])
     runtime = tmp_path / 'runtimes/signac-1/env/bin/Rscript'; runtime.parent.mkdir(parents=True)
     runtime.write_text('simulated executable identity')
-    monkeypatch.setattr(owner, 'library', lambda: SimpleNamespace(root=tmp_path / 'library'))
+    monkeypatch.setenv('AGENT_SIGNAC_RSCRIPT', str(runtime))
     def run(command, log, **unused):
         request_path = Path(command[-1]); req = json.loads(request_path.read_text()); stage = request_path.parent
         assert (stage / 'cells.tsv').read_text().splitlines() == ['cell_id', '"cell"', 'NA']

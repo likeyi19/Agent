@@ -636,7 +636,8 @@ def test_finite_choice_buttons_submit_question_and_option_identity_directly():
     history=source[source.index('function renderHistory'):source.index('function updateControls')]
     assert 'turn.clarification_choices?.length' in history
     assert 'button.type = "button"' in history
-    assert 'submitRequest(option.label, null,' in history
+    assert 'submitRequest("", null,' in history
+    assert 'submitRequest(option.label, null,' not in history
     assert '{question_turn_id: turn.turn_id, handle: option.handle}' in history
     submission=source[source.index('function submitRequest'):source.index('element("turn-form").addEventListener')]
     assert 'body.clarification_choice = Object.freeze(clarificationChoice)' in submission

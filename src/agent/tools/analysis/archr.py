@@ -3,7 +3,6 @@
 Only Agent-produced, accepted snapshots can be reopened. Uploaded RDS/ZIP objects
 never acquire executable-object authority from a filename or a manifest alone.
 """
-import os
 from pathlib import Path
 import re
 import shutil
@@ -21,7 +20,7 @@ from agent.tools.data.fragment_io import parse_record
 from . import peak_h5ad, sequence_reference
 from .native_matrix import arguments, native_kwargs, NativeInvocationError
 from .native_publication import NativePublication
-from .sequence_prediction import library, read, write
+from .sequence_prediction import read, write
 
 package = 'ArchR'
 TOOL = 'run_archr'
@@ -151,7 +150,8 @@ def execute(values, execution_identity=None):
     root = Path(args['output_dir']); root.mkdir(parents=True, exist_ok=True)
     if any(root.iterdir()):
         raise ValueError('Native output must be empty; no retry authority')
-    executable = Path(os.environ.get('AGENT_ARCHR_RSCRIPT') or library().root.parent / 'runtimes/archr-1/env/bin/Rscript')
+    from .native_runtimes import rscript
+    executable = rscript('ArchR')
     script = Path(__file__).parent / 'r/archr_v1.R'
     package_root = executable.parent.parent / 'lib/R/library/ArchR'
     implementation = file_closure([executable, script, package_root / 'DESCRIPTION', *sorted((package_root / 'data').glob('Rdata.*'))])

@@ -7,7 +7,10 @@ final genuine request reaches a legitimate choice between distinct 194- and
 
 Agent plans and invokes supported native functions through the existing Registry,
 Executor, scientific publication, RunStore, Revision, Session and Web owners.
-Scientific task requests and explicit native-function requests use this same route.
+AI scientific tasks use this planning route. The separate Native Functions form
+binds one explicit call without interpretation or planning; it shares native
+process isolation, execution, acceptance and downloads. See the
+[native function guide](native-functions.md) for its actual object-adapter scope.
 The native-first replacement has completed engineering closeout with
 **CONDITIONAL GO within bounded scope** in the
 [replacement report](../../../agent-data/acceptance/raw-intake-simplification/native-first/REPORT.md).
@@ -144,7 +147,7 @@ or species/assembly prerequisite. Unknown context never merges resources carryin
 different known coordinate declarations. An explicit supported native dictionary
 or supplied file can satisfy its input without an unrelated bundle.
 Supplied custom regions retain their declared assembly and exact
-coordinates. Explicit native-function mode may instead bind the exact supported
+coordinates. An AI research task constrained to a named native method may bind the exact supported
 reference files directly. There is no inferred chromosome aliasing, coordinate
 conversion or species correspondence.
 

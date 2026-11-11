@@ -1,6 +1,5 @@
 """Reviewed chromVAR functions on ordinary counts or explicitly identified scores."""
 import math
-import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -14,7 +13,7 @@ from agent.schemas.verification_authority import AuthorityError, digest
 from agent.tools.data.authority_context import current
 from agent.tools._file_identity import file_closure
 from agent.tools._native_process import run, r_environment
-from .sequence_prediction import arguments as _arguments, library, read, write
+from .sequence_prediction import arguments as _arguments, read, write
 from .sequence_reference import metadata_declarations, check_declarations
 from . import peak_h5ad
 from .native_publication import NativePublication
@@ -180,7 +179,8 @@ def prepare_input(args,stage):
 
 
 def native(args,stage):
-    rscript=os.environ.get('AGENT_CHROMVAR_RSCRIPT') or str(library().root.parent/'runtimes/chromvar/env/bin/Rscript')
+    from .native_runtimes import rscript as runtime_rscript
+    rscript=str(runtime_rscript('chromVAR'))
     if not Path(rscript).is_file():
         raise ValueError('Provision the optional installed chromVAR R runtime')
     script=Path(__file__).parent/'r/chromvar_functions_v1.R'

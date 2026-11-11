@@ -269,12 +269,8 @@ def test_missing_required_comparison_dependency_does_not_silently_run_the_indepe
                              attachment_ids=(record.resource_id,))
     assert result.error is not None and not executor.plans, result.to_dict()
     assert result.error.code == 'ZERO_VALID_CHANNELS'
-    run = app._application.run_store.load(result.run_id)
-    assert not run.steps
-    failure = run.errors[-1].details
-    assert failure['stage'] == 'dependency_reference'
-    assert failure['producer_step_id'] == 'reduce'
-    assert failure['tool_name'] == 'evaluate_cell_clustering' and failure['target_port'] == 'analysis'
+    # The shared prepared-plan boundary rejects this before a scientific Run.
+    assert not list(app._application._workspace.root.glob('run_state/*.json'))
     state = app._application.sessions.load('session')
     assert not state.turns and not state.revisions
 

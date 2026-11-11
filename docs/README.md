@@ -1,5 +1,7 @@
 # Documentation
 
+The [scientific binding guide](guides/scientific-binding.md) owns AI Research value authority, local parameter questions, exact source scopes and deterministic continuation.
+
 The [scientific results and evaluation guide](guides/scientific-results-and-evaluation.md)
 owns the active SRV roadmap, evidence-centered result presentation and the first
 external published-study evaluation protocol.

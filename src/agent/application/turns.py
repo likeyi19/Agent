@@ -213,7 +213,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
     # AnalysisSessions.respond supplies a per-call facade over the shared store.
     sessions._interaction_session_id = session_id
     answerer = interpreter if answerer is None else answerer
-    if type(utterance) is not str or (not utterance.strip() and not (submission or {}).get('rerun_revision_id') and not (submission or {}).get('parameter_overrides')) or len(utterance) > 4096:
+    if type(utterance) is not str or (not utterance.strip() and not (submission or {}).get('rerun_revision_id') and not (submission or {}).get('parameter_overrides') and not (submission or {}).get('clarification_choice')) or len(utterance) > 4096:
         raise ValueError('A bounded nonempty utterance is required.')
     try:
         state = sessions.load(session_id)
@@ -409,7 +409,11 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         decision = (Execute(scoped_admitted['tool']) if scoped_admitted is not None else
                     selected_candidate(interaction) or selected_answer(interaction, state.interactions))
         if decision is None:
-            decision = interpret(interpreter, utterance, visible, diagnostic_context=diagnostic_context)
+            from .structured_parameters import resolve_sources
+            from .dialogue_execution import captured_input_group
+            authoritative = resolve_sources(settings, captured_input_group(interaction))
+            decision = interpret(interpreter, utterance, visible, diagnostic_context=diagnostic_context,
+                                 authoritative=authoritative)
         from .structured_parameters import merge_decision
         if scoped_admitted is None:
             decision = merge_decision(decision, interaction, sessions._application.registry)
@@ -531,23 +535,23 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                                  selected_tool.parameter_prerequisites(prerequisite_values))
             from .dialogue_execution import _missing_parameter_inputs
             missing_parameters = tuple(_missing_parameter_inputs(sessions._application.registry, admitted['tool'],
-                tuple(dict.fromkeys((*owner_missing, *decision.missing_parameters))), admitted['inputs']))
+                tuple(dict.fromkeys(owner_missing)), admitted['inputs'])) + decision.missing_parameters
             if missing_parameters:
                 from .dialogue_execution import request_parameters
                 admitted, prerequisite = request_parameters(sessions, interaction, admitted,
                     missing_parameters, epizoo_resources)
                 _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
-                choices = tuple(decision.target+'.'+name for name in prerequisite['missing'])
+                choices = tuple(prerequisite['missing'])
                 return TurnOutcome('clarify', 'clarification', Clarify('missing_parameter_value', choices, True))
             if visible['dialogue'].get('resource_source'):
                 from .resource_continuation import catalog
                 admitted['resource_catalog'] = catalog(input_sets)
         else:
             admitted = admit(sessions, interaction, decision)
-        from .structured_parameters import explicit_records
+        from .structured_parameters import bound_records
         if (any(admitted.get(f + '_context', {}).get('adapter') == 'native-inputs.v1' for f in ('fastq','fragments','bam'))
                 or admitted.get('kind') == 'execute' and (admitted.get('tool') == 'annotate_scATAC_cell_types'
-                    or explicit_records(admitted, state.interactions))):
+                    or bound_records(admitted, state.interactions, sessions._application.registry, current_utterance=interaction.utterance))):
             from .dialogue_execution import prepare_native_task
             admitted, pending, error = prepare_native_task(sessions, interaction, admitted)
             if pending is not None:
@@ -585,26 +589,10 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         from .turn_decisions import DeclarationGroundingError
         raw_rejection = exc.raw if isinstance(exc, DeclarationGroundingError) else None
         candidate = decision
-        if (reason in {'invalid_parameter_value', 'ungrounded_operand'}
+        if (reason in {'invalid_parameter_value', 'ungrounded_operand', 'ambiguous_parameter'}
                 and isinstance(candidate, Execute)):
             import json
-            value = dict(kind='execute_plan', target=candidate.target,
-                arguments=[asdict(d) for d in candidate.arguments])
-            if candidate.references:
-                value['references'] = list(candidate.references)
-            if candidate.delivery:
-                value['delivery'] = list(candidate.delivery)
-            if candidate.unfulfilled:
-                value['unfulfilled'] = list(candidate.unfulfilled)
-            for key in ('comparison', 'visualization'):
-                if getattr(candidate, key) is not None:
-                    value[key] = _serialize(getattr(candidate, key))
-            if candidate.retain_parameters:
-                value['retain_parameters'] = [asdict(p) for p in candidate.retain_parameters]
-            if candidate.roles:
-                value['roles'] = [asdict(r) for r in candidate.roles]
-            if candidate.context is not None:
-                value['context'] = candidate.context
+            value = dict(kind='execute_plan', **_serialize(asdict(candidate)))
             raw_rejection = json.dumps(dict(turn_schema_version=1, decision=value))
         if raw_rejection is not None and captured.get('prerequisite') is None:
             from .dialogue_execution import request_parameter_repair

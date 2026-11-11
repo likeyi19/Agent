@@ -138,8 +138,10 @@ class ApplicationResult:
             for value in (self.evidence, self.visualization, self.report)
         ):
             raise ValueError("Planned and cancelled results cannot contain report artifacts.")
+        direct_native = (self.run_result.plan is not None and len(self.run_result.plan.steps) == 1
+            and self.run_result.plan.steps[0].tool_name == 'invoke_native_function')
         if self.status is ApplicationStatus.SUCCEEDED and (
-            self.evidence is None or self.report is None or self.error is not None
+            (not direct_native and (self.evidence is None or self.report is None)) or self.error is not None
         ):
             raise ValueError("Successful application results require evidence and a report.")
         if self.error is not None and self.status is not ApplicationStatus.FAILED:

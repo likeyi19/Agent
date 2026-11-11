@@ -88,7 +88,9 @@ def library():
     if value is None:
         root = os.environ.get('AGENT_SCIENTIFIC_RESOURCE_ROOT')
         if not root:
-            raise ValueError('The operator must configure a scientific resource library')
+            from agent.tools._native_process import NativeExecutionError
+            raise NativeExecutionError('NATIVE_EXECUTION_UNAVAILABLE',
+                'The operator must configure a scientific resource library')
         value = ScientificResourceLibrary(root)
     return value
 

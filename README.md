@@ -1,5 +1,15 @@
 # Agent
 
+Agent now separates **AI Research** (natural-language scientific planning and
+answers) from **Native Functions** (a structured, zero-provider function runner).
+Both share the existing scientific Executor, RunStore, accepted Revisions and
+downloads. Native-only Web configuration needs no model profile or OpenAI key.
+See the [native function guide](docs/guides/native-functions.md) for inputs,
+installed API discovery, parameter omission, output preservation and exact reuse.
+The [implementation report](../agent-data/acceptance/dual-mode-2026-11-10/REPORT.md)
+records verification scope and remaining limitations. Earlier integration counts
+below describe their historical reviewed research-method inventories.
+
 Agent is an autonomous AI agent for single-cell epigenomic / scATAC-seq
 analysis. It turns natural-language requests and structured scientific inputs
 into validated workflows, reproducible artifacts, and verified reports.
@@ -699,13 +709,13 @@ exact accepted-result continuation and parameter changes, motif positions,
 missing-file clarification, evidence explanation and checked downloads. Provider
 transport, occasional invalid proposals and partial/technical prose remain limits;
 this is not biological validation or unrestricted deployment qualification.
-See the [native guide](docs/guides/native-functions.md#ste-nfi-1g-native-input-families-and-interaction)
+See the [native guide](docs/guides/native-functions.md)
 and section 14 of the [1G report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1g/REPORT.md).
 
 STE-NFI-1F expanded native coverage to **66 package-qualified functions** across
 six expanded package families, with the same **43 Registry tools**. Native
 non-inplace returns, feature subsets, statistics and similarity matrices keep
-their actual values and source relationships. See the [native guide](docs/guides/native-functions.md#ste-nfi-1f-native-api-coverage-at-that-milestone)
+their actual values and source relationships. See the [native guide](docs/guides/native-functions.md)
 and [acceptance report](../agent-data/acceptance/scientific-tool-ecosystem/ste-nfi-1f/REPORT.md)
 for supported kwargs, installed-runtime limits and bounded Web qualification.
 

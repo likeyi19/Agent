@@ -5,6 +5,7 @@ import inspect
 import json
 from pathlib import Path
 import sys
+sys.dont_write_bytecode = True
 import traceback
 
 
@@ -49,32 +50,11 @@ def main(request_path):
         version = importlib.metadata.version(package)
         if version != req['version']:
             raise ValueError('Installed package version differs from qualified dispatch')
-        if package == 'episcanpy':
-            import episcanpy as epi
-            dispatch = {'pp.binarize': epi.pp.binarize, 'pp.tfidf': epi.pp.tfidf,
-                'tl.pca': epi.tl.pca, 'pp.neighbors': epi.pp.neighbors, 'tl.dpt': epi.tl.dpt,
-                'tl.tsne': epi.tl.tsne, 'tl.umap': epi.tl.umap,
-                'pp.log1p': epi.pp.log1p, 'pp.lsi': epi.pp.lsi, 'pp.normalize_total': epi.pp.normalize_total,
-                'tl.leiden': epi.tl.leiden, 'tl.louvain': epi.tl.louvain,
-                'tl.kmeans': epi.tl.kmeans, 'tl.hc': epi.tl.hc, 'tl.rank_features': epi.tl.rank_features}
-        elif package == 'scanpy':
-            import scanpy as sc
-            dispatch = {'tl.diffmap': sc.tl.diffmap, 'pp.scale': sc.pp.scale,
-                'pp.calculate_qc_metrics': sc.pp.calculate_qc_metrics, 'pp.normalize_total': sc.pp.normalize_total,
-                'pp.log1p': sc.pp.log1p, 'pp.highly_variable_genes': sc.pp.highly_variable_genes,
-                'pp.pca': sc.pp.pca, 'pp.neighbors': sc.pp.neighbors, 'tl.leiden': sc.tl.leiden,
-                'tl.umap': sc.tl.umap, 'tl.tsne': sc.tl.tsne, 'tl.paga': sc.tl.paga,
-                'tl.rank_genes_groups': sc.tl.rank_genes_groups, 'tl.score_genes': sc.tl.score_genes, 'tl.dpt': sc.tl.dpt}
-        elif package == 'snapatac2':
-            import snapatac2 as snap
-            dispatch = {'pp.select_features': snap.pp.select_features, 'tl.spectral': snap.tl.spectral,
-                'tl.umap': snap.tl.umap, 'pp.knn': snap.pp.knn, 'tl.leiden': snap.tl.leiden,
-                'tl.dbscan': snap.tl.dbscan,
-                'pp.mnc_correct': snap.pp.mnc_correct, 'tl.marker_regions': snap.tl.marker_regions,
-                'tl.diff_test': snap.tl.diff_test}
-        else:
-            raise ValueError('Unsupported package')
-        function = dispatch[name]
+        # Shared installed callable resolution. Registry method offers and this
+        # AI publication's specialized scientific slots remain separate owners.
+        sys.path.insert(0, str(Path(__file__).parent))
+        from native_callable_worker import functions
+        function = functions(package)[name]
         # A positional marker follows native subsetting, including duplicate labels.
         marker = None
         if name == 'pp.highly_variable_genes' and kwargs.get('subset'):
@@ -178,37 +158,9 @@ def parameter_metadata(package, name):
     fn = importlib.import_module(package)
     for component in name.split('.'):
         fn = getattr(fn, component)
-    metadata = {}
-    import typing
-    try:
-        annotations = typing.get_type_hints(fn)
-    except (NameError, TypeError, AttributeError):
-        annotations = {}
-    for key, parameter in inspect.signature(fn).parameters.items():
-        item = {}
-        annotation = annotations.get(key, parameter.annotation)
-        if isinstance(annotation, str):
-            if annotation in ('bool', 'int', 'float', 'str'):
-                item['types'] = [annotation]
-            # Native forward annotations may be Literal strings. Resolve only
-            # the installed package's own type annotations, never user code.
-        else:
-            if typing.get_origin(annotation) is typing.Literal:
-                item['choices'] = list(typing.get_args(annotation))
-            if annotation in (bool, int, float, str):
-                item['types'] = [annotation.__name__]
-        default = parameter.default
-        if default is not inspect.Parameter.empty:
-            try:
-                serialized = json.loads(json.dumps(default, allow_nan=False))
-            except (TypeError, ValueError):
-                pass
-            else:
-                item['default_when_omitted'] = serialized
-                if 'types' not in item and type(default) in (bool, int, float, str):
-                    item['types'] = [type(default).__name__]
-        metadata[key] = item
-    return metadata
+    sys.path.insert(0, str(Path(__file__).parent))
+    from native_callable_worker import signature_metadata
+    return signature_metadata(fn)
 
 
 if __name__ == '__main__':

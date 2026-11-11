@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import shutil
 import sys
+sys.dont_write_bytecode = True
 import traceback
 
 
@@ -56,10 +57,9 @@ def main(request_path):
         import hdf5plugin  # Decode the native H5AD Zstandard storage, without changing it.
         if importlib.metadata.version('snapatac2') != req['version']:
             raise ValueError('Installed package version differs from recorded dispatch')
-        functions = {'pp.make_fragment_file': snap.pp.make_fragment_file, 'pp.import_fragments': snap.pp.import_fragments,
-            'metrics.tsse': snap.metrics.tsse, 'metrics.frag_size_distr': snap.metrics.frag_size_distr,
-            'pp.filter_cells': snap.pp.filter_cells, 'pp.call_cells': snap.pp.call_cells,
-            'pp.add_tile_matrix': snap.pp.add_tile_matrix, 'pp.make_peak_matrix': snap.pp.make_peak_matrix}
+        sys.path.insert(0, str(Path(__file__).parent))
+        from native_callable_worker import functions as installed_functions
+        functions = installed_functions('snapatac2')
         name = req['function_name']; fn = functions[name]; kw = req['kwargs']; inputs = req['raw_inputs']
         implementation_paths = [Path(inspect.getsourcefile(fn)), Path(snap._snapatac2.__file__)]
         def implementation():

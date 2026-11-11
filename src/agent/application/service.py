@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from functools import cached_property
 from pathlib import Path
 
@@ -361,6 +362,12 @@ class ResearchAgentApplication:
         result = self._runtime.run(effective)
         return self._complete(result, run)
 
+    def run_prepared(self, request, plan):
+        """Structured invocation uses the same runtime with no model configuration."""
+        effective, run = self._prepare_request(request)
+        result = self._runtime.run_prepared(effective, plan)
+        return self._complete(result, run)
+
     def resume(self, run_id: str) -> ApplicationResult:
         """Resume durable execution without planning, then compose reporting."""
 
@@ -415,6 +422,21 @@ class ResearchAgentApplication:
             )
         if run_result.status is not RunStatus.SUCCEEDED:
             return self._base_result(run_result, run, status=ApplicationStatus.FAILED)
+
+        if self.run_store.load(run_result.run_id).request.prompt is None:
+            # Native outputs already carry their accepted publication and preview.
+            # No conversational report or model-generated completion is requested.
+            from agent.tools.analysis.sequence_prediction import write
+            from agent.schemas.orchestration import _serialize
+            with self._workspace.composition_lease(run):
+                path = run.evidence / 'native-preview.json'
+                preview = _serialize(run_result.steps[0].result['preview'])
+                if not path.exists():
+                    write(path, preview)
+                elif json.loads(path.read_text()) != preview:
+                    raise ValueError('Saved native presentation differs from accepted output')
+                evidence = ArtifactReference('native-preview.v1', str(path), _sha256_file(path))
+            return self._base_result(run_result, run, status=ApplicationStatus.SUCCEEDED, evidence=evidence)
 
         evidence: ArtifactReference | None = None
         visualization: ArtifactReference | None = None

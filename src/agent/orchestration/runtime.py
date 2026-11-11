@@ -130,6 +130,8 @@ class AgentRuntime:
 
         if not isinstance(request, AgentRequest):
             raise TypeError("`request` must be an AgentRequest.")
+        if request.prompt is None:
+            raise ValueError('Structured invocations require run_prepared; they cannot enter planning.')
         if self._run_store is not None:
             run_id = f"{request.request_id}:run"
             with self._run_store.execution_lease(run_id):
@@ -458,6 +460,29 @@ class AgentRuntime:
             errors=(error,),
             trace=trace.events,
         )
+
+    @runtime_store
+    def run_prepared(self, request: AgentRequest, plan: AgentPlan) -> AgentRunResult:
+        """Execute an explicitly bound operation through the ordinary durable owner.
+
+        No planner, interpretation, recovery planning or provider is involved.
+        The same executor preflight, leases, checkpoints and verifier still apply.
+        """
+        if plan.request_id != request.request_id or request.mode is not RunMode.EXECUTE:
+            raise ValueError('Prepared execution requires the exact executable request.')
+        store = self._required_run_store()
+        run_id = request.request_id + ':run'
+        with store.execution_lease(run_id):
+            trace = _TraceRecorder()
+            trace.add(TraceEventType.PLANNING, 'Explicit structured operation bound without planning.')
+            now = _utc_now()
+            state = store.create(PersistedRunState(schema_version=RUN_STATE_SCHEMA_VERSION,
+                revision=0, run_id=run_id, request=request, lifecycle_status=RunLifecycleStatus.PLANNING,
+                created_at=now, updated_at=now, trace=trace.events))
+            state = self._update_state(state, plan=plan, plan_fingerprint=fingerprint_plan(plan),
+                recovery_policy_snapshot=build_recovery_policy_snapshot(plan, self._registry,
+                    max_attempts_per_step=self._executor.recovery_policy.max_attempts_per_step))
+            return self._run_durable_execute(request, plan, run_id, trace, state)
 
     def _run_durable(self, request: AgentRequest) -> AgentRunResult:
         store = self._required_run_store()

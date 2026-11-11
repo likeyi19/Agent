@@ -5,6 +5,7 @@ handles and display labels reach the interpreter. Compilation and scientific
 qualification still occur through the ordinary execution path.
 """
 from dataclasses import replace
+from collections.abc import Mapping
 from agent.schemas.orchestration import _serialize
 from .session_state import digest, SessionError
 from .turn_decisions import IntentError
@@ -23,6 +24,31 @@ def pending_choices(reference, preceding):
         return tuple(dict(handle='species:' + value, label=value, description=label)
             for value, label in (('human', '人类 · human'), ('mouse', '小鼠 · mouse')))
     if reference['field'] == 'parameters':
+        original = next(i for i in preceding if i.turn_id == reference['origin_turn_id'])
+        slots = (original.admitted or {}).get('parameter_slots')
+        if slots:
+            admitted = original.admitted
+            groups = original.snapshot.get('dialogue', {}).get('results', ())
+            selected = admitted.get('input_results', ())
+            relevant = [g for g in groups if g['handle'] in selected or not selected
+                        and admitted.get('context') == 'current' and 'current' in g.get('relations', ())]
+            selected_outputs = {output for group in relevant for output in group.get('outputs', ())}
+            revisions = {output['revision_id'] for output in original.snapshot.get('dialogue', {}).get('outputs', ())
+                         if output['handle'] in selected_outputs}
+            choices = []
+            for handle in reference['missing']:
+                slot = slots[handle]
+                previous = [p['value'] for g in relevant if g['tool'] == slot['tool']
+                            for p in g.get('parameters', ()) if p['argument'] == slot['argument']
+                            and p.get('native_function') == slot.get('native_function')]
+                if slot.get('member'):
+                    previous = [v[slot['member']] for v in previous
+                                if isinstance(v, Mapping) and slot['member'] in v]
+                choices.append(dict(**_serialize(slot), handle=handle, action='parameter',
+                    label=' · '.join(str(slot[k]) for k in ('native_function', 'argument', 'member') if slot.get(k)),
+                    **({'previous_revision_id': next(iter(revisions))} if len(revisions) == 1 else {}),
+                    **({'previous_value': _serialize(previous[0])} if len(previous) == 1 else {})))
+            return tuple(choices)
         origin = next(i for i in preceding if i.turn_id == reference['binding_turn_id'])
         record = origin.admitted or {}
         functions = {s['arguments']['function_name'] for s in record.get('native_plan', {}).get('steps', ())
@@ -61,6 +87,12 @@ def selected_answer(interaction, preceding):
         return None
     if reference is None or selection['question_turn_id'] != reference.get('predecessor_turn_id'):
         raise IntentError('invalid_reference')
+    if reference['field'] == 'parameters':
+        settings = (interaction.submission or {}).get('parameter_overrides', ())
+        if not settings or selection['handle'] not in {row['handle'] for row in pending_choices(reference, preceding)}:
+            raise IntentError('invalid_reference')
+        from .turn_decisions import ParameterAnswer, ExplicitArgument
+        return ParameterAnswer('@parameters', tuple(ExplicitArgument(**_serialize(row)) for row in settings))
     if reference['field'] == 'roles':
         from .dialogue_execution import captured_input_group
         from .turn_decisions import RoleAnswer, InputRole

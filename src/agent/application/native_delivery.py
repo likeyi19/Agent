@@ -20,7 +20,7 @@ def definitions(registry=None):
 
 def for_artifact(artifact):
     matches = [spec for name, spec in definitions() if spec.contract == artifact.contract
-               and name == artifact.manifest.get('tool_name') and artifact.role in spec.files]
+               and name == artifact.manifest.get('tool_name') and artifact.role in spec.file_definitions(artifact.manifest)]
     return matches[0] if len(matches) == 1 else None
 
 
@@ -55,9 +55,10 @@ def accepted_artifacts(app, session_id, revision, origin, output, *, step_id=Non
     store, run_id, step_id, step, authority, anchor, root, manifest, sha, record, spec = _publication(
         app, revision, origin, output, step_id)
     items = []
+    definitions = spec.file_definitions(manifest)
     for pin in manifest['files']:
         path = Path(pin['path']); name = path.name; path.relative_to(root)
-        if name not in spec.files:
+        if name not in definitions:
             continue
         if pin not in record['files']:
             raise ValueError('Unbound scientific artifact')
@@ -67,7 +68,7 @@ def accepted_artifacts(app, session_id, revision, origin, output, *, step_id=Non
             step_id=step_id, accepted_step_sha256=accepted_step_digest(step), authority_sha256=authority.identity_sha256,
             manifest_sha256=sha, payload=pin)
         ref = ScientificArtifactHandle(digest(identity), spec.artifact_type, pin['sha256'], revision.revision_id,
-            origin.turn_id, pin['size_bytes'], name, _label(step, name, spec.files[name][0]))
+            origin.turn_id, pin['size_bytes'], name, _label(step, name, definitions[name][0]))
         delivery = dict(manifest, tool_name=step.tool_name, accepted_step_sha256=accepted_step_digest(step))
         items.append(_ScientificMatrixArtifact(ref, path, root, pin['sha256'], pin['size_bytes'], spec.contract, delivery, name, sha))
     if _accepted(store, run_id, step_id)[3] != anchor:

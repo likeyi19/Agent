@@ -23,4 +23,4 @@ def delivery_spec(owner, artifact_type, *, h5ad_roles=(), figure=None):
 
     return ScientificDeliverySpec(owner.CONTRACT, artifact_type, owner.DELIVERY_FILES, publication, prepare,
         projected_roles=tuple(name for name in owner.DELIVERY_FILES if name.endswith(('.json','.tsv','.xls'))),
-        h5ad_roles=h5ad_roles, figure=figure)
+        h5ad_roles=h5ad_roles, figure=figure, produced_files=getattr(owner, 'delivery_files', None))

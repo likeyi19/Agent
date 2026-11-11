@@ -1,5 +1,4 @@
 """New native result families: source positions, safe records and closed dispatch."""
-import ast
 from pathlib import Path
 
 import anndata as ad
@@ -14,17 +13,7 @@ from agent.tools.analysis.native_matrix_worker import returned_data
 from agent.tools.analysis.native_tables import MACS3
 
 
-def test_worker_dispatch_exactly_matches_reviewed_catalogs():
-    tree = ast.parse(Path(owner.__file__).with_name('native_matrix_worker.py').read_text())
-    dispatches = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign)
-                  and any(isinstance(t, ast.Name) and t.id == 'dispatch' for t in n.targets)]
-    actual = [set(ast.literal_eval(k) for k in n.keys) for n in dispatches]
-    from agent.tools.analysis import snapatac_raw
-    expected = [set(p.FUNCTIONS) for p in (owner.EPISCANPY, owner.SCANPY)] + [set(owner.SNAPATAC2.FUNCTIONS) - set(snapatac_raw.FUNCTIONS)]
-    raw_tree = ast.parse(Path(snapatac_raw.__file__).with_name('snapatac_raw_worker.py').read_text())
-    raw_dispatch = next(n.value for n in ast.walk(raw_tree) if isinstance(n, ast.Assign) and any(isinstance(t,ast.Name) and t.id=='functions' for t in n.targets))
-    assert {ast.literal_eval(k) for k in raw_dispatch.keys} == set(snapatac_raw.FUNCTIONS)
-    assert actual == expected
+def test_ai_method_offers_retain_their_scientific_parameters():
     for package in owner.PACKAGES:
         assert set(k for f in package.FUNCTIONS.values() for k in f) == set(k for k,_ in package.NATIVE_ARGUMENTS)
 

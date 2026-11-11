@@ -1350,7 +1350,7 @@ function renderHistory() {
             selectOptions(select, [["", "Choose file"], ...files]);
             const apply = document.createElement("button"); apply.type = "button"; apply.className = "secondary"; apply.textContent = "Use this file";
             apply.disabled = state.posting || !files.size;
-            apply.addEventListener("click", () => { if (select.value) submitRequest(files.get(select.value), null,
+            apply.addEventListener("click", () => { if (select.value) submitRequest("", null,
               {question_turn_id: turn.turn_id, handle: option.handle + ":" + select.value}); });
             label.append(select, apply); choices.append(label);
             continue;
@@ -1361,8 +1361,8 @@ function renderHistory() {
           button.disabled = state.posting || Boolean(state.activeTurn && !terminal(state.activeTurn));
           button.addEventListener("click", () => {
             if (option.action === "parameter") {
-              openRequestedParameter(option);
-            } else submitRequest(option.label, null, {question_turn_id: turn.turn_id, handle: option.handle});
+              openRequestedParameter(option, turn.turn_id);
+            } else submitRequest("", null, {question_turn_id: turn.turn_id, handle: option.handle});
           });
           choices.append(button);
         }
@@ -2322,14 +2322,31 @@ async function openResultParameters(revisionId) {
   showParameters({sessionId, revisionId, generation: view.generation, steps: view.steps});
 }
 
-async function openRequestedParameter(option) {
+async function openRequestedParameter(option, questionTurnId) {
   try {
-    const view = await api(`/parameters?tool=${encodeURIComponent(option.tool)}`);
+    const sessionId = state.session.session_id;
+    const view = await api(`/parameters?tool=${encodeURIComponent(option.tool)}` +
+      (option.native_function ? `&function=${encodeURIComponent(option.native_function)}` : ""));
+    const recorded = option.previous_revision_id && !option.source
+      ? await api(`${sessionPath(sessionId)}/revisions/${encodeURIComponent(option.previous_revision_id)}/parameters`)
+      : null;
+    if (state.session?.session_id !== sessionId) return;
     const tool = view.tools[0];
-    const spec = tool.parameters.find((p) => p.argument === option.argument);
-    if (!spec) throw new Error("Describe the missing native function parameters in your reply.");
+    const specs = option.argument === "kwargs"
+      ? (tool.kwargs || []).filter((p) => !option.member || p.argument === option.member).map((p) => ({...p, kwarg: true}))
+      : tool.parameters.filter((p) => p.argument === option.argument);
+    if (!specs.length) throw new Error("The requested parameter scope is unavailable. Specify the scientific operation in your reply.");
     showParameters({sessionId: state.session.session_id, generation: state.session.generation,
-      steps: [{tool: option.tool, native_function: option.native_function, functions: tool.functions, parameters: [spec]}]});
+      question: {question_turn_id: questionTurnId, handle: option.handle},
+      steps: [{tool: option.tool, native_function: option.native_function, functions: tool.functions,
+        port: option.port, source: option.source, parameters: specs.map((spec) => {
+          let previous = spec.kwarg && !option.member ? option.previous_value?.[spec.argument] : option.previous_value;
+          const matches = (recorded?.steps || []).filter((step) => step.tool === option.tool &&
+            step.native_function === option.native_function).flatMap((step) => step.parameters.filter((p) =>
+              p.argument === spec.argument && Boolean(p.kwarg) === Boolean(spec.kwarg) && p.recorded));
+          if (previous === undefined && matches.length === 1) previous = matches[0].value;
+          return {...spec, ...(previous !== undefined ? {previous_value: previous} : {})};
+        })}]});
   } catch (error) { showError(error); }
 }
 
@@ -2371,7 +2388,7 @@ function showParameters(editor) {
         typeof value === "string" ? "string" : "auto";
       const raw = !spec.recorded ? "" : spec.choices ? String(spec.choices.indexOf(value)) :
         Array.isArray(value) ? value.join(", ") : value === null ? "" : String(value);
-      const row = {tool: step.tool, needsFunction: Boolean(step.functions?.length), nativeFunction: step.native_function, stepId: step.step_id, spec, valueType, raw};
+      const row = {tool: step.tool, port: step.port, source: step.source, needsFunction: Boolean(step.functions?.length), nativeFunction: step.native_function, stepId: step.step_id, spec, valueType, raw};
       editor.rows.push(row);
       const field = document.createElement("div"); field.className = "parameter-row";
       const label = document.createElement("label"); label.textContent = spec.argument;
@@ -2386,7 +2403,10 @@ function showParameters(editor) {
       selectOptions(typeInput, spec.choices ? [["choice", "Choice"]] : [["auto", "Number or text"], ["string", "Text"], ["number", "Number"], ["boolean", "Boolean"], ["null", "null"], ["strings", "Text list"], ["numbers", "Number list"]]);
       typeInput.value = valueType;
       const help = document.createElement("p"); help.className = "muted small";
-      help.textContent = spec.description + (spec.recorded ? "" : " · Value not recorded; leave empty to preserve omission.");
+      help.textContent = spec.description + (spec.recorded ? "" :
+        Object.hasOwn(spec, "default_when_omitted") ? ` · Native/default when omitted: ${JSON.stringify(spec.default_when_omitted)}` :
+        editor.question ? " · Enter a value to resolve this question." : " · Value not recorded; leave empty to preserve omission.");
+      if (Object.hasOwn(spec, "previous_value")) help.textContent += ` · Recorded previous value: ${JSON.stringify(spec.previous_value)}`;
       label.append(input); field.append(label, typeInput, help); section.append(field);
     }
     if (step.recorded) {
@@ -2433,12 +2453,13 @@ function collectedParameters() {
     const value = parameterValue(row);
     if (row.spec.recorded && JSON.stringify(value) === JSON.stringify(row.spec.value)) continue;
     const argument = row.spec.kwarg ? "kwargs" : row.spec.argument;
-    const key = JSON.stringify([row.stepId, row.tool, row.nativeFunction, argument]);
+    const key = JSON.stringify([row.stepId, row.tool, row.nativeFunction, row.port, row.source, argument]);
     let setting = rows.get(key);
     if (!setting) {
       setting = {tool: row.tool, argument, value: row.spec.kwarg ? {} : null};
       if (row.nativeFunction) setting.native_function = row.nativeFunction;
       if (row.stepId) setting.step_id = row.stepId;
+      if (row.port) { setting.port = row.port; setting.source = row.source; }
       rows.set(key, setting);
     }
     if (row.spec.kwarg) setting.value[row.spec.argument] = value;
@@ -2487,6 +2508,7 @@ element("parameter-form").addEventListener("submit", async (event) => {
     const body = {turn_id: newTurnId(), expected_generation: state.session.generation, utterance: "",
       profile_id: element("model-choice").value, parameter_overrides: overrides};
     if (editor.revisionId) body.rerun_revision_id = editor.revisionId;
+    if (editor.question) body.clarification_choice = editor.question;
     closeParameters();
     startSubmission(body);
   } catch (error) {
@@ -2504,7 +2526,7 @@ function startSubmission(body) {
 
 function submitRequest(utterance, predecessorTurnId = null, clarificationChoice = null, candidateSelection = null) {
   if (element("submit-turn").disabled || !state.session) return;
-  if (!utterance.trim()) return;
+  if (!utterance.trim() && !clarificationChoice) return;
   const body = {
     turn_id: newTurnId(), expected_generation: state.session.generation,
     utterance, profile_id: element("model-choice").value,
@@ -2717,3 +2739,245 @@ element("shared-reference-controls").addEventListener("toggle", async (event) =>
     }
   } catch (error) { showError(error); }
 });
+
+// Native interaction holds display conveniences only. Scientific state lives in
+// the same server Session/Revision and RunStore owners as AI Research.
+const nativeView = {session: null, fields: [], resources: [], metadataEpoch: 0, timer: null, active: null};
+const nativeOption = (value, label) => { const e = document.createElement('option'); e.value = value; e.textContent = label; return e; };
+const nativeText = (tag, text, css = '') => { const e = document.createElement(tag); e.textContent = text; e.className = css; return e; };
+function nativeError(error) { element('native-error').textContent = error ? error.message || String(error) : ''; }
+async function nativeOpen() {
+  if (nativeView.session) return;
+  const saved = sessionStorage.getItem('agent.native.session');
+  nativeView.session = saved ? await api(`/native/sessions/${encodeURIComponent(saved)}`) : await api('/native/sessions', 'POST', {});
+  sessionStorage.setItem('agent.native.session', nativeView.session.session_id);
+  const attachments = await api(`${sessionPath(nativeView.session.session_id)}/attachments`);
+  nativeView.resources = attachments.choices;
+  nativeRenderResults();
+  const running = nativeView.session.calls.find(c => ['submitted','planning','validated','running','finalizing'].includes(c.status));
+  if (running) { nativeView.active = running.call_id; nativePoll(); }
+}
+async function selectAgentMode(mode) {
+  document.body.dataset.mode = mode;
+  element('mode-research').setAttribute('aria-pressed', String(mode === 'research'));
+  element('mode-native').setAttribute('aria-pressed', String(mode === 'native'));
+  element('mode-research').classList.toggle('secondary', mode !== 'research');
+  element('mode-native').classList.toggle('secondary', mode !== 'native');
+  element('native-workspace').hidden = mode !== 'native';
+  sessionStorage.setItem('agent.mode', mode);
+  if (mode !== 'native') return;
+  try {
+    await nativeOpen();
+    if (element('native-package').options.length === 1) {
+      const catalog = await api('/native/packages');
+      for (const p of catalog.packages) element('native-package').append(nativeOption(p.name, p.name));
+    }
+  } catch (error) { nativeError(error); }
+}
+element('mode-native').addEventListener('click', () => selectAgentMode('native'));
+element('mode-research').addEventListener('click', () => selectAgentMode('research'));
+element('native-new').addEventListener('click', async () => {
+  if (nativeView.active) return;
+  try {
+    nativeView.session = await api('/native/sessions', 'POST', {});
+    nativeView.resources = []; sessionStorage.setItem('agent.native.session', nativeView.session.session_id);
+    nativeRenderResults(); nativeRefreshSources();
+  } catch (error) { nativeError(error); }
+});
+element('native-package').addEventListener('change', async () => {
+  const epoch = ++nativeView.metadataEpoch;
+  nativeError(null); element('native-function').disabled = true; element('native-run').disabled = true;
+  element('native-inputs').replaceChildren(); element('native-fields').replaceChildren();
+  element('native-description').textContent = 'Reading installed functions…';
+  try {
+    const packageName = element('native-package').value;
+    if (!packageName) return;
+    const data = await api(`/native/functions?package=${encodeURIComponent(packageName)}`);
+    if (epoch !== nativeView.metadataEpoch) return;
+    element('native-function').replaceChildren(nativeOption('', 'Choose a function…'), ...data.functions.map(f => nativeOption(f.name, `${packageName}.${f.name}`)));
+    element('native-function').disabled = false;
+    element('native-description').textContent = `${packageName} ${data.version}`;
+  } catch (error) { nativeError(error); }
+});
+element('native-function').addEventListener('change', async () => {
+  const epoch = ++nativeView.metadataEpoch;
+  nativeError(null); element('native-run').disabled = true;
+  try {
+    const fn = element('native-function').value;
+    if (!fn) return;
+    const data = await api(`/native/functions?package=${encodeURIComponent(element('native-package').value)}&function=${encodeURIComponent(fn)}`);
+    if (epoch !== nativeView.metadataEpoch) return;
+    const metadata = data.functions[0];
+    element('native-description').textContent = metadata.description || metadata.limitation || '';
+    nativeView.fields = []; element('native-inputs').replaceChildren(); element('native-fields').replaceChildren();
+    if (metadata.limitation) { nativeError(new Error(metadata.limitation)); return; }
+    for (const spec of metadata.parameters) {
+      if (['VAR_KEYWORD', 'VAR_POSITIONAL'].includes(spec.parameter_kind)) continue;
+      nativeView.fields.push(nativeField(spec));
+    }
+    nativeRefreshSources(); element('native-run').disabled = false;
+  } catch (error) { nativeError(error); }
+});
+function nativeField(spec) {
+  const row = nativeText('div', '', 'native-argument');
+  const enabled = document.createElement('input'); enabled.type = 'checkbox'; enabled.checked = spec.required;
+  const label = nativeText('label', `${spec.name}${spec.required ? ' · required' : ''}`); label.prepend(enabled); row.append(label);
+  if (!spec.required) row.append(nativeText('p', `Default: ${spec.default_known ? JSON.stringify(spec.default) : 'Native default'}`, 'muted small'));
+  const controls = document.createElement('div'); controls.hidden = !enabled.checked;
+  enabled.addEventListener('change', () => { controls.hidden = !enabled.checked; });
+  const mode = document.createElement('select'); mode.setAttribute('aria-label', `${spec.name} input type`);
+  for (const [value, name] of [['value', 'Parameter value'], ['null', 'Explicit null'], ['anndata', 'H5AD → AnnData'], ['r_matrix', 'H5AD → R matrix'], ['dataframe', 'CSV / TSV → DataFrame'], ['column', 'CSV / TSV column → list'], ['matrix', 'CSV / TSV → matrix'], ['array', 'Numeric array'], ['sparse', 'Sparse matrix'], ['numpy', 'NumPy array file'], ['file', 'Native file input'], ['accepted', 'Accepted result'], ['output', 'Managed output filename']]) mode.append(nativeOption(value, name));
+  const objectInput = spec.required && (/AnnData/.test(spec.annotation) || ['adata', 'data'].includes(spec.name));
+  if (objectInput) mode.value = 'anndata';
+  if (spec.input_kind === 'file') mode.value = 'file';
+  if (!spec.required && spec.default_known && spec.default === null) mode.value = 'null';
+  const value = document.createElement(spec.kind === 'list' || spec.kind === 'value' ? 'textarea' : 'input');
+  value.setAttribute('aria-label', `${spec.name} value`);
+  if (value.tagName === 'INPUT') value.type = spec.kind === 'integer' || spec.kind === 'number' ? 'number' : 'text';
+  if (spec.kind === 'number') value.step = 'any';
+  value.value = spec.default_known ? (spec.kind === 'string' ? spec.default : JSON.stringify(spec.default)) : '';
+  value.placeholder = spec.kind === 'value' || spec.kind === 'list' ? 'JSON value, list or object' : spec.kind;
+  const boolean = document.createElement('select'); boolean.setAttribute('aria-label', `${spec.name} boolean`);
+  boolean.append(nativeOption('true', 'True'), nativeOption('false', 'False')); boolean.value = String(spec.default ?? true);
+  const choice = document.createElement('select'); choice.setAttribute('aria-label', `${spec.name} choice`);
+  for (const item of spec.choices || []) choice.append(nativeOption(JSON.stringify(item), String(item)));
+  if (spec.default_known) choice.value = JSON.stringify(spec.default);
+  const source = document.createElement('select'); source.setAttribute('aria-label', `${spec.name} source`);
+  const upload = document.createElement('input'); upload.type = 'file'; upload.setAttribute('aria-label', `${spec.name} upload`);
+  const separator = document.createElement('select'); separator.setAttribute('aria-label', `${spec.name} table format`);
+  separator.append(nativeOption(',', 'CSV (comma separated)'), nativeOption('\t', 'TSV (tab separated)'));
+  const column = document.createElement('input'); column.placeholder = 'Exact column name'; column.setAttribute('aria-label', `${spec.name} column`);
+  const sparseFormat = document.createElement('select'); sparseFormat.setAttribute('aria-label', `${spec.name} sparse format`);
+  sparseFormat.append(nativeOption('mtx', 'Matrix Market'), nativeOption('npz', 'SciPy NPZ'));
+  const orientation = document.createElement('select'); orientation.setAttribute('aria-label', `${spec.name} matrix orientation`);
+  orientation.append(nativeOption('unchanged', 'Cells × features'), nativeOption('transpose', 'Features × cells (transpose)'));
+  const accepted = document.createElement('select'); accepted.setAttribute('aria-label', `${spec.name} accepted result`);
+  const update = () => {
+    const file = ['anndata','r_matrix','dataframe','column','matrix','sparse','numpy','file'].includes(mode.value);
+    source.hidden = upload.hidden = !file;
+    separator.hidden = !['dataframe','column','matrix'].includes(mode.value); column.hidden = mode.value !== 'column';
+    orientation.hidden = mode.value !== 'r_matrix';
+    sparseFormat.hidden = mode.value !== 'sparse'; accepted.hidden = mode.value !== 'accepted';
+    value.hidden = !['value','array','output'].includes(mode.value) || mode.value === 'value' && spec.kind === 'boolean';
+    boolean.hidden = mode.value !== 'value' || spec.kind !== 'boolean' || Boolean(spec.choices?.length);
+    choice.hidden = mode.value !== 'value' || !spec.choices?.length;
+    if (!choice.hidden) value.hidden = true;
+  };
+  mode.addEventListener('change', update);
+  upload.addEventListener('change', async () => {
+    const file = upload.files[0]; if (!file) return;
+    element('native-run').disabled = true; nativeError(null);
+    try {
+      const path = `${sessionPath(nativeView.session.session_id)}/uploads/${crypto.randomUUID()}?input_type=attachment&filename=${encodeURIComponent(file.name)}`;
+      const response = await fetch('/api/v1' + path, {method:'PUT', headers:{'Content-Type':'application/octet-stream'}, body:file});
+      const data = await response.json(); if (!response.ok) throw new Error(data.error?.message || 'Upload failed');
+      nativeView.resources.push(data); nativeRefreshSources(); source.value = data.resource_id;
+    } catch (error) { nativeError(error); }
+    finally { element('native-run').disabled = false; }
+  });
+  controls.append(mode, value, boolean, choice, source, upload, separator, column, sparseFormat, orientation, accepted); row.append(controls);
+  (spec.required ? element('native-inputs') : element('native-fields')).append(row); update();
+  return {spec, enabled, mode, value, boolean, choice, source, separator, column, sparseFormat, orientation, accepted};
+}
+function nativeRefreshSources() {
+  for (const row of nativeView.fields) {
+    const previous = row.source.value;
+    row.source.replaceChildren(nativeOption('', 'Choose an uploaded file…'), ...nativeView.resources.map(r => nativeOption(r.resource_id, r.label)));
+    row.source.value = previous;
+    const selected = row.accepted.value;
+    const choices = (nativeView.session?.calls || []).flatMap((call, i) => (call.outputs || []).map(output => nativeOption(JSON.stringify({revision_id:call.revision_id, output:output.key}), `${i+1}. ${call.function} · ${output.key.startsWith('modified:') ? 'Modified ' + output.key.slice(9) : output.key === 'return' ? 'Return value' : output.key} · ${output.type.split('.').pop()}${output.shape ? ' ' + output.shape.join(' × ') : ''}`)));
+    row.accepted.replaceChildren(nativeOption('', 'Choose an accepted output…'), ...choices); row.accepted.value = selected;
+  }
+}
+function nativeValue(row) {
+  if (row.spec.choices?.length) return JSON.parse(row.choice.value);
+  if (row.spec.kind === 'boolean') return row.boolean.value === 'true';
+  if (row.spec.kind === 'string') return row.value.value;
+  const value = JSON.parse(row.value.value);
+  if (row.spec.kind === 'integer' && !Number.isSafeInteger(value)) throw new Error(`${row.spec.name}: enter an integer representable exactly by this browser`);
+  return value;
+}
+element('native-form').addEventListener('submit', async event => {
+  event.preventDefault(); nativeError(null);
+  const body = {call_id:crypto.randomUUID(), expected_generation:nativeView.session.generation, package:element('native-package').value, function:element('native-function').value, inputs:{}, parameters:{}, outputs:{}};
+  try {
+    for (const row of nativeView.fields) {
+      if (!row.enabled.checked) continue;
+      const key = row.spec.name, mode = row.mode.value;
+      if (mode === 'null') body.parameters[key] = null;
+      else if (mode === 'value') body.parameters[key] = nativeValue(row);
+      else if (mode === 'output') body.outputs[key] = row.value.value;
+      else if (mode === 'array') body.inputs[key] = {adapter:mode, value:JSON.parse(row.value.value)};
+      else if (mode === 'accepted') body.inputs[key] = {adapter:mode, ...JSON.parse(row.accepted.value)};
+      else {
+        if (!row.source.value) throw new Error(`Choose a file for ${key}`);
+        body.inputs[key] = {adapter:mode, resource_id:row.source.value};
+        if (['dataframe','matrix','column'].includes(mode)) body.inputs[key].separator = row.separator.value;
+        if (mode === 'column') body.inputs[key].column = row.column.value;
+        if (mode === 'sparse') body.inputs[key].format = row.sparseFormat.value;
+        if (mode === 'r_matrix') { body.inputs[key].format = 'h5ad'; body.inputs[key].orientation = row.orientation.value; }
+      }
+    }
+    element('native-run').disabled = true; element('native-status').textContent = 'Submitting function…';
+    await api(`/native/sessions/${nativeView.session.session_id}/calls`, 'POST', body);
+    nativeView.active = body.call_id; element('native-cancel').hidden = false;
+    nativePoll();
+  } catch (error) { nativeError(error); element('native-run').disabled = false; element('native-status').textContent = ''; }
+});
+async function nativePoll() {
+  try {
+    nativeView.session = await api(`/native/sessions/${nativeView.session.session_id}`); nativeRenderResults();
+    const call = nativeView.session.calls.find(r => r.call_id === nativeView.active);
+    element('native-status').textContent = call?.status || 'Submitted';
+    if (call && ['succeeded','failed','cancelled','interrupted','awaiting_acceptance'].includes(call.status)) {
+      nativeView.active = null; element('native-run').disabled = !element('native-function').value; element('native-cancel').hidden = true; nativeRefreshSources(); return;
+    }
+    nativeView.timer = setTimeout(nativePoll, POLL_INTERVAL_MS);
+  } catch (error) { nativeError(error); }
+}
+element('native-cancel').addEventListener('click', async () => {
+  try { await api(`/native/sessions/${nativeView.session.session_id}/calls/${nativeView.active}/cancel`, 'POST', {}); }
+  catch (error) { nativeError(error); }
+});
+function nativeRenderResults() {
+  const container = element('native-call-results'); container.replaceChildren();
+  if (!nativeView.session.calls.length) { container.append(nativeText('p', 'Your function results will appear here.', 'muted')); return; }
+  for (const call of [...nativeView.session.calls].reverse()) {
+    const section = nativeText('article', '', 'native-result');
+    section.append(nativeText('h3', call.function || 'Function call'), nativeText('p', call.status));
+    if (call.status === 'awaiting_acceptance') { const recover = nativeText('button', 'Finish saved result'); recover.type = 'button'; recover.addEventListener('click', async () => { try { nativeView.session = await api(`/native/sessions/${nativeView.session.session_id}/calls/${call.call_id}/recover`, 'POST', {}); nativeRenderResults(); nativeRefreshSources(); } catch(error) { nativeError(error); } }); section.append(recover); }
+    if (call.native_error) section.append(nativeText('p', `Native execution: ${call.native_error.native_execution}. ${call.native_error.message}`, 'turn-error'));
+    if (call.error) section.append(nativeText('p', call.error, 'turn-error'));
+    if (!call.native_error) for (const message of new Set((call.errors || []).map(e => e.message || e.code))) section.append(nativeText('p', message, 'turn-error'));
+    if (call.preview) {
+      for (const [name, value] of [['Return value', call.preview.return_value], ...Object.entries(call.preview.modified_inputs).map(([k,v]) => ['Modified input: '+k,v])]) {
+        section.append(nativeText('h4', name));
+        if (value.encoding === 'json') section.append(nativeText('p', value.value === null ? 'None' : String(value.value)));
+        else nativeRenderValue(section, value);
+      }
+      if (call.preview.produced_files.length) section.append(nativeText('p', 'Produced files: ' + call.preview.produced_files.map(f=>f.name).join(', ')));
+      if (call.preview.return_value.encoding === 'json' && call.preview.return_value.value === null && !Object.keys(call.preview.modified_inputs).length && !call.preview.produced_files.length) section.append(nativeText('p', 'Completed without a data result.'));
+    }
+    for (const download of call.downloads || []) {
+      const link = nativeText('a', download.label); link.href = `/api/v1/sessions/${nativeView.session.session_id}/revisions/${call.revision_id}/scientific-artifacts/${download.handle}`; link.download = download.filename; const line = document.createElement('p'); line.append(link); section.append(line);
+      if (/\.(png|jpg|jpeg|webp)$/i.test(download.filename)) { const image = document.createElement('img'); image.className = 'analysis-figure'; image.alt = 'Native-produced image'; image.src = link.href; section.append(image); }
+    }
+    container.append(section);
+  }
+}
+selectAgentMode(sessionStorage.getItem('agent.mode') || 'research');
+
+function nativeRenderValue(container, value) {
+  container.append(nativeText('p', `${value.type.split('.').pop()}${value.shape ? ' · ' + value.shape.join(' × ') : ''}`, 'muted small'));
+  if (['dataframe','series'].includes(value.encoding) && value.preview) {
+    const data = JSON.parse(value.preview), table = document.createElement('table');
+    const header = document.createElement('tr');
+    for (const label of ['Index', ...(data.columns || [data.name || 'Value'])]) header.append(nativeText('th', String(label)));
+    table.append(header);
+    data.data.forEach((values, i) => { const row = document.createElement('tr'); for (const item of [data.index[i], ...(Array.isArray(values) ? values : [values])]) row.append(nativeText('td', item === null ? 'null' : String(item))); table.append(row); });
+    container.append(table);
+  } else if (value.preview !== undefined) container.append(nativeText('pre', typeof value.preview === 'string' ? value.preview : JSON.stringify(value.preview, null, 2)));
+  if (value.items) { for (const [i, item] of value.items.entries()) { container.append(nativeText('h5', value.encoding === 'dict' ? String(item.key.value ?? i) : String(i))); nativeRenderValue(container, value.encoding === 'dict' ? item.value : item); } }
+  if (value.encoding === 'json') container.append(nativeText('p', value.value === null ? 'None' : String(value.value)));
+  if (value.length !== undefined) container.append(nativeText('p', `${value.length} members; full values are saved.`, 'muted small'));
+}

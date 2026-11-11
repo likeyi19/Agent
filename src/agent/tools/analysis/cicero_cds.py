@@ -20,7 +20,7 @@ from agent.tools._file_identity import file_closure
 from . import peak_h5ad
 from .native_matrix import arguments, NativeInvocationError, native_kwargs
 from .native_publication import NativePublication
-from .sequence_prediction import library, read, write
+from .sequence_prediction import read, write
 
 package = 'cicero'
 guidance = 'Cicero native CellDataSet aggregation and co-accessibility; exact object axes and source identities, no inferred genome lengths or upstream reruns.'
@@ -179,7 +179,8 @@ def _execute(values, execution_identity=None):
     for prefix in ('input', 'genomic_coords'):
         if args.get(prefix + '_sha256') and next(p['sha256'] for p in sources if p['path'] == args[prefix + '_path']) != args[prefix + '_sha256']:
             raise AuthorityError('Selected Cicero source changed')
-    executable = Path(os.environ.get('AGENT_CICERO_RSCRIPT') or library().root.parent / 'runtimes/cicero-1/env/bin/Rscript')
+    from .native_runtimes import rscript
+    executable = rscript('cicero')
     script = Path(__file__).parent / 'r/cicero_cds_v1.R'
     implementation = file_closure([executable, script])
     with tempfile.TemporaryDirectory(prefix='.cicero-cds-', dir=root) as temp:

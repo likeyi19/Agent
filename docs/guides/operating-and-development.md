@@ -100,8 +100,9 @@ creates a new immutable Revision. Unsupported recorded dependency bindings are
 reported without substituting a method. Defaults unavailable in the execution
 record are not guessed from prose or a current installation.
 
-Attach files has no general parameter editor. Explicit native-function requests
-remain conversational. Genuine missing-parameter questions may open contextual
+Attach files has no general parameter editor. Direct native calls use the separate
+**Native Functions** form without a conversation or model profile. AI Research
+retains scientific method constraints and result-scoped parameter adjustments. Genuine missing-parameter questions may open contextual
 controls; an unresolved native function scope requires an explicit choice.
 Numeric, boolean, enum, string, list and null values use the existing Registry
 and native metadata. Unchanged settings remain omitted from the edit submission.

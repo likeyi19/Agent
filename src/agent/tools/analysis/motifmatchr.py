@@ -1,6 +1,5 @@
 """Bounded matchMotifs invocation on ordered genomic peaks, without count analysis."""
 import math
-import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -133,7 +132,8 @@ def prepare_input(args,stage):
 
 def native(args,stage,fasta,motif):
     kwargs = native_arguments(args)
-    rscript = os.environ.get('AGENT_CHROMVAR_RSCRIPT',str(library().root.parent/'runtimes/chromvar/env/bin/Rscript'))
+    from .native_runtimes import rscript as runtime_rscript
+    rscript = str(runtime_rscript('motifmatchr'))
     if not Path(rscript).is_file():
         raise ValueError('The operator must provision the existing optional motifmatchr R runtime')
     script = Path(__file__).parent/'r/motifmatchr_v1.R'

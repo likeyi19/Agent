@@ -252,7 +252,7 @@ class AnalysisSessions:
         return self._store._update(session_id, change)
 
     def run(self, session_id, turn_id, request, outputs, *, expected_generation,
-            use_active_context=False, retain=()):
+            use_active_context=False, retain=(), prepared_plan=None):
         """Explicit session-aware new run; duplicate calls never restart linked work.
 
         Returns session metadata. The ordinary run/result remains accessible through
@@ -285,7 +285,8 @@ class AnalysisSessions:
         try:
             frozen = self.active_context(session_id, turn_id) if use_active_context else None
             with planning_context(frozen) if frozen is not None else nullcontext():
-                result = self._application.run(request)
+                result = (self._application.run(request) if prepared_plan is None else
+                          self._application.run_prepared(request, prepared_plan))
         except Exception:
             # Configuration/submission can fail before a scientific run exists.
             # Preserve the outcome without claiming anything about a live run.
@@ -323,7 +324,8 @@ class AnalysisSessions:
                     continue
                 self._application._workspace.require_regular_file(path)
                 files.append(CompletionFile(str(path), hashlib.sha256(path.read_bytes()).hexdigest()))
-        if not result.evidence or not result.report or not files:
+        native = self._application.run_store.load(result.run_id).request.prompt is None
+        if not result.evidence or (not native and not result.report) or not files:
             raise SessionError('Missing completed application presentation.')
         for reference in (result.evidence, result.visualization, result.report):
             if reference is not None and CompletionFile(reference.path, reference.sha256) not in files:

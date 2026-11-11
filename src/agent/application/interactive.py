@@ -213,7 +213,8 @@ class InteractiveAgentApplication:
         self._planning = dict(planning_wire_mode=planning_wire_mode,
             recovery_planning_profile=recovery_planning_profile,
             planning_recovery_policy=planning_recovery_policy)
-        self._profile(default_profile_id)
+        if model_profiles or default_profile_id is not None:
+            self._profile(default_profile_id)
         try:
             self._application = ResearchAgentApplication(workspace_root, **self._config)
         except (ValueError, RuntimeError, OSError) as exc:
@@ -522,7 +523,7 @@ class InteractiveAgentApplication:
                             registered_input=None, attachment_ids=(), clarification_choice=None, parameter_overrides=(), candidate_selection=None, selected_results=(), rerun_revision_id=None):
         _identifier(turn_id)
         if (type(expected_generation) is not int or expected_generation < 0
-                or type(utterance) is not str or (not utterance.strip() and not rerun_revision_id and not parameter_overrides) or len(utterance) > 4096):
+                or type(utterance) is not str or (not utterance.strip() and not rerun_revision_id and not parameter_overrides and not clarification_choice) or len(utterance) > 4096):
             raise _fail('INTERACTIVE_INPUT_INVALID')
         if predecessor_turn_id is not None:
             _identifier(predecessor_turn_id)
@@ -583,7 +584,7 @@ class InteractiveAgentApplication:
             raise _fail('INTERACTIVE_INPUT_INVALID') from exc
         state = self._load(session_id)
         existing = next((i for i in state.interactions if i.turn_id == turn_id), None)
-        if existing is None and not utterance.strip() and not rerun_revision_id:
+        if existing is None and not utterance.strip() and not rerun_revision_id and not clarification_choice:
             from .dialogue_execution import capture_prerequisite
             pending = capture_prerequisite(state.interactions, state.active_revision_id,
                 state.generation, submission, predecessor_turn_id)
@@ -1053,8 +1054,9 @@ class InteractiveAgentApplication:
                     metadata = dict(source)
                     spec = self._application.registry.accepted(step.tool_name).scientific_delivery
                     role = getattr(item, 'role', None)
-                    if spec is not None and role in spec.files:
-                        content_type = spec.files[role][1]
+                    definitions = {} if spec is None else spec.file_definitions(getattr(item, 'manifest', None))
+                    if role in definitions:
+                        content_type = definitions[role][1]
                         metadata.update(content_type=content_type, data_output=(role in spec.h5ad_roles
                             or content_type not in ('application/json', 'image/png')))
                     elif item.reference.artifact_type == 'scientific_sequence':

@@ -212,7 +212,7 @@ class Interaction:
 
     def __post_init__(self):
         text(self.turn_id)
-        if self.utterance != '' or not self.submission or not (self.submission.get('rerun_revision_id') or self.submission.get('parameter_overrides')):
+        if self.utterance != '' or not self.submission or not (self.submission.get('rerun_revision_id') or self.submission.get('parameter_overrides') or self.submission.get('clarification_choice')):
             text(self.utterance)
         if self.base_revision_id is not None: text(self.base_revision_id)
         natural(self.base_generation)

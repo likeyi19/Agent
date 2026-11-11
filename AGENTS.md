@@ -1,5 +1,41 @@
 # Agent
 
+The Final Dual-Mode and Scientific Binding Closeout authorizes one reviewed
+consolidated commit and normal push to `origin/main`; the no-commit statements
+below describe the preceding implementation stages. The
+[closeout report](../agent-data/acceptance/dual-mode-binding-closeout-2026-11-11/REPORT.md)
+owns the combined source review, scoped resource-library worker handoff, truthful
+startup errors, genuine qualitative Firefox continuation and Git verification.
+Native Functions remains zero-provider and all scientific execution/result owners
+remain shared. Scientific Clustering Parameter Selection is a separate future
+phase: explicit researcher and structured/result-edit values take precedence,
+exact Revision continuation and unaffected upstream reuse remain required, and
+automatic selection may apply only to unspecified parameters or explicit requests
+to optimize. Record its method, criterion, selected value and actual native
+execution; an internal metric does not establish a universal biological optimum.
+No optimizer, adapter expansion, iterative annotation or Stage 3 is authorized here.
+
+The General Scientific Binding Consolidation continues the uncommitted dual-mode
+implementation. The [binding guide](docs/guides/scientific-binding.md) owns explicit
+value grounding, scoped local questions and shared prepared-plan selection. The
+[report](../agent-data/acceptance/general-scientific-binding-2026-11-11/REPORT.md) records
+verification and limits. Structured selections outrank model proposals; original
+source/result identities and scientific owners remain authoritative. Native
+Functions stays zero-provider. No staging, commit, push, Stage 3 or optimizer is
+authorized.
+
+The separate Dual-Mode Architecture Consolidation request authorizes the current
+uncommitted implementation. AI Research retains Stage 1/2 scientific methods,
+planning, grounded responses and result-scoped interaction. Native Functions is a
+structured zero-provider interface using the same Executor, native process owner,
+RunStore, NativePublication, SessionTurn, Revision and downloads. A native Session
+has independent explicit calls without conversational Interactions or model profiles.
+The [native function guide](docs/guides/native-functions.md) owns the new interface;
+the [implementation report](../agent-data/acceptance/dual-mode-2026-11-10/REPORT.md)
+records current verification and limitations. Old chat-direct examples below are
+historical; AI scientific method constraints and typed parameter owners remain.
+No staging, commit or push is authorized. Stage 3 remains outside scope.
+
 Stage 1 native scATAC consolidation supersedes current dedicated-PCA and fixed
 ordinary raw-QC recommendations below. Ordinary compatible scATAC uses native
 SnapATAC2 matrix preparation, `pp.select_features`, `tl.spectral`, KNN, Leiden

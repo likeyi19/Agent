@@ -345,3 +345,19 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
 
 #parameter-dialog .parameter-row { align-items: end; }
 #parameter-dialog { border: 1px solid #ccd2d8; border-radius: .6rem; }
+
+.mode-switch { display: flex; gap: .5rem; margin: 1rem 0; }
+.native-layout { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(300px, 1.3fr); gap: 1rem; align-items: start; }
+.native-layout .panel { padding: 1.3rem; }
+.native-argument { border-top: 1px solid var(--border, #dce3e8); padding: .8rem 0; }
+.native-argument label { display: flex; gap: .5rem; align-items: center; }
+.native-argument input[type=checkbox] { width: auto; }
+.native-argument select, .native-argument textarea, .native-argument input:not([type=checkbox]) { width: 100%; margin: .3rem 0; }
+.native-results pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
+.native-result { border-top: 1px solid var(--border, #dce3e8); padding: 1rem 0; }
+body[data-mode=native] .header-actions, body[data-mode=native] .workspace-switch, body[data-mode=native] #research-layout { display: none; }
+body[data-mode=native] #native-workspace { display: block; }
+@media (max-width: 760px) { .native-layout { grid-template-columns: 1fr; } .mode-switch button { flex: 1; } }
+
+.native-result table { border-collapse: collapse; max-width: 100%; display: block; overflow-x: auto; }
+.native-result th, .native-result td { padding: .35rem .6rem; text-align: left; border-bottom: 1px solid var(--border, #dce3e8); }

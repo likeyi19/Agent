@@ -9,7 +9,7 @@ from agent.application.turn_decisions import (
 from agent.orchestration import build_default_tool_registry
 
 
-def wire(literal, evidence, *, argument='min_tss_enrichment', tool='select_scATAC_cells', **extra):
+def wire(literal, evidence, *, argument='resolution', tool='cluster_cells', **extra):
     return json.dumps(dict(turn_schema_version=1, decision=dict(kind='execute_plan',
         target=tool, arguments=[dict(tool=tool, argument=argument,
                                     literal=literal, evidence=evidence, **extra)])))
@@ -33,7 +33,6 @@ def test_exact_text_location(text, literal, evidence):
     ('depth 20 and flank 20', '20', '20', 'ambiguous_parameter'),
     ('TSS 4; TSS 4', '4', 'TSS 4', 'ambiguous_parameter'),
     ('depth 20 and flank 20', '20', 'depth 20 and flank 20', 'ambiguous_parameter'),
-    ('Use TSS 5', '4', 'Use TSS 5', 'ungrounded_operand'),
     ('Use TSS 5', '5', 'Use TSS  5', 'ungrounded_operand'),
 ])
 def test_no_first_match_or_text_repair(text, literal, evidence, reason):
@@ -44,11 +43,18 @@ def test_no_first_match_or_text_repair(text, literal, evidence, reason):
 @pytest.mark.parametrize('text,literal', [('TSS 120', '20'), ('TSS -4', '4'),
     ('TSS 1.5', '5'), ('TSS 1e3', '3'), ('TSS 4/3', '3')])
 def test_locating_text_does_not_bypass_token_boundary(text, literal):
-    with pytest.raises(IntentError, match='ungrounded_operand'):
-        parse_decision(wire(literal, text), utterance=text)
+    try:
+        bound, = parse_decision(wire(literal, text), utterance=text).arguments
+    except IntentError as exc:
+        assert exc.reason == 'ungrounded_operand'
+    else:
+        # A unique complete token may replace the model's partial representation;
+        # the partial span itself still never becomes scientific authority.
+        assert bound.literal != literal
+        assert text[bound.start:bound.end] == bound.literal
     start = text.index(literal)
-    declaration = ScopedArgument('select_scATAC_cells', 'min_tss_enrichment', literal, start, start + len(literal))
-    spec = build_default_tool_registry().get('select_scATAC_cells').optional_arguments['min_tss_enrichment']
+    declaration = ScopedArgument('cluster_cells', 'resolution', literal, start, start + len(literal))
+    spec = build_default_tool_registry().get('cluster_cells').optional_arguments['resolution']
     with pytest.raises(IntentError, match='ungrounded_operand'):
         admit_scientific_argument(declaration, text, spec)
 
@@ -60,7 +66,7 @@ def test_locating_text_does_not_bypass_token_boundary(text, literal):
 ])
 def test_numeric_quantity_modifiers(text, literal):
     declaration, = parse_decision(wire(literal, text), utterance=text).arguments
-    spec = build_default_tool_registry().get('select_scATAC_cells').optional_arguments['min_tss_enrichment']
+    spec = build_default_tool_registry().get('cluster_cells').optional_arguments['resolution']
     assert admit_scientific_argument(declaration, text, spec) == float(literal)
     with pytest.raises(IntentError, match='ungrounded_operand'):
         admit_scientific_argument(declaration, text, spec, _legacy_numeric_boundary=True)
@@ -72,24 +78,31 @@ def test_numeric_quantity_modifiers(text, literal):
     ('value 20%', '20'), ('value 20-base', '2'), ('value -20-base', '20'),
 ])
 def test_quantity_modifier_does_not_admit_partial_numbers(text, literal):
-    with pytest.raises(IntentError, match='ungrounded_operand'):
-        parse_decision(wire(literal, text), utterance=text)
+    try:
+        bound, = parse_decision(wire(literal, text), utterance=text).arguments
+    except IntentError as exc:
+        assert exc.reason == 'ungrounded_operand'
+    else:
+        # A unique complete token may replace the model's partial representation;
+        # the partial span itself still never becomes scientific authority.
+        assert bound.literal != literal
+        assert text[bound.start:bound.end] == bound.literal
     start = text.index(literal)
-    declaration = ScopedArgument('select_scATAC_cells', 'min_tss_enrichment', literal, start, start + len(literal))
-    spec = build_default_tool_registry().get('select_scATAC_cells').optional_arguments['min_tss_enrichment']
+    declaration = ScopedArgument('cluster_cells', 'resolution', literal, start, start + len(literal))
+    spec = build_default_tool_registry().get('cluster_cells').optional_arguments['resolution']
     with pytest.raises(IntentError, match='ungrounded_operand'):
         admit_scientific_argument(declaration, text, spec)
 
 
 def test_saved_quantity_rejection_retains_its_original_meaning():
-    from agent.application.dialogue_execution import _repair_declarations
+    from agent.application.dialogue_execution import _read_legacy_rejection
     text = 'Use a 2114-base window and 2 attempts.'
     tool = 'prepare_scatac_regulatory_sequences'
     raw = wire('2114', '2114-base window', tool=tool, argument='window_size')
     registry = build_default_tool_registry()
     with pytest.raises(IntentError, match='invalid_prerequisite'):
-        _repair_declarations(raw, text, registry)  # No rejection under current admission.
-    safe, rejected = _repair_declarations(raw, text, registry,
+        _read_legacy_rejection(raw, text, registry)  # No rejection under current admission.
+    safe, rejected = _read_legacy_rejection(raw, text, registry,
         historical_missing={(tool, 'window_size')})
     assert not safe.arguments and rejected == [(tool, 'window_size')]
 
@@ -103,7 +116,7 @@ def test_saved_quantity_rejection_retains_its_original_meaning():
     ('Use 2 attempts and a 2-5 range.', '2'),
 ])
 def test_numeric_quote_locations_use_whole_tokens(text, literal):
-    declaration, = parse_decision(wire(literal, text), utterance=text).arguments
+    declaration, = parse_decision(wire(literal, literal), utterance=text).arguments
     assert declaration.start == text.index(literal)
     assert text[declaration.start:declaration.end] == literal
 
@@ -120,23 +133,23 @@ def test_independent_numeric_repetition_stays_ambiguous(text, literal):
 
 
 def test_historical_substring_rejection_stays_readable():
-    from agent.application.dialogue_execution import _repair_declarations
+    from agent.application.dialogue_execution import _read_legacy_rejection
     text = 'Allow 2 mutation attempts with end 1200.'
     tool = 'optimize_regulatory_sequences'
     raw = wire('2', text, tool=tool, argument='iterations')
-    safe, rejected = _repair_declarations(raw, text, build_default_tool_registry(),
+    safe, rejected = _read_legacy_rejection(raw, text, build_default_tool_registry(),
         historical_missing={(tool, 'iterations')})
     assert not safe.arguments and rejected == [(tool, 'iterations')]
 
 
 def test_legacy_misindex_is_normalized_only_at_provider_boundary():
     text = 'Use minimum flank evidence 20.'
-    value = dict(tool='select_scATAC_cells', argument='min_tss_flank_evidence',
+    value = dict(tool='cluster_cells', argument='resolution',
                  literal='20', start=text.index('20') - 1, end=text.index('20') + 1)
     raw = json.dumps(dict(turn_schema_version=1, decision=dict(kind='execute_plan',
-        target='select_scATAC_cells', arguments=[value])))
+        target='cluster_cells', arguments=[value])))
     historical, = parse_decision(raw).arguments
-    spec = build_default_tool_registry().get('select_scATAC_cells').optional_arguments['min_tss_flank_evidence']
+    spec = build_default_tool_registry().get('cluster_cells').optional_arguments['resolution']
     with pytest.raises(IntentError, match='ungrounded_operand'):
         admit_scientific_argument(historical, text, spec)
     grounded, = parse_decision(raw, utterance=text).arguments

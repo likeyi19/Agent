@@ -527,6 +527,12 @@ class ScientificArtifactHandle(ArtifactHandle):
         reviewed.update((kind, filename, prefix + ': ' + label)
             for kind, filename, label in tuple(reviewed) if kind == 'scientific_model'
             for prefix in ('Initialized', 'Post-trained'))
+        if (self.artifact_type == 'scientific_native_output' and self.filename
+                and '/' not in self.filename and '\\' not in self.filename
+                and self.filename not in ('.', '..') and self.label == 'Native output: ' + self.filename):
+            # Display shape only. Accepted membership, bytes and scope are still
+            # resolved by the publication owner before any transfer.
+            reviewed.add((self.artifact_type, self.filename, self.label))
         if (self.size_bytes == 0
                 or (self.artifact_type, self.filename, self.label) not in reviewed):
             raise ValueError('Unsupported scientific artifact descriptor.')

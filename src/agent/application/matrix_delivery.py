@@ -672,7 +672,7 @@ class MatrixDownloadPreparer:
                 raise MatrixDeliveryError('MATRIX_DOWNLOAD_UNAVAILABLE')
             filename, content_type = 'matrix.h5ad', 'application/octet-stream'
         elif native is not None:
-            filename, content_type = artifact.role, native.files[artifact.role][1]
+            filename, content_type = artifact.role, native.file_definitions(artifact.manifest)[artifact.role][1]
         elif annotation_evidence:
             filename, content_type = artifact.role, annotation_delivery.EVIDENCE_FILES[artifact.role][2]
         elif sequence:

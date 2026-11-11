@@ -62,6 +62,16 @@ class NativeWorkerError(Exception):
         super().__init__(error['message'])
 
 
+def worker_environment():
+    """Carry the operation's configured library across the process boundary."""
+    from agent.application.shared_resources import current_scientific_library
+    environment = dict(os.environ)
+    library = current_scientific_library()
+    if library is not None:
+        environment['AGENT_SCIENTIFIC_RESOURCE_ROOT'] = str(library.root)
+    return environment
+
+
 def call(operation, arguments, local):
     """Run an existing owner in the shared OS boundary; no scientific policy."""
     if _CONTROLLED.get():
@@ -93,7 +103,7 @@ def call(operation, arguments, local):
     unit = 'agent-native-task.service'
     context = current()
     payload = dict(operation=operation, arguments=arguments, memory_bytes=memory,
-        context=snapshot_worker_context(context), environment=dict(os.environ),
+        context=snapshot_worker_context(context), environment=worker_environment(),
         store_root=None if _STORE.get() is None else str(_STORE.get().root))
     root_value = arguments.get('values', arguments.get('arguments', {})).get('output_dir')
     root = Path(root_value) if root_value else None

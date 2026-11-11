@@ -181,13 +181,14 @@ def _freeze_plan_arguments(
 @dataclass(frozen=True)
 class AgentRequest(_JsonModel):
     request_id: str
-    prompt: str
+    prompt: str | None
     inputs: Mapping[str, JsonValue]
     mode: RunMode = RunMode.EXECUTE
 
     def __post_init__(self) -> None:
         _require_non_empty_string(self.request_id, "request_id")
-        _require_non_empty_string(self.prompt, "prompt")
+        if self.prompt is not None:
+            _require_non_empty_string(self.prompt, "prompt")
         if not isinstance(self.mode, RunMode):
             raise TypeError("`mode` must be a RunMode.")
         object.__setattr__(self, "inputs", freeze_json_mapping(self.inputs, "inputs"))

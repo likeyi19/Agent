@@ -21,7 +21,7 @@ from scipy.io import mmwrite, mmread
 
 from agent.schemas.orchestration import _serialize
 from agent.schemas.verification_authority import AuthorityError, digest
-from agent.tools._native_process import run, r_environment
+from agent.tools._native_process import run, r_environment, NativeExecutionError
 from agent.tools.data.authority_context import current
 from agent.tools._file_identity import file_closure
 from . import peak_h5ad
@@ -226,7 +226,7 @@ class MatrixPackage:
         override = os.environ.get('AGENT_' + self.package.upper() + '_PYTHON')
         try:
             executable = Path(override) if override else library().root.parent / 'runtimes' / self.runtime / 'env/bin/python'
-        except ValueError:
+        except NativeExecutionError:
             return {}
         if not executable.is_file():
             return {}
@@ -236,11 +236,15 @@ class MatrixPackage:
         is_r = self.package == 'Signac'
         override = os.environ.get('AGENT_' + self.package.upper() + ('_RSCRIPT' if is_r else '_PYTHON'))
         executable = Path(override) if override else library().root.parent / 'runtimes' / self.runtime / 'env/bin' / ('Rscript' if is_r else 'python')
+        if is_r:
+            from .native_runtimes import rscript
+            executable = rscript(self.package)
         from . import snapatac_raw as raw
         raw_call = self.package == 'snapatac2' and args['function_name'] in raw.FUNCTIONS
         script = Path(__file__).parent / ('snapatac_raw_worker.py' if raw_call else 'r/signac_functions_v1.R' if is_r else 'native_matrix_worker.py')
         if not executable.is_file():
-            raise ValueError(f'Provision the isolated {self.package} {self.version} scientific runtime')
+            raise NativeExecutionError('NATIVE_EXECUTION_UNAVAILABLE',
+                f'Provision the isolated {self.package} {self.version} scientific runtime')
         implementation_paths = [executable.resolve(), script]
         if raw_call:
             implementation_paths.append(script.with_name('native_matrix_worker.py'))

@@ -2,7 +2,6 @@
 
 No dataset certification, upstream reconstruction, or scientific replay on reads.
 """
-import os
 from pathlib import Path
 import tempfile
 
@@ -17,7 +16,7 @@ from agent.schemas.orchestration import _serialize
 from agent.schemas.verification_authority import AuthorityError, VerifiedArtifactAuthority, digest
 from agent.tools.data.authority_context import current, owned_verification
 from agent.tools._file_identity import file_closure
-from .sequence_prediction import read, write, library, arguments
+from .sequence_prediction import read, write, arguments
 from . import peak_h5ad
 from .sequence_reference import resolve_motif_resources, metadata_declarations, coordinates, check_declarations
 
@@ -147,7 +146,8 @@ def prepare_input(args, stage):
 
 
 def native(args, stage, fasta, motif):
-    rscript=os.environ.get('AGENT_CHROMVAR_RSCRIPT',str(library().root.parent/'runtimes/chromvar/env/bin/Rscript'))
+    from .native_runtimes import rscript as runtime_rscript
+    rscript=str(runtime_rscript('chromVAR'))
     if not Path(rscript).is_file():raise ValueError('Provision the optional isolated chromVAR R runtime; unrelated tools do not require it')
     script=Path(__file__).parent/'r/chromvar_v1.R'
     implementation=file_closure([rscript,script])

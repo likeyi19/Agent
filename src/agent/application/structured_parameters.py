@@ -10,6 +10,84 @@ from agent.orchestration.native_parameters import declaration_input
 from .turn_decisions import ExplicitArgument, IntentError, argument_identity
 
 
+def parameter_slots(registry, target, requests):
+    """Project pending fields from the same Registry and declaration scopes.
+
+    These are question identities, not parameter values or a second catalog.
+    """
+    from .dialogue_execution import _parameter_input
+    from .session_state import digest
+    slots = {}
+    for request in requests:
+        row = dict(tool=target, argument=request) if isinstance(request, str) else {
+            k: v for k, v in _serialize(request).items() if v is not None and k != 'evidence'}
+        if set(row) - {'tool', 'argument', 'native_function', 'port', 'source', 'member'}:
+            raise IntentError('invalid_parameter_value')
+        member = row.pop('member', None)
+        d = ExplicitArgument(**row, value=None)
+        ordinary, spec = _parameter_input(registry, d.tool, d.argument)
+        declaration_input(registry, d, ordinary)
+        if member is not None:
+            native = registry.get(d.tool).native_functions
+            allowed = (dict(native.functions).get(d.native_function, ()) if native is not None
+                       else dict(spec.planning.conversational_members))
+            if d.argument != 'kwargs' or member not in allowed:
+                raise IntentError('invalid_parameter_value')
+            row['member'] = member
+        key = 'parameter.value_' + digest(row)[:16]
+        slots[key] = row
+    if not 1 <= len(slots) <= 8:
+        raise IntentError('invalid_prerequisite')
+    return slots
+
+
+def missing_slots(registry, slots, values):
+    missing = []
+    for handle, row in slots.items():
+        key = input_key(registry, {k:v for k,v in row.items() if k != 'member'} | {'value': None})
+        effective = values
+        if row.get('native_function') is None:
+            from agent.orchestration.native_parameters import prerequisite_inputs
+            effective = prerequisite_inputs(registry.get(row['tool']), values) or values
+        if key not in effective or 'member' in row and row['member'] not in effective[key]:
+            missing.append(handle)
+    return sorted(missing)
+
+
+def validate_slot_answers(slots, arguments):
+    """A local answer may fill only its captured operation/source/member."""
+    from dataclasses import asdict
+    for declaration in arguments:
+        row = asdict(declaration)
+        candidates = [slot for slot in slots.values() if all(slot.get(k) == row.get(k)
+            for k in ('tool', 'argument', 'port', 'source'))
+            and (slot.get('native_function') is None or slot['native_function'] == row.get('native_function'))]
+        if not candidates:
+            raise IntentError('invalid_reference')
+        if any('member' not in slot for slot in candidates):
+            continue
+        supplied = (set(declaration.value) if isinstance(declaration, ExplicitArgument)
+                    else {m.name for m in getattr(declaration, 'members', ())})
+        if not supplied or supplied - {slot['member'] for slot in candidates}:
+            raise IntentError('invalid_reference')
+
+
+def shadowed_arguments(arguments, explicit):
+    """Discard model duplicates before grounding; exact UI input owns the value."""
+    remaining = []
+    for row in arguments:
+        matches = [s for s in explicit if all(row.get(k) == s.get(k)
+                   for k in ('tool', 'argument', 'native_function', 'port', 'source'))]
+        if not matches:
+            remaining.append(row)
+        elif row.get('members'):
+            keys = {k for s in matches for k in s['value']} if row['argument'] == 'kwargs' else set()
+            members = [m for m in row['members'] if m['name'] not in keys]
+            if members:
+                remaining.append(dict(row, members=members))
+    return remaining
+
+
 def declarations(rows, registry):
     from .dialogue_execution import _bind_arguments
     result = tuple(ExplicitArgument(**_serialize(row)) for row in rows)
@@ -64,6 +142,47 @@ def explicit_records(admitted, interactions):
                 key = argument_identity(ExplicitArgument(**_serialize(row)))
                 found.setdefault(key, _serialize(row))
     return list(found.values())
+
+
+def bound_records(admitted, interactions, registry, *, current_utterance=None):
+    """One plan binding projection for UI values and admitted language values.
+
+    Language evidence stays in its original declaration; this transient view is
+    consumed by the existing prepared-plan binder, never saved as UI input.
+    """
+    from .dialogue_execution import _parameter_records, _parameter_input
+    from .turn_decisions import _scientific_arguments, admit_scientific_argument
+    rows = explicit_records(admitted, interactions)
+    found = {tuple(row.get(k) for k in ('tool','argument','native_function','port','source','step_id')) for row in rows}
+    for record in _parameter_records(admitted, interactions):
+        original = next((i for i in reversed(interactions) if i.admitted == record), None)
+        source = record
+        while source.get('scope_selection'):
+            original = next(i for i in interactions if i.turn_id == source['scope_selection'])
+            source = original.admitted
+        for declaration in _scientific_arguments(_serialize(record.get('arguments', ()))):
+            if isinstance(declaration, ExplicitArgument) or declaration.argument == 'function_name':
+                continue
+            scope = {k:getattr(declaration,k) for k in ('tool','argument','native_function','port','source','step_id')
+                     if getattr(declaration,k,None) is not None}
+            _, spec = _parameter_input(registry, declaration.tool, declaration.argument)
+            if scope.get('source') and not scope.get('port'):
+                scope['port'] = spec.planning.observation_source
+            identity = tuple(scope.get(k) for k in ('tool','argument','native_function','port','source','step_id'))
+            if identity in found:
+                continue
+            utterance = original.utterance if original is not None else current_utterance
+            if utterance is None:
+                # A pure plan assertion has no utterance owner; its already
+                # admitted inputs still provide the exact function-scoped value.
+                value = record['inputs'][input_key(registry, scope | {'value': None})]
+            elif spec.planning.observation_source:
+                value = getattr(declaration, 'value', declaration.literal)
+            else:
+                value = admit_scientific_argument(declaration, utterance, spec, historical=True)
+            rows.append(scope | {'value': _serialize(value)})
+            found.add(identity)
+    return rows
 
 
 def validate_capture(interaction):
@@ -201,6 +320,15 @@ def scope_choices(interaction):
         if step['step_id'] in pending['choices'])
 
 
+def _selected_declaration(rows, scope):
+    candidates = [r for r in rows if all(r.get(k) == scope.get(k)
+        for k in ('tool','argument','native_function','source','step_id'))
+        and (r.get('port') == scope.get('port') or 'mode' in r)]
+    if len(candidates) != 1:
+        raise IntentError('invalid_reference')
+    return candidates[0]
+
+
 def selected_scope(sessions, interaction, preceding):
     choice = (interaction.submission or {}).get('clarification_choice')
     if choice is None or not choice['handle'].startswith('step:'):
@@ -215,7 +343,7 @@ def selected_scope(sessions, interaction, preceding):
     admitted = _serialize(source.admitted)
     pending = admitted.pop('parameter_scope')
     rows = admitted['arguments']
-    row = next(r for r in rows if r == pending['argument'])
+    row = _selected_declaration(rows, pending['argument'])
     row['step_id'] = choice['handle'][5:]
     admitted.update(request_id='turn-' + digest(dict(session=sessions._interaction_session_id,
         turn=interaction.turn_id)), scope_selection=source.turn_id, native_plan=pending['plan'])
@@ -229,7 +357,7 @@ def validate_scope(interaction, preceding):
     pending = source.admitted['parameter_scope']
     expected = _serialize(source.admitted)
     expected.pop('parameter_scope')
-    row = next(r for r in expected['arguments'] if r == _serialize(pending['argument']))
+    row = _selected_declaration(expected['arguments'], pending['argument'])
     row['step_id'] = choice['handle'][5:]
     expected.update(request_id=interaction.admitted['request_id'], scope_selection=source.turn_id,
                     native_plan=_serialize(pending['plan']))
@@ -282,6 +410,13 @@ def accepted_analysis(sessions, session_id, revision_id):
     return state, revision, run
 
 
+def recorded_native_kwargs(step):
+    """Actual accepted kwargs, including defaults recorded by the native worker."""
+    recorded = _serialize(step.result.get('parameters', {}))
+    effective = recorded.get('effective_native_parameters', {}) if isinstance(recorded, dict) else {}
+    return {**_serialize(step.resolved_arguments.get('kwargs', {})), **effective}
+
+
 def result_parameters(sessions, session_id, revision_id):
     state, revision, run = accepted_analysis(sessions, session_id, revision_id)
     registry = sessions._application.registry
@@ -293,12 +428,11 @@ def result_parameters(sessions, session_id, revision_id):
         spec = catalog(registry, step.tool_name, function)
         spec = spec[0] if spec else dict(parameters=[])
         recorded = _serialize(step.result.get('parameters', {}))
-        effective = recorded.get('effective_native_parameters', {}) if isinstance(recorded, dict) else {}
         fields = []
         for kwarg, rows in ((False, spec['parameters']), (True, spec.get('kwargs', ()))):
             for field in rows:
                 name = field['argument']
-                values = ({**_serialize(step.resolved_arguments.get('kwargs', {})), **effective} if kwarg
+                values = (recorded_native_kwargs(step) if kwarg
                           else {**_serialize(step.resolved_arguments),
                                 **{k:v for k,v in recorded.items() if k == name},
                                 **{k:_serialize(v) for k,v in step.result.items() if k == name}})

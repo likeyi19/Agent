@@ -34,7 +34,7 @@ WebConfigurationError = ResourceConfigurationError
 class WebConfiguration:
     workspace_root: Path
     model_profiles: tuple[PlanningModelProfile, ...]
-    default_profile_id: str
+    default_profile_id: str | None
     display_labels: Mapping[str, str] = field(default_factory=dict)
     input_sets: tuple[ScientificInputSet, ...] = ()
     upload_root: Path | None = None
@@ -49,12 +49,12 @@ class WebConfiguration:
         # resolving it here would erase a deployment safety check owned there.
         object.__setattr__(self, "workspace_root", Path(self.workspace_root).expanduser().absolute())
         profiles = self.model_profiles
-        if (type(profiles) is not tuple or not 1 <= len(profiles) <= 64
+        if (type(profiles) is not tuple or not 0 <= len(profiles) <= 64
                 or any(not isinstance(p, PlanningModelProfile) for p in profiles)
                 or len({p.profile_id for p in profiles}) != len(profiles)):
             raise WebConfigurationError("Profiles must be a bounded unique tuple of existing model profiles.")
         default = next((p for p in profiles if p.profile_id == self.default_profile_id), None)
-        if default is None or not default.enabled or not default.supports_structured_output:
+        if profiles and (default is None or not default.enabled or not default.supports_structured_output) or not profiles and self.default_profile_id is not None:
             raise WebConfigurationError("The default profile must be enabled and support structured output.")
         if not isinstance(self.display_labels, Mapping):
             raise WebConfigurationError("Profile labels must be a mapping.")
@@ -127,7 +127,7 @@ def load_web_configuration(path):
             raise WebConfigurationError('Inline EpiZoo catalogs are retired. Install models in ScientificResourceLibrary and configure scientific_resource_root.')
         allowed = {"workspace_root", "model_profiles", "default_profile_id", "input_sets",
                    "upload_root", "upload_max_bytes", "upload_max_concurrent", "scientific_resource_root"}
-        required = {"workspace_root", "model_profiles", "default_profile_id"}
+        required = {"workspace_root"}
         if type(value) is not dict or set(value) - allowed or required - set(value):
             raise WebConfigurationError("Operator configuration fields are invalid.")
         workspace = value["workspace_root"]
@@ -136,8 +136,8 @@ def load_web_configuration(path):
         workspace = Path(workspace).expanduser()
         if not workspace.is_absolute():
             workspace = path.parent / workspace
-        profile_values = value["model_profiles"]
-        if type(profile_values) is not list or not 1 <= len(profile_values) <= 64:
+        profile_values = value.get("model_profiles", [])
+        if type(profile_values) is not list or not 0 <= len(profile_values) <= 64:
             raise WebConfigurationError("Operator model profiles must be a bounded list.")
         profiles, labels = [], {}
         profile_keys = {"profile_id", "provider_id", "model_id", "enabled", "supports_structured_output",
@@ -167,7 +167,7 @@ def load_web_configuration(path):
             if type(library) is not str or not library.strip(): raise WebConfigurationError('A resource library path is required.')
             library = Path(library).expanduser()
             if not library.is_absolute(): library = path.parent / library
-        return WebConfiguration(workspace, tuple(profiles), value["default_profile_id"], labels, tuple(input_sets),
+        return WebConfiguration(workspace, tuple(profiles), value.get("default_profile_id"), labels, tuple(input_sets),
             value.get('upload_root'), value.get('upload_max_bytes', 256 * 1024 * 1024),
             value.get('upload_max_concurrent', 2), library)
     except WebConfigurationError:

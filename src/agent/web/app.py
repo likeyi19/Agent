@@ -57,6 +57,16 @@ class CreateSession(_Body):
         return _route_identity(value)
 
 
+class NativeCall(_Body):
+    call_id: StrictStr = Field(min_length=1, max_length=128, pattern=r'^[A-Za-z0-9_-]+$')
+    expected_generation: int = Field(ge=0)
+    package: StrictStr
+    function: StrictStr
+    inputs: dict = Field(default_factory=dict)
+    parameters: dict = Field(default_factory=dict)
+    outputs: dict = Field(default_factory=dict)
+
+
 class CompleteFastqCollection(_Body):
     collection_id: StrictStr = Field(min_length=1, max_length=64, pattern=r'^[A-Za-z0-9_-]+$')
     label: StrictStr = Field(min_length=1, max_length=160)
@@ -189,6 +199,58 @@ class _LocalWorkers:
             return ClientError('INTERACTIVE_APPLICATION_FAILED',
                                'The application could not complete this turn.')
 
+    def submit_native(self, session_id, payload):
+        from agent.application.native_functions import bind, execute
+        from agent.schemas.verification_authority import digest
+        prepared = bind(self.application, session_id, payload)
+        key = ('native:' + session_id, payload['call_id'])
+        fingerprint = digest(payload)
+        with self.lock:
+            previous = self.receipts.get(key)
+            if previous is not None:
+                if previous.fingerprint != fingerprint:
+                    raise ValueError('Call identity already belongs to different parameters')
+                return
+            state = self.application._application.sessions.load(session_id)
+            existing = next((t for t in state.turns if t.turn_id == payload['call_id']), None)
+            if existing is not None:
+                saved = self.application._application.run_store.load(existing.run_id)
+                if digest({k: saved.request.inputs[k] for k in prepared[0].inputs}) != digest(prepared[0].inputs):
+                    raise ValueError('Call identity already belongs to different parameters')
+                return
+            self._reserve_capacity()
+            receipt = _Receipt(fingerprint, None)
+            self.receipts[key] = receipt
+            try:
+                receipt.future = self.pool.submit(execute, self.application, session_id, payload, prepared)
+            except Exception:
+                del self.receipts[key]
+                raise
+
+    def _reserve_capacity(self):
+        """Shared worker/receipt bounds; caller holds the receipt lock."""
+        active = sum(r.future is None or not r.future.done() for r in self.receipts.values())
+        if self.closed or active >= self.max_workers:
+            raise _WorkersBusy()
+        while len(self.receipts) >= 128:
+            oldest = next((k for k, r in self.receipts.items()
+                           if r.future is not None and r.future.done()), None)
+            if oldest is None:
+                raise _WorkersBusy()
+            del self.receipts[oldest]
+
+    def native_status(self, session_id):
+        from agent.application.native_functions import history
+        result = history(self.application, session_id)
+        with self.lock:
+            for (scope, call_id), receipt in self.receipts.items():
+                if scope != 'native:' + session_id or any(r['call_id'] == call_id for r in result['calls']):
+                    continue
+                error = receipt.future.exception() if receipt.future.done() else None
+                result['calls'].append(dict(call_id=call_id, status='failed' if error else 'submitted',
+                    error=str(error) if error else None))
+        return result
+
     @staticmethod
     def _input_arguments(inputs):
         return ({'registered_input': inputs} if isinstance(inputs, (RegisteredInput, RegisteredInputCollection, RegisteredInputGroup))
@@ -220,15 +282,7 @@ class _LocalWorkers:
                     raise
             else:
                 return
-            active = sum(r.future is None or not r.future.done() for r in self.receipts.values())
-            if self.closed or active >= self.max_workers:
-                raise _WorkersBusy()
-            while len(self.receipts) >= 128:
-                oldest = next((k for k, r in self.receipts.items()
-                               if r.future is not None and r.future.done()), None)
-                if oldest is None:
-                    raise _WorkersBusy()
-                del self.receipts[oldest]
+            self._reserve_capacity()
             receipt = _Receipt(fingerprint, TurnView(session_id, payload.turn_id,
                 payload.utterance, payload.expected_generation, profile_id=payload.profile_id,
                 status='submitted'))
@@ -427,6 +481,51 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     def models():
         return {'choices': [c.to_dict() for c in application.model_choices()]}
 
+    @app.get('/api/v1/native/packages')
+    def native_packages():
+        from agent.application.native_functions import catalog
+        return catalog()
+
+    @app.get('/api/v1/native/functions')
+    def native_functions(package: str, function: str | None = None):
+        from agent.tools.analysis.native_callable import discover
+        from agent.application.shared_resources import scientific_resource_scope
+        try:
+            with scientific_resource_scope(application.resources.library):
+                return discover(package, function)
+        except (ValueError, KeyError, RuntimeError) as exc:
+            return _error('NATIVE_METADATA_UNAVAILABLE', str(exc), 422)
+
+    @app.post('/api/v1/native/sessions', status_code=201)
+    def native_session(body: CreateSession):
+        from uuid import uuid4
+        session_id = body.session_id or str(uuid4())
+        application._application.sessions.create(session_id)
+        return workers.native_status(session_id)
+
+    @app.get('/api/v1/native/sessions/{session_id}')
+    def native_history(session_id: str):
+        return workers.native_status(session_id)
+
+    @app.post('/api/v1/native/sessions/{session_id}/calls', status_code=202)
+    def native_call(session_id: str, body: NativeCall):
+        try:
+            workers.submit_native(session_id, body.model_dump())
+            return dict(call_id=body.call_id, status='submitted')
+        except (ValueError, KeyError) as exc:
+            return _error('NATIVE_INPUT_INVALID', str(exc), 422)
+
+    @app.post('/api/v1/native/sessions/{session_id}/calls/{call_id}/cancel')
+    def native_cancel(session_id: str, call_id: str):
+        state = application._application.sessions.load(session_id)
+        turn = state.turn(call_id)
+        return application._application.cancel(turn.run_id).to_dict()
+
+    @app.post('/api/v1/native/sessions/{session_id}/calls/{call_id}/recover')
+    def native_recover(session_id: str, call_id: str):
+        application._application.sessions.complete_presentation(session_id, call_id)
+        return workers.native_status(session_id)
+
     @app.get('/api/v1/sessions/{session_id}/revisions/{revision_id}/parameters')
     def result_parameters(session_id: str, revision_id: str):
         from agent.application.structured_parameters import result_parameters
@@ -438,8 +537,10 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
     @app.get('/api/v1/parameters')
     def parameter_catalog(tool: str, function: str | None = None):
         from agent.application.structured_parameters import catalog
+        from agent.application.shared_resources import scientific_resource_scope
         try:
-            return {'tools': catalog(application._application.registry, tool, function)}
+            with scientific_resource_scope(application.resources.library):
+                return {'tools': catalog(application._application.registry, tool, function)}
         except (ValueError, KeyError) as exc:
             raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID') from exc
 
@@ -480,7 +581,7 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
 
     @app.get('/api/v1/sessions/{session_id}/attachments')
     def session_attachments(session_id: str):
-        application.reopen_session(session_id)
+        application._load(session_id)
         return {'choices': [] if uploads is None else list(uploads.session_attachments(session_id))}
 
     @app.post('/api/v1/uploads/fastq-collections', status_code=201)
@@ -505,7 +606,7 @@ def create_app(application: InteractiveAgentApplication, *, input_sets=(), max_w
         if uploads is None:
             return _error('WEB_UPLOAD_UNAVAILABLE', 'Scientific attachments are not configured.', 404)
         if session_id is not None:
-            application.reopen_session(session_id)
+            application._load(session_id)
             if input_type not in ('h5ad', 'attachment'):
                 raise InteractiveBoundaryError('INTERACTIVE_INPUT_INVALID')
         elif input_type == 'attachment':

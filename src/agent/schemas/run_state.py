@@ -969,7 +969,7 @@ def _decode_request(value: object) -> AgentRequest:
     _exact_keys(mapping, {"request_id", "prompt", "inputs", "mode"}, "request")
     return AgentRequest(
         _string(mapping["request_id"], "request.request_id"),
-        _string(mapping["prompt"], "request.prompt"),
+        None if mapping["prompt"] is None else _string(mapping["prompt"], "request.prompt"),
         _json_mapping(mapping["inputs"], "request.inputs"),
         _enum(RunMode, mapping["mode"], "request.mode"),
     )

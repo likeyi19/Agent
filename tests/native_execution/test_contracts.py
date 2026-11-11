@@ -28,3 +28,34 @@ def test_native_resource_errors_are_operational_and_never_retryable():
         assert error.code==code and not error.recoverable
         assert error.category.value in ('RESOURCE_ERROR','ENVIRONMENT_ERROR')
         assert 'private diagnostic' not in error.message
+
+
+def test_scoped_library_crosses_worker_boundary_without_global_mutation(tmp_path, monkeypatch):
+    import os
+    from agent.application.shared_resources import ScientificResourceLibrary, scientific_resource_scope
+    from agent.tools._native_process import worker_environment
+    monkeypatch.setenv('AGENT_SCIENTIFIC_RESOURCE_ROOT', str(tmp_path/'fallback'))
+    with scientific_resource_scope(ScientificResourceLibrary(tmp_path/'configured')):
+        assert worker_environment()['AGENT_SCIENTIFIC_RESOURCE_ROOT'] == str(tmp_path/'configured')
+        assert os.environ['AGENT_SCIENTIFIC_RESOURCE_ROOT'] == str(tmp_path/'fallback')
+    assert worker_environment()['AGENT_SCIENTIFIC_RESOURCE_ROOT'] == str(tmp_path/'fallback')
+
+
+def test_missing_library_is_environment_error_and_matrix_errors_remain_input_errors(monkeypatch):
+    from agent.application.shared_resources import scientific_resource_scope
+    from agent.tools.analysis.sequence_prediction import library
+    from agent.tools._native_process import NativeExecutionError
+    from agent.orchestration import build_default_tool_registry
+    from agent.orchestration.registry import _classify_tool_exception
+    monkeypatch.delenv('AGENT_SCIENTIFIC_RESOURCE_ROOT', raising=False)
+    with scientific_resource_scope(None), pytest.raises(NativeExecutionError) as caught:
+        library()
+    registry = build_default_tool_registry()
+    error = registry.classify_exception('run_snapatac2', caught.value)
+    receipt = _classify_tool_exception(caught.value)
+    assert error.code == receipt.code == 'NATIVE_EXECUTION_UNAVAILABLE'
+    assert error.category.value == receipt.category.value == 'ENVIRONMENT_ERROR'
+    assert not error.recoverable
+    invalid = registry.classify_exception('run_snapatac2', ValueError('Invalid matrix'))
+    assert invalid.code == 'NATIVE_MATRIX_INPUT_INVALID'
+    assert invalid.category.value == 'USER_INPUT_ERROR'

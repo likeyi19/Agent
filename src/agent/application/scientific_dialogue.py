@@ -1640,6 +1640,8 @@ def explain_outcome(sessions, session_id, interaction, outcome, model):
         origin = next((i for i in state.interactions
             if i.turn_id == interaction.prerequisite['origin_turn_id']), None)
         facts['preserved_objective'] = None if origin is None else origin.utterance
+        from .resource_continuation import pending_choices
+        facts['requested_inputs'] = _serialize(pending_choices(interaction.prerequisite, state.interactions))
     public = dict(scope='recorded_interaction_outcome', targets=[], claims=[], meanings={},
                   limitations=[], outcome=facts)
     diagnostic = {}

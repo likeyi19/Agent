@@ -48,6 +48,9 @@ def main():
 
 
 def dispatch(operation, args):
+    if operation == 'native_callable':
+        from agent.tools.analysis.native_callable import execute
+        return execute(**args)
     if operation == 'command':
         from agent.tools._native_process import run
         args['log_path'] = Path(args['log_path'])

@@ -20,7 +20,7 @@ from .turn_decisions import (IntentError, ExplicitArgument, LeidenResolution, Sc
 
 
 def _resolution_input(registry):
-    """Resolve the one reviewed argument through its existing semantic port."""
+    """Read the pre-generic species-continuation parameter contract."""
     return _parameter_input(registry, 'cluster_cells', 'resolution')
 
 
@@ -326,13 +326,13 @@ def _research_intent(interaction, decision):
     if any(text not in interaction.utterance for text in unfulfilled):
         raise IntentError('ungrounded_operand')
     retained = []
-    explicit = {(d.tool, d.argument) for d in get('arguments', ())} if not isinstance(decision, Mapping) else set()
+    explicit = {(d.tool, d.argument, getattr(d, 'native_function', None)) for d in get('arguments', ())} if not isinstance(decision, Mapping) else set()
     for reference in get('retain_parameters', ()):
         row = by_handle.get(reference.result)
         candidates = [] if row is None else [p for p in row['parameters'] if p['argument'] == reference.argument]
         if len(candidates) != 1:
             raise IntentError('unavailable_context')
-        if (row['tool'], reference.argument) in explicit:
+        if (row['tool'], reference.argument, candidates[0].get('native_function')) in explicit:
             raise IntentError('ambiguous_parameter')
         retained.append(dict(result=reference.result, tool=row['tool'], **_serialize(candidates[0])))
     return {k:v for k,v in dict(input_results=input_results, references=references, delivery=delivery,
@@ -345,6 +345,10 @@ def _with_retained(registry, values, retained):
     names = set()
     for row in retained:
         name, spec = _parameter_input(registry, row['tool'], row['argument'])
+        if row.get('native_function') is not None:
+            from agent.orchestration.native_parameters import declaration_input
+            name = declaration_input(registry, ExplicitArgument(row['tool'], row['argument'], row['value'],
+                native_function=row['native_function']), name)
         spec.validate(row['argument'], row['value'])
         if name in names or name in values and values[name] != row['value']:
             raise IntentError('conflicting_scientific_parameter')
@@ -448,6 +452,13 @@ def _bind_arguments(registry, utterance, inputs, declarations, *, replace_existi
     from .turn_decisions import admit_scientific_argument
     values = dict(inputs)
     names = {}
+    scopes = {}
+    if not historical:
+        from .structured_parameters import shadowed_arguments
+        explicit = tuple(d for d in declarations if isinstance(d, ExplicitArgument))
+        declarations = _scientific_arguments(shadowed_arguments(
+            [asdict(d) for d in declarations if not isinstance(d, ExplicitArgument)],
+            [asdict(d) for d in explicit])) + explicit
     from agent.orchestration.native_parameters import declaration_input
     explicit_names = {declaration_input(registry, d, _parameter_input(registry, d.tool, d.argument)[0])
                       for d in declarations if isinstance(d, ExplicitArgument)}
@@ -477,10 +488,13 @@ def _bind_arguments(registry, utterance, inputs, declarations, *, replace_existi
                     value = {**values.get(name, {}), **value}
             else:
                 value = admit_scientific_argument(declaration, utterance, specification,
-                    observation_fields=(field_choices or {}).get((declaration.tool, declaration.argument)))
+                    observation_fields=(field_choices or {}).get((declaration.tool, declaration.argument)),
+                    historical=historical)
         except IntentError as exc:
             raise IntentError(exc.reason, diagnostic_reason=exc.diagnostic_reason,
                 operand=exc.operand, parameters=(declaration.tool + '.' + declaration.argument,)) from exc
+        if declaration.argument == 'kwargs' and replace_existing:
+            value = {**values.get(name, {}), **value}
         native = registry.get(declaration.tool).native_functions
         function = getattr(declaration, 'native_function', None)
         if native is not None and function is not None and declaration.argument == 'kwargs':
@@ -490,15 +504,19 @@ def _bind_arguments(registry, utterance, inputs, declarations, *, replace_existi
             raise IntentError('conflicting_scientific_parameter')
         # Multiple explicitly declared consumers may share one registered input
         # (for example pseudobulk and DA condition_key). They must agree exactly.
-        if name in names and names[name] != value and not isinstance(declaration, ExplicitArgument):
+        scope = tuple(getattr(declaration, k, None) for k in ('port', 'source', 'step_id'))
+        separate_source = (name in scopes and scopes[name] != scope
+                           and any(scopes[name]) and any(scope))
+        if name in names and names[name] != value and not isinstance(declaration, ExplicitArgument) and not separate_source:
             raise IntentError('conflicting_scientific_parameter')
         names[name] = value
+        scopes[name] = scope
         if name in values:
             try:
                 specification.validate(declaration.argument, values[name])
             except (ValueError, TypeError) as exc:
                 raise IntentError('invalid_parameter_value') from exc
-            if values[name] != value and not replace_existing and name not in explicit_names:
+            if values[name] != value and not replace_existing and name not in explicit_names and not separate_source:
                 raise IntentError('conflicting_scientific_parameter')
         values[name] = value
     return values
@@ -720,8 +738,8 @@ def _parameter_source(reference, preceding):
     return origin, source, _serialize(source.admitted['inputs'])
 
 
-def _repair_declarations(raw, utterance, registry, *, historical_missing=()):
-    """Retain only valid declarations from a structurally valid new objective."""
+def _read_legacy_rejection(raw, utterance, registry, *, historical_missing=()):
+    """Read saved pre-consolidation rejections; never create a new question."""
     import json
     from .turn_decisions import (parse_decision, _ground_declaration,
         DeclarationGroundingError, Execute)
@@ -782,18 +800,55 @@ def request_parameter_repair(sessions, interaction, raw, inputs, resources):
             and source_kind(interaction.submission) is None):
         raise IntentError('invalid_prerequisite')
     registry = sessions._application.registry
-    safe, rejected = _repair_declarations(raw, interaction.utterance, registry)
+    from .turn_decisions import parse_decision, DeclarationGroundingError, _ground_declaration, Execute
+    from .structured_parameters import shadowed_arguments, resolve_sources
+    try:
+        parse_decision(raw, utterance=interaction.utterance)
+    except DeclarationGroundingError:
+        pass  # Complete shape has been checked, including every rejected member.
+    value = json.loads(raw)['decision']
+    if value['kind'] not in {'execute_plan', 'request_resources'}:
+        raise IntentError('invalid_prerequisite')
+    explicit = resolve_sources((interaction.submission or {}).get('parameter_overrides', ()),
+                               captured_input_group(interaction))
+    good, missing = [], []
+    for item in shadowed_arguments(value.get('arguments', []), explicit):
+        scope = {k: item[k] for k in ('tool', 'argument', 'native_function', 'source', 'port') if item.get(k) is not None}
+        _parameter_input(registry, item['tool'], item['argument'])
+        pieces = [dict(item, members=[member]) for member in item['members']] if item.get('members') else [item]
+        kept = []
+        for piece in pieces:
+            # A persisted span must cover only the retained members.
+            if piece.get('members') and 'evidence' in piece['members'][0]:
+                piece = {k:v for k,v in piece.items() if k not in ('literal','start','end')}
+            try:
+                grounded = _ground_declaration(piece, interaction.utterance)
+                _bind_arguments(registry, interaction.utterance, {}, _scientific_arguments([grounded]))
+                kept.append(grounded)
+            except IntentError as exc:
+                if exc.reason not in {'ungrounded_operand', 'ambiguous_parameter', 'invalid_parameter_value'}:
+                    raise
+                missing.append(scope | ({'member': piece['members'][0]['name']} if piece.get('members') else {}))
+        if kept and item.get('members'):
+            members = [m for part in kept for m in part['members']]
+            start, end = min(m['start'] for m in members), max(m['end'] for m in members)
+            good.append(scope | dict(members=members, start=start, end=end, literal=interaction.utterance[start:end]))
+        else:
+            good.extend(kept)
+    if not missing:
+        raise IntentError('invalid_prerequisite')
+    clean = dict(value, kind='execute_plan', arguments=good)
+    clean.pop('argument', None)
+    safe = parse_decision(json.dumps(dict(turn_schema_version=1, decision=clean)))
+    from .structured_parameters import merge_decision
+    safe = merge_decision(safe, interaction, registry)
+    if not isinstance(safe, Execute):
+        raise IntentError('invalid_prerequisite')
     admitted = admit(sessions, interaction, safe, inputs, epizoo_resources=resources)
-    tool = rejected[0][0]
-    missing = sorted(name for _, name in rejected)
-    # A rejected declaration must not quietly fall back to a received/default value.
-    if any(_parameter_input(registry, tool, name)[0] in admitted['inputs'] for name in missing):
-        raise IntentError('conflicting_scientific_parameter')
-    admitted['parameter_rejection'] = raw
-    pending = dict(origin_turn_id=interaction.turn_id, binding_turn_id=interaction.turn_id,
-        field='parameters', tool=tool, missing=missing,
-        resource_context_sha256=resource_context_digest(resources))
-    return admitted, pending
+    # The original objective and all valid context survive; rejected model values
+    # are not offered as human choices and never enter execution inputs.
+    return request_parameters(sessions, interaction, admitted,
+                              [*safe.missing_parameters, *missing], resources)
 
 
 def _missing_parameter_inputs(registry, tool_name, names, values):
@@ -803,14 +858,13 @@ def _missing_parameter_inputs(registry, tool_name, names, values):
     return [name for name in names if _parameter_input(registry, tool_name, name)[0] not in effective]
 
 
-def _requested_parameters(registry, admitted, names, *, historical=False):
-    """Validate a semantic question's scalar scope, not scientific readiness."""
+def _read_requested_parameters(registry, admitted, names):
+    """Read the original unqualified parameter-question contract."""
     if (not isinstance(names, (list, tuple)) or not 1 <= len(names) <= 8
             or any(not isinstance(name, str) for name in names)
             or len(set(names)) != len(names)):
         raise IntentError('invalid_prerequisite')
-    missing = ([name for name in names if _parameter_input(registry, admitted['tool'], name)[0] not in admitted['inputs']]
-               if historical else _missing_parameter_inputs(registry, admitted['tool'], names, admitted['inputs']))
+    missing = [name for name in names if _parameter_input(registry, admitted['tool'], name)[0] not in admitted['inputs']]
     if len(missing) != len(names):
         raise IntentError('conflicting_scientific_parameter')
     return sorted(names)
@@ -818,8 +872,18 @@ def _requested_parameters(registry, admitted, names, *, historical=False):
 
 def request_parameters(sessions, interaction, admitted, names, resources):
     """Use the existing parameter continuation before any planning reservation."""
-    missing = _requested_parameters(sessions._application.registry, admitted, names)
-    admitted = dict(admitted, parameter_request=missing)
+    from .structured_parameters import parameter_slots, missing_slots
+    registry = sessions._application.registry
+    for name in names:
+        if isinstance(name, dict) and name.get('evidence') is not None:
+            evidence = name['evidence']
+            if not isinstance(evidence, str) or not evidence or interaction.utterance.count(evidence) != 1:
+                raise IntentError('ungrounded_operand')
+    slots = parameter_slots(registry, admitted['tool'], names)
+    missing = missing_slots(registry, slots, admitted['inputs'])
+    if len(missing) != len(slots):
+        raise IntentError('conflicting_scientific_parameter')
+    admitted = dict(admitted, parameter_slots=slots)
     pending = dict(origin_turn_id=interaction.turn_id, binding_turn_id=interaction.turn_id,
         field='parameters', tool=admitted['tool'], missing=missing,
         resource_context_sha256=resource_context_digest(resources))
@@ -841,15 +905,24 @@ def _validate_parameter_prerequisite(interaction, preceding):
                 raise ValueError('No originating execution.')
             values = admitted['inputs']
             tool = registry.get(pending['tool'])
+            if 'parameter_slots' in admitted:
+                from .structured_parameters import parameter_slots, missing_slots
+                slots = _serialize(admitted['parameter_slots'])
+                if (parameter_slots(registry, admitted['tool'], slots.values()) != slots
+                        or missing_slots(registry, slots, values) != list(pending['missing'])
+                        or _replay_initial_inputs(registry, interaction,
+                            _scientific_arguments(_serialize(admitted.get('arguments', [])))) != _serialize(values)):
+                    raise ValueError('Captured parameter scope changed.')
+                return
             if 'parameter_request' in admitted:
                 if (admitted['tool'] != tool.name
-                        or _requested_parameters(registry, admitted, admitted['parameter_request'], historical=True) != list(pending['missing'])
+                        or _read_requested_parameters(registry, admitted, admitted['parameter_request']) != list(pending['missing'])
                         or _replay_initial_inputs(registry, interaction,
                             _scientific_arguments(_serialize(admitted.get('arguments', [])))) != _serialize(values)):
                     raise ValueError('Requested parameter scope changed.')
                 return
             if 'parameter_rejection' in admitted:
-                safe, rejected = _repair_declarations(admitted['parameter_rejection'], interaction.utterance, registry,
+                safe, rejected = _read_legacy_rejection(admitted['parameter_rejection'], interaction.utterance, registry,
                     historical_missing={(pending['tool'], name) for name in pending['missing']})
                 if (safe.target != admitted['tool'] or any(t != tool.name for t, _ in rejected)
                         or sorted(n for _, n in rejected) != list(pending['missing'])
@@ -883,7 +956,11 @@ def _validate_parameter_prerequisite(interaction, preceding):
                 or admitted.get('revision_id', interaction.base_revision_id) != interaction.base_revision_id):
             raise ValueError('Parameter continuation changed scope.')
         declarations = _scientific_arguments(_serialize(admitted.get('arguments', ())))
-        if any(d.tool != reference['tool'] for d in declarations):
+        slots = origin.admitted.get('parameter_slots')
+        if slots:
+            from .structured_parameters import validate_slot_answers
+            validate_slot_answers(slots, declarations)
+        elif any(d.tool != reference['tool'] for d in declarations):
             raise ValueError('Parameter changed operation.')
         expected = _bind_arguments(registry, interaction.utterance, original, declarations, replace_existing=True,
             field_choices=_argument_fields(registry, replace(interaction, admitted=origin.admitted), declarations=declarations))
@@ -896,13 +973,15 @@ def _validate_parameter_prerequisite(interaction, preceding):
             raise ValueError('Parameter continuation changed registered source.')
         if admitted.get('roles', ()) != (origin.admitted or {}).get('roles', ()):
             raise ValueError('Parameter continuation changed scientific input roles.')
-        missing = _missing_parameter_inputs(registry, reference['tool'], origin.prerequisite['missing'], expected)
+        from .structured_parameters import missing_slots
+        missing = (missing_slots(registry, slots, expected) if slots else
+                   _missing_parameter_inputs(registry, reference['tool'], origin.prerequisite['missing'], expected))
         if admitted.get('kind') == 'clarify':
             # Saved partial questions predate function-qualified prerequisite
             # projection. Preserve that exact nonexecution history; it grants
             # no execution authority and new continuations use the shared scope.
-            legacy_missing = [name for name in origin.prerequisite['missing']
-                              if _parameter_input(registry, reference['tool'], name)[0] not in expected]
+            legacy_missing = ([] if slots else [name for name in origin.prerequisite['missing']
+                              if _parameter_input(registry, reference['tool'], name)[0] not in expected])
             if list(admitted['choices']) == legacy_missing:
                 missing = legacy_missing
             wanted = {k: _serialize(v) for k, v in reference.items() if k != 'predecessor_turn_id'}
@@ -927,11 +1006,15 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
     origin, source, values = _parameter_source(reference, state.interactions[:-1])
     if origin.admitted['request_id'] != 'turn-' + digest(dict(session=state.session_id, turn=origin.turn_id)):
         raise IntentError('invalid_prerequisite')
-    if any(d.tool != reference['tool'] for d in decision.arguments):
+    slots = origin.admitted.get('parameter_slots')
+    if slots:
+        from .structured_parameters import validate_slot_answers
+        validate_slot_answers(slots, decision.arguments)
+    elif any(d.tool != reference['tool'] for d in decision.arguments):
         raise IntentError('ambiguous_parameter')
     if resource_context_digest(resources) != reference['resource_context_sha256']:
         raise IntentError('invalid_prerequisite')
-    if not {'parameter_rejection', 'parameter_request'}.intersection(origin.admitted):
+    if not {'parameter_rejection', 'parameter_request', 'parameter_slots'}.intersection(origin.admitted):
         stored = sessions._application.run_store.load(origin.admitted['request_id'] + ':run')
         original_error = next((e for e in stored.errors
             if _missing_parameters(e, origin.admitted, sessions._application.registry, historical=True) ==
@@ -977,7 +1060,9 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
             raise IntentError('invalid_prerequisite')
         LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry).validate_submission(
             execution_submission(origin))
-    missing = _missing_parameter_inputs(sessions._application.registry, reference['tool'], origin.prerequisite['missing'], values)
+    from .structured_parameters import missing_slots
+    missing = (missing_slots(sessions._application.registry, slots, values) if slots else
+        _missing_parameter_inputs(sessions._application.registry, reference['tool'], origin.prerequisite['missing'], values))
     continuation = dict(origin_turn_id=origin.turn_id, binding_turn_id=source.turn_id, field='parameters')
     admitted = dict(kind='execute', operation='plan', tool=origin.admitted['tool'],
         revision_id=interaction.base_revision_id,
@@ -1029,7 +1114,10 @@ def _parameter_identities(admitted, interactions):
         continuation = record.get('parameter_continuation', record.get('continuation'))
         if continuation is not None and continuation.get('field') == 'parameters':
             origin = by_id[continuation['origin_turn_id']]
-            identities.update((origin.prerequisite['tool'], name) for name in origin.prerequisite['missing'])
+            if origin.admitted.get('parameter_slots'):
+                identities.update((row['tool'], row['argument']) for row in origin.admitted['parameter_slots'].values())
+            else:
+                identities.update((origin.prerequisite['tool'], name) for name in origin.prerequisite['missing'])
         declarations = list(record.get('arguments', ()))
         if 'argument' in record:
             declarations.append(record['argument'])
@@ -1051,12 +1139,12 @@ def _check_parameter_plan(registry, plan, admitted, interactions):
         return {(r['step_id'], r['argument']) for r in admitted['arguments']}
     identities = _parameter_identities(admitted, interactions)
     records = _parameter_records(admitted, interactions)
-    from .structured_parameters import explicit_records
-    explicit = explicit_records(admitted, interactions)
+    from .structured_parameters import bound_records
+    explicit = bound_records(admitted, interactions, registry)
     def overridden(row):
         return any(all(row.get(k) == setting.get(k) for k in ('tool', 'argument', 'native_function', 'port', 'source'))
                    for setting in explicit)
-    records = [dict(record, arguments=[d for d in record.get('arguments', ())
+    records = [dict(record, arguments=[d for d in (*record.get('arguments', ()), *record.get('retained_parameters', ()))
                                       if d.get('origin') != 'structured' and not overridden(d)])
                for record in records]
     remaining = {(d['tool'], d['argument']) for record in records for d in record.get('arguments', ())}
@@ -1095,6 +1183,9 @@ def _check_parameter_plan(registry, plan, admitted, interactions):
                     port, _, _ = _group_port(registry, tool_name, declaration['port'])
                     matches = [s for s in matches if plan_source_path(s.arguments.get(port.members[0].field_name), plan.steps) == members[index]['source_path']]
                 key = input_name(tool_name, fn, argument_name)
+                if argument_name == 'function_name' and matches:
+                    authorized.update((s.step_id, argument_name) for s in matches)
+                    continue
                 if len(matches) != 1 or (matches[0].step_id, argument_name) in authorized:
                     raise IntentError('ambiguous_parameter')
                 if matches[0].arguments.get(argument_name) != admitted['inputs'][key]:
@@ -1726,15 +1817,6 @@ def admit_species(sessions, interaction, decision, resources):
     declarations['species'] = decision.species
     original_pins = declarations.get('expected_resource_identity')
     current_inputs = current.get('execution_inputs', {})
-    resolution_name, resolution_spec = _resolution_input(sessions._application.registry)
-    if resolution_name in current_inputs:
-        try:
-            resolution_spec.validate(resolution_name, current_inputs[resolution_name])
-        except (ValueError, TypeError) as exc:
-            raise IntentError('invalid_parameter_value') from exc
-        if resolution_name in declarations and declarations[resolution_name] != current_inputs[resolution_name]:
-            raise IntentError('conflicting_scientific_parameter')
-        declarations[resolution_name] = current_inputs[resolution_name]
     if decision.arguments:
         _bind_arguments(sessions._application.registry, interaction.utterance, current_inputs, decision.arguments)
         declarations = _bind_arguments(sessions._application.registry, interaction.utterance,
@@ -1828,12 +1910,12 @@ def planning_task(interaction, state, registry=None):
             qualified_groupings=_serialize(evidence['qualified_groupings']),
             grouping_columns=_serialize(evidence['grouping_columns']),
             selected_count_slot=current.get('annotation_arguments', {}).get('count_slot', 'X'))
-    from .structured_parameters import explicit_records
-    settings = explicit_records(interaction.admitted or {}, state.interactions)
+    from .structured_parameters import bound_records
+    if registry is None:
+        from agent.orchestration.registry import build_default_tool_registry
+        registry = build_default_tool_registry()
+    settings = bound_records(interaction.admitted or {}, state.interactions, registry, current_utterance=interaction.utterance)
     if settings:
-        if registry is None:
-            from agent.orchestration.registry import build_default_tool_registry
-            registry = build_default_tool_registry()
         from .structured_parameters import input_key, effective_value
         task['parameter_overrides'] = [dict(row, input_name=input_key(registry, row),
             value=effective_value(row, settings, current['inputs'], registry)) for row in settings]
@@ -1871,10 +1953,10 @@ def planning_task(interaction, state, registry=None):
             if task['comparison'][side] != 'new':
                 task['comparison'][side] = rebind(task['comparison'][side])
     if 'retained_parameters' in task:
-        changed = {(d['tool'], d['argument']) for record in _parameter_records(interaction.admitted, state.interactions)
+        changed = {(d['tool'], d['argument'], d.get('native_function')) for record in _parameter_records(interaction.admitted, state.interactions)
                    if record != origin.admitted for d in record.get('arguments', ())}
         task['retained_parameters'] = [dict(row, result=rebind(row['result']))
-            for row in task['retained_parameters'] if (row['tool'], row['argument']) not in changed]
+            for row in task['retained_parameters'] if (row['tool'], row['argument'], row.get('native_function')) not in changed]
     return task
 
 
@@ -2003,8 +2085,8 @@ def prepare_native_task(sessions, interaction, admitted):
     prepared,_ = app._prepare_request(request)
     question = None
     bindings = []
-    from .structured_parameters import explicit_records, bind_plan as bind_parameters, ScopeRequired
-    explicit = explicit_records(admitted, state.interactions)
+    from .structured_parameters import bound_records, bind_plan as bind_parameters, ScopeRequired
+    explicit = bound_records(admitted, state.interactions, app.registry, current_utterance=interaction.utterance)
     parameter_scope = None
     def bind_native(plan):
         nonlocal question, parameter_scope
@@ -2079,11 +2161,9 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
     app = sessions._application
     sid = sessions._interaction_session_id
     selected = 'selected_candidate' in admitted
-    intent, context = interaction.utterance, None
-    if 'continuation' in admitted:
-        state = sessions.load(sid)
-        origin = next(i for i in state.interactions if i.turn_id == admitted['continuation']['origin_turn_id'])
-        intent = _execution_objective(origin, state.interactions)
+    state = sessions.load(sid)
+    intent = _execution_objective(replace(interaction, admitted=admitted), state.interactions)
+    context = None
     interaction = replace(interaction, admitted=admitted, submission=execution_submission(
         replace(interaction, admitted=admitted)))
     if 'result_edit' in admitted:

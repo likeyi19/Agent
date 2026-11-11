@@ -112,13 +112,19 @@ def result_descriptions(sessions, state, captured):
                 value, origin = _serialize(nested[name]), 'owner_effective_value'
             else:
                 continue
+            if name == 'kwargs' and spec.native_functions is not None:
+                from .structured_parameters import recorded_native_kwargs
+                value = recorded_native_kwargs(step)
+                origin = 'owner_effective_value'
             argument = spec.required_arguments.get(name, spec.optional_arguments.get(name))
             try:
                 argument.validate(name, value)
             except (ValueError, TypeError):
                 continue
             if not _unsafe_fact_value(value):
-                values.append(dict(argument=name, value=value, origin=origin))
+                scope = ({'native_function': step.resolved_arguments['function_name']}
+                         if spec.native_functions is not None and step.resolved_arguments.get('function_name') else {})
+                values.append(dict(argument=name, value=value, origin=origin, **scope))
         run = sessions._application.run_store.load(locator.run_id)
         planned = next(s for s in run.plan.steps if s.step_id == locator.step_id)
         dependencies = {(locator.run_id, ref.step_id) for ref in planned.arguments.values()

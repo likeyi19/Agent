@@ -114,14 +114,41 @@ class RepresentationError(TypeError):
     pass
 
 
-def preserve(value, root, name):
-    """Full lossless supported representation; previews are separately bounded."""
+def matplotlib_figure(value):
+    if 'matplotlib' not in sys.modules:
+        return None
+    from matplotlib.figure import Figure
+    from matplotlib.axes import Axes
+    return value if isinstance(value, Figure) else value.figure if isinstance(value, Axes) else None
+
+
+def open_figures():
+    # Inspect only genuine pyplot-managed figures in this isolated invocation.
+    # A closed/unregistered figure cannot be recovered from a None return.
+    helpers = sys.modules.get('matplotlib._pylab_helpers')
+    return [] if helpers is None else [m.canvas.figure for m in helpers.Gcf.get_all_fig_managers()]
+
+
+def table_preview(value):
+    frame = value.ndim == 2
+    small = value.iloc[:8, :8] if frame else value.head(8)
+    clip = lambda x: x[:500] if isinstance(x, str) else x
+    small = small.applymap(clip) if frame else small.map(clip)
+    small.index = small.index.map(clip)
+    if frame: small.columns = small.columns.map(clip)
+    return small.to_json(orient='split')
+
+
+def preserve(value, root, name, figures=None):
+    """Full typed data or qualified visual artifacts; previews are bounded."""
     import numpy as np
     from scipy import sparse
     import pandas as pd
     import anndata as ad
     typename = type(value).__module__ + '.' + type(value).__qualname__
     result = dict(type=typename)
+    if figures is None:
+        figures = {}
     if value is None or type(value) in (str, bool, int, float):
         if type(value) is float and not math.isfinite(value):
             result.update(encoding='float', value=repr(value))
@@ -138,7 +165,8 @@ def preserve(value, root, name):
     elif sparse.issparse(value):
         path = root / (name + '.npz')
         sparse.save_npz(path, value)
-        result.update(encoding='sparse', file=path.name, shape=list(value.shape), dtype=str(value.dtype), format=value.format)
+        result.update(encoding='sparse', file=path.name, shape=list(value.shape), dtype=str(value.dtype), format=value.format,
+            preview=repr((value if value.format in ('csr', 'csc') else value.tocsr())[:8, :8].toarray().tolist()))
     elif isinstance(value, np.ndarray):
         if value.dtype.hasobject:
             raise RepresentationError(f'{typename} with object dtype has no safe lossless array representation')
@@ -169,18 +197,35 @@ def preserve(value, root, name):
             else: pd.testing.assert_frame_equal(value, restored)
         except AssertionError as exc:
             raise RepresentationError('The native table has no lossless supported encoding: ' + str(exc)) from exc
+        result['preview'] = table_preview(value)
     elif typename == 'polars.dataframe.frame.DataFrame':
         path = root / (name + '.arrow')
         value.write_ipc(path)
         result.update(encoding='polars', file=path.name, shape=list(value.shape))
+    elif (figure := matplotlib_figure(value)) is not None:
+        if figure not in figures:
+            images = {}
+            for extension in ('png', 'svg'):
+                path = root / (name + '.' + extension)
+                figure.savefig(path, format=extension)
+                images[extension] = path.name
+            figures[figure] = images
+        result.update(encoding='matplotlib', file=figures[figure]['png'], images=figures[figure],
+            representation='rendered_figure', restorable=False,
+            limitation='Rendered images preserve the visual output, not a restorable Python Figure or Axes.')
     elif type(value) in (tuple, list):
         result.update(encoding='tuple' if type(value) is tuple else 'list',
-            items=[preserve(v, root, name + '-' + str(i)) for i, v in enumerate(value)])
+            items=[preserve(v, root, name + '-' + str(i), figures) for i, v in enumerate(value)])
     elif type(value) is dict:
-        result.update(encoding='dict', items=[dict(key=preserve(k, root, name + '-key-' + str(i)),
-            value=preserve(v, root, name + '-value-' + str(i))) for i, (k, v) in enumerate(value.items())])
+        result.update(encoding='dict', items=[dict(key=preserve(k, root, name + '-key-' + str(i), figures),
+            value=preserve(v, root, name + '-value-' + str(i), figures)) for i, (k, v) in enumerate(value.items())])
     else:
         raise RepresentationError(f'Native execution returned {typename}; a faithful result adapter is unavailable')
+    if 'items' in result:
+        members = ([v for entry in result['items'] for v in (entry['key'], entry['value'])]
+            if result['encoding'] == 'dict' else result['items'])
+        if any(v.get('restorable') is False for v in members):
+            result['restorable'] = False
     return result
 
 
@@ -190,6 +235,8 @@ def restore(descriptor, root):
     import pandas as pd
     import anndata as ad
     encoding = descriptor['encoding']
+    if descriptor.get('restorable') is False:
+        raise RepresentationError('The selected visual representation cannot restore the original native object: ' + descriptor['type'])
     path = root / descriptor['file'] if 'file' in descriptor else None
     if encoding == 'json': return descriptor['value']
     if encoding == 'float': return float(descriptor['value'])
@@ -309,21 +356,20 @@ def preview(descriptor, root, depth=0):
         if depth < 4:
             result['items'] = [dict(key=preview(v['key'], root, depth+1), value=preview(v['value'], root, depth+1))
                 if descriptor['encoding'] == 'dict' else preview(v, root, depth+1) for v in descriptor['items'][:12]]
-    elif descriptor['encoding'] in ('numpy', 'dataframe', 'series', 'polars'):
-        value = restore(descriptor, root)
-        if descriptor['encoding'] in ('dataframe', 'series'):
-            small = value.iloc[:8, :8] if descriptor['encoding'] == 'dataframe' else value.head(8)
-            clip = lambda x: x[:500] if isinstance(x, str) else x
-            small = small.applymap(clip) if descriptor['encoding'] == 'dataframe' else small.map(clip)
-            small.index = small.index.map(clip)
-            if descriptor['encoding'] == 'dataframe': small.columns = small.columns.map(clip)
-            result['preview'] = small.to_json(orient='split')
+    elif descriptor['encoding'] in ('numpy', 'polars'):
+        if descriptor['encoding'] == 'numpy':
+            import numpy as np
+            value = np.load(root / descriptor['file'], allow_pickle=False, mmap_mode='r')
         elif descriptor['encoding'] == 'polars':
+            import polars as pl
+            value = pl.read_ipc(root / descriptor['file'], n_rows=8,
+                columns=list(range(min(descriptor['shape'][1], 8))))
+        if descriptor['encoding'] == 'polars':
             result['preview'] = [{str(k)[:500]: v[:500] if isinstance(v, str) else v
                 for k, v in row.items()} for row in value.select(value.columns[:8]).head(8).to_dicts()]
         else:
             import numpy as np
-            values = np.asarray(value).reshape(-1)[:24].tolist()
+            values = np.asarray(value).flat[:24].tolist()
             result['preview'] = repr([v[:500] if isinstance(v, str) else v for v in values])
     if 'columns' in result:
         result['columns'] = [c[:500] for c in result['columns'][:8]]
@@ -365,6 +411,7 @@ def invoke(request):
     implementation = [] if source is None else [dict(path=str(Path(source).resolve()), sha256=sha(source), size_bytes=Path(source).stat().st_size)]
     before_files = {p: sha(p) for p in work.rglob('*') if p.is_file()}
     before = {key: fingerprint(value, root, 'before-' + key) for key, value in inputs.items()}
+    before_figures = set(open_figures())
     os.chdir(work)
     result = function(*bound.args, **bound.kwargs)
     receipt = dict(native_execution='succeeded', package=package, function=name,
@@ -374,8 +421,9 @@ def invoke(request):
     (root / 'execution.json').write_text(json.dumps(receipt))
     # Successful execution remains recorded even when representation fails.
     representation_errors = []
+    figures = {}
     try:
-        returned = preserve(result, output, 'return')
+        returned = preserve(result, output, 'return', figures)
     except Exception as exc:
         returned = None
         representation_errors.append(str(exc))
@@ -383,10 +431,20 @@ def invoke(request):
     for key, value in inputs.items():
         try:
             if fingerprint(value, root, 'after-' + key) != before[key]:
-                mutations[key] = preserve(value, output, 'modified-' + key)
+                mutations[key] = preserve(value, output, 'modified-' + key, figures)
         except Exception as exc:
             representation_errors.append(key + ': ' + str(exc))
     produced = []
+    for figure in open_figures():
+        if figure in before_figures or figure in figures:
+            continue
+        try:
+            captured = preserve(figure, output, 'figure-' + str(len(figures)), figures)
+            for extension, file in captured['images'].items():
+                produced.append(dict(name='Captured Matplotlib figure ' + str(len(figures)) + '.' + extension,
+                    file=file, representation='rendered_figure', restorable=False))
+        except Exception as exc:
+            representation_errors.append('Generated figure: ' + str(exc))
     for path in sorted(work.rglob('*')):
         if path.is_symlink(): raise RepresentationError('Native-produced symbolic links are not portable scientific outputs')
         if path.is_file() and before_files.get(path) != sha(path):

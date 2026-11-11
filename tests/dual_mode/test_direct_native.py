@@ -179,3 +179,154 @@ def test_long_table_cells_are_bounded_only_in_preview(tmp_path):
     saved = worker.preserve(value, tmp_path, 'long-table')
     assert len(worker.preview(saved, tmp_path)['preview']) < 1000
     pd.testing.assert_frame_equal(worker.restore(saved, tmp_path), value)
+
+
+def test_figure_axes_nested_identity_and_actual_rendering(tmp_path):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    figure, axes = plt.subplots()
+    try:
+        axes.plot([1, 3, 2], label='Native trace')
+        axes.set_title('Actual native figure')
+        reference = tmp_path / 'reference.png'
+        figure.savefig(reference)
+        value = {'figure': figure, 'nested': [axes, (figure, 7)]}
+        saved = worker.preserve(value, tmp_path, 'result')
+        members = saved['items']
+        descriptors = [members[0]['value'], members[1]['value']['items'][0],
+            members[1]['value']['items'][1]['items'][0]]
+        assert [d['type'] for d in descriptors] == [
+            'matplotlib.figure.Figure', type(axes).__module__ + '.' + type(axes).__qualname__, 'matplotlib.figure.Figure']
+        assert len({d['file'] for d in descriptors}) == 1
+        assert all(d['restorable'] is False for d in descriptors)
+        assert (tmp_path / descriptors[0]['file']).read_bytes() == reference.read_bytes()
+        assert '<svg' in (tmp_path / descriptors[0]['images']['svg']).read_text()
+        assert len(list(tmp_path.glob('result*.png'))) == 1
+        assert len(list(tmp_path.glob('result*.svg'))) == 1
+        assert worker.preview(saved, tmp_path)['items'][0]['value']['file'] == descriptors[0]['file']
+        with pytest.raises(worker.RepresentationError, match='cannot restore'):
+            worker.restore(saved, tmp_path)
+    finally:
+        plt.close(figure)
+
+
+def test_none_plot_captures_only_new_open_figures(tmp_path, monkeypatch):
+    import matplotlib.pyplot as plt
+    import os
+    existing = plt.figure()
+    def plot():
+        figure, ax = plt.subplots()
+        ax.plot([2, 5, 1])
+        # Native None stays None; no forced show/save/return argument.
+    install(monkeypatch, plot)
+    before = Path.cwd()
+    try:
+        worker.invoke(dict(package='scanpy', function='function', inputs={}, parameters={}, outputs={}, stage=str(tmp_path)))
+    finally:
+        os.chdir(before)
+        for figure in worker.open_figures():
+            if figure is not existing: plt.close(figure)
+        plt.close(existing)
+    data = json.loads((tmp_path / 'result.json').read_text())
+    assert data['return_value'] == dict(type='builtins.NoneType', encoding='json', value=None)
+    assert data['modified_inputs'] == {}
+    assert len(data['produced_files']) == 2
+    assert {Path(f['file']).suffix for f in data['produced_files']} == {'.png', '.svg'}
+    assert all(f['representation'] == 'rendered_figure' for f in data['produced_files'])
+
+
+def test_closed_unreturned_figure_is_not_fabricated(tmp_path, monkeypatch):
+    import matplotlib.pyplot as plt
+    import os
+    def plot():
+        figure, ax = plt.subplots()
+        ax.plot([1, 3])
+        plt.close(figure)
+    install(monkeypatch, plot)
+    before = Path.cwd()
+    try:
+        worker.invoke(dict(package='scanpy', function='function', inputs={}, parameters={}, outputs={}, stage=str(tmp_path)))
+    finally:
+        os.chdir(before)
+    data = json.loads((tmp_path/'result.json').read_text())
+    assert data['return_value']['value'] is None and data['produced_files'] == []
+
+
+def test_rendered_objects_not_offered_for_reuse_but_data_members_are(app, monkeypatch):
+    import matplotlib.pyplot as plt
+    figure, ax = plt.subplots()
+    ax.plot([1, 2])
+    try:
+        install(monkeypatch, lambda: [figure, np.arange(3)])
+        row = call(app, 'visual')
+        assert row['status'] == 'succeeded', row
+        assert [v['key'] for v in row['outputs']] == ['return/1']
+        install(monkeypatch, lambda data: data)
+        payload = dict(call_id='invalid-reuse', expected_generation=1, package='scanpy', function='function',
+            inputs={'data': dict(adapter='accepted', revision_id=row['revision_id'], output='return/0')})
+        with pytest.raises(ValueError, match='cannot restore'):
+            bind(app, 'native', payload)
+        assert len(app._application.sessions.load('native').turns) == 1
+        # Images and ZIP go through the ordinary byte-checked delivery owner.
+        import zipfile
+        import io
+        downloaded = {}
+        for handle in app.scientific_artifact_handles('native', row['revision_id']):
+            snapshot = app.prepare_scientific_artifact('native', row['revision_id'], handle.handle)
+            try: downloaded[handle.filename] = b''.join(snapshot.iter_chunks())
+            finally: snapshot.close()
+        png = next(k for k in downloaded if k.endswith('.png'))
+        assert downloaded[png].startswith(b'\x89PNG\r\n\x1a\n')
+        with zipfile.ZipFile(io.BytesIO(downloaded['outputs.zip'])) as archive:
+            assert archive.read('objects/' + png) == downloaded[png]
+        install(monkeypatch, lambda: pytest.fail('Reopening replayed science'))
+        assert history(app, 'native')['calls'][-1] == row
+    finally:
+        plt.close(figure)
+
+
+def test_rds_is_not_bound_to_a_python_runtime(app, monkeypatch):
+    import agent.application.native_functions as native
+    install(monkeypatch, lambda data: data)
+    monkeypatch.setattr(native, '_accepted', lambda *a: (None, {}))
+    monkeypatch.setattr(native, '_descriptors', lambda manifest: {'return': dict(type='R.GRanges', encoding='r', restorable=True)})
+    payload = dict(call_id='r-to-python', expected_generation=0, package='scanpy', function='function',
+        inputs={'data': dict(adapter='accepted', revision_id='selected', output='return')})
+    with pytest.raises(ValueError, match='requires an installed R runtime'):
+        bind(app, 'native', payload)
+    assert not app._application.sessions.load('native').turns
+
+
+def test_mixed_scientific_members_keep_values_and_native_types(tmp_path):
+    from scipy import sparse
+    value = [np.int32(4), sparse.csc_matrix([[0., 3.], [1., 0.]]),
+        ad.AnnData(np.array([[1., 2.]])),
+        {'x': (False, None, pd.Series([3, 4], name='series'))}]
+    saved = worker.preserve(value, tmp_path, 'mixed')
+    restored = worker.restore(saved, tmp_path)
+    assert type(restored[0]) is np.int32
+    assert sparse.isspmatrix_csc(restored[1])
+    np.testing.assert_array_equal(restored[1].toarray(), value[1].toarray())
+    np.testing.assert_array_equal(restored[2].X, value[2].X)
+    pd.testing.assert_series_equal(restored[3]['x'][2], value[3]['x'][2])
+    preview = worker.preview(saved, tmp_path)
+    assert preview['items'][1]['shape'] == [2, 2]
+    assert '3.0' in preview['items'][1]['preview']
+
+
+def test_polars_ipc_retains_native_values(tmp_path):
+    pl = pytest.importorskip('polars')
+    value = pl.DataFrame({'a': [1, 2], 'text': ['native', None]})
+    saved = worker.preserve(value, tmp_path, 'polars')
+    assert worker.restore(saved, tmp_path).equals(value)
+    assert worker.preview(saved, tmp_path)['preview'] == value.to_dicts()
+
+
+def test_fortran_array_preview_keeps_native_order_and_full_data(tmp_path):
+    value = np.asfortranarray(np.arange(120).reshape(12, 10))
+    saved = worker.preserve(value, tmp_path, 'fortran')
+    assert worker.preview(saved, tmp_path)['preview'] == repr(list(range(24)))
+    restored = worker.restore(saved, tmp_path)
+    assert restored.flags.f_contiguous
+    np.testing.assert_array_equal(restored, value)

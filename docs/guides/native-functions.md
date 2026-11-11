@@ -50,9 +50,14 @@ genome, normalization or coordinate system. Original files remain unchanged.
 
 R accepts sparse matrices (including explicitly oriented H5AD matrices), native
 CSV/TSV data frames, vectors and supported accepted R objects. Native R returns
-use RDS for supported atomic, tabular, sparse and simple list data. Arbitrary
-uploaded RDS/Pickle objects are not accepted. Complex unsupported native objects
-produce an explicit representation failure after native completion is recorded.
+use RDS for atomic, tabular, sparse, nested and suitable S3/S4 objects, retaining
+their classes, dimensions and bounded structural metadata. Preservation checks
+`saveRDS()` / `readRDS()` equality in the selected installed runtime. Objects with
+live resources (including external pointers, connections, environments or
+functions) are refused explicitly, including resources nested in slots or
+attributes. A checked round trip does not establish cross-system portability or
+independence from external files. Arbitrary uploaded RDS/Pickle objects remain
+unsupported. Representation failures retain the successful native completion.
 
 Python direct returns preserve scalar values, strings, booleans, null, ordered
 lists/tuples, dictionary keys/order, NumPy arrays/scalars, sparse matrices, pandas
@@ -62,11 +67,31 @@ objects fail representation honestly. In-place changes are detected from actual
 object state and saved separately from returns. Native filtering may change axes.
 A successful null return with no mutation or file output is a valid no-data result.
 
+Matplotlib Figures and Axes, including members of ordinary lists, tuples and
+dictionaries, retain their actual native types and export their actual parent
+Figure as PNG and SVG. References to the same Figure share one export. These
+are **visual representations**, not restorable Python Figure/Axes objects; neither
+they nor enclosing collections containing them are offered as native object
+inputs. Independently restorable collection members remain selectable.
+
+New pyplot-managed figures still open after a native call are also captured,
+including calls returning `None`. Those visual artifacts appear under produced
+files while the actual return remains `None`. Agent never re-plots data or changes
+native `show`, `save`, `copy` or `inplace` arguments. A figure closed by the native
+function without returning it or saving a file cannot be recovered. R graphics
+devices opened by the call are closed after native completion to finish their
+actual files (for example, the runtime's default `Rplots.pdf`); no new plot or
+display device is introduced.
+
 Actual generated files are preserved in the managed invocation context. Downloads
 include individual native data files and a complete output archive. Existing
 accepted-file identities and transfer budgets apply. Saved scientific output is
 not truncated to fit a browser table, and no scientific result is manufactured
 for presentation. Image previews use actual generated image files.
+Returned figure previews appear with their typed values; produced files have a
+single download listing, and other serialized data and the complete ZIP appear
+under Downloads. PNG/JPEG/WebP previews use the same verified artifact endpoint.
+SVG and PDF remain downloadable files.
 
 Choose **Accepted result** on a later input to reuse an exact earlier output.
 The server resolves Session/Revision/step authority and pinned files, never a
@@ -99,4 +124,6 @@ and the form does not pass through research interpretation or planning.
 
 The implementation and bounded verification record is the
 [dual-mode report](../../../agent-data/acceptance/dual-mode-2026-11-10/REPORT.md).
+The focused [output-completion report](../../../agent-data/acceptance/native-functions-output-2026-11-11/REPORT.md)
+records genuine native examples, object restoration, delivery checks and limits.
 Scientific methods and earlier conditional acceptance conclusions are unchanged.

@@ -2770,7 +2770,7 @@ async function selectAgentMode(mode) {
     await nativeOpen();
     if (element('native-package').options.length === 1) {
       const catalog = await api('/native/packages');
-      for (const p of catalog.packages) element('native-package').append(nativeOption(p.name, p.name));
+      for (const p of catalog.packages) { const option = nativeOption(p.name, p.name); option.dataset.language = p.language; element('native-package').append(option); }
     }
   } catch (error) { nativeError(error); }
 }
@@ -2885,7 +2885,8 @@ function nativeRefreshSources() {
     row.source.replaceChildren(nativeOption('', 'Choose an uploaded file…'), ...nativeView.resources.map(r => nativeOption(r.resource_id, r.label)));
     row.source.value = previous;
     const selected = row.accepted.value;
-    const choices = (nativeView.session?.calls || []).flatMap((call, i) => (call.outputs || []).map(output => nativeOption(JSON.stringify({revision_id:call.revision_id, output:output.key}), `${i+1}. ${call.function} · ${output.key.startsWith('modified:') ? 'Modified ' + output.key.slice(9) : output.key === 'return' ? 'Return value' : output.key} · ${output.type.split('.').pop()}${output.shape ? ' ' + output.shape.join(' × ') : ''}`)));
+    const language = element('native-package').selectedOptions[0]?.dataset.language;
+    const choices = (nativeView.session?.calls || []).flatMap((call, i) => (call.outputs || []).filter(output => output.encoding !== 'r' || language === 'R').map(output => nativeOption(JSON.stringify({revision_id:call.revision_id, output:output.key}), `${i+1}. ${call.function} · ${output.key.startsWith('modified:') ? 'Modified ' + output.key.slice(9) : output.key === 'return' ? 'Return value' : output.key} · ${output.type.split('.').pop()}${output.shape ? ' ' + output.shape.join(' × ') : ''}`)));
     row.accepted.replaceChildren(nativeOption('', 'Choose an accepted output…'), ...choices); row.accepted.value = selected;
   }
 }
@@ -2949,26 +2950,51 @@ function nativeRenderResults() {
     if (call.native_error) section.append(nativeText('p', `Native execution: ${call.native_error.native_execution}. ${call.native_error.message}`, 'turn-error'));
     if (call.error) section.append(nativeText('p', call.error, 'turn-error'));
     if (!call.native_error) for (const message of new Set((call.errors || []).map(e => e.message || e.code))) section.append(nativeText('p', message, 'turn-error'));
+    const downloads = new Map((call.downloads || []).map(d => [d.filename, d]));
+    const shownImages = new Set(), shownFiles = new Set();
+    const image = (container, file) => {
+      if (shownImages.has(file) || !/\.(png|jpg|jpeg|webp)$/i.test(file) || !downloads.has(file)) return;
+      const img = document.createElement('img'); img.className = 'analysis-figure'; img.alt = 'Native graphical output'; img.loading = 'lazy';
+      img.src = nativeDownloadUrl(call, downloads.get(file)); container.append(img); shownImages.add(file);
+    };
     if (call.preview) {
       for (const [name, value] of [['Return value', call.preview.return_value], ...Object.entries(call.preview.modified_inputs).map(([k,v]) => ['Modified input: '+k,v])]) {
         section.append(nativeText('h4', name));
         if (value.encoding === 'json') section.append(nativeText('p', value.value === null ? 'None' : String(value.value)));
-        else nativeRenderValue(section, value);
+        else nativeRenderValue(section, value, image);
       }
-      if (call.preview.produced_files.length) section.append(nativeText('p', 'Produced files: ' + call.preview.produced_files.map(f=>f.name).join(', ')));
+      if (call.preview.produced_files.length) {
+        section.append(nativeText('h4', 'Produced files'));
+        for (const file of call.preview.produced_files) {
+          const download = downloads.get(file.file);
+          if (download && !shownFiles.has(file.file)) nativeRenderDownload(section, call, download, file.name);
+          shownFiles.add(file.file); image(section, file.file);
+        }
+      }
       if (call.preview.return_value.encoding === 'json' && call.preview.return_value.value === null && !Object.keys(call.preview.modified_inputs).length && !call.preview.produced_files.length) section.append(nativeText('p', 'Completed without a data result.'));
     }
-    for (const download of call.downloads || []) {
-      const link = nativeText('a', download.label); link.href = `/api/v1/sessions/${nativeView.session.session_id}/revisions/${call.revision_id}/scientific-artifacts/${download.handle}`; link.download = download.filename; const line = document.createElement('p'); line.append(link); section.append(line);
-      if (/\.(png|jpg|jpeg|webp)$/i.test(download.filename)) { const image = document.createElement('img'); image.className = 'analysis-figure'; image.alt = 'Native-produced image'; image.src = link.href; section.append(image); }
-    }
+    const remaining = (call.downloads || []).filter(d => !shownFiles.has(d.filename));
+    if (remaining.length) section.append(nativeText('h4', 'Downloads'));
+    for (const download of remaining) nativeRenderDownload(section, call, download, download.label);
     container.append(section);
   }
 }
 selectAgentMode(sessionStorage.getItem('agent.mode') || 'research');
 
-function nativeRenderValue(container, value) {
-  container.append(nativeText('p', `${value.type.split('.').pop()}${value.shape ? ' · ' + value.shape.join(' × ') : ''}`, 'muted small'));
+function nativeDownloadUrl(call, download) {
+  return `/api/v1/sessions/${nativeView.session.session_id}/revisions/${call.revision_id}/scientific-artifacts/${download.handle}`;
+}
+function nativeRenderDownload(container, call, download, label) {
+  const link = nativeText('a', label); link.href = nativeDownloadUrl(call, download); link.download = download.filename;
+  const line = document.createElement('p'); line.append(link); container.append(line);
+}
+function nativeRenderValue(container, value, image) {
+  container.append(nativeText('p', `${value.type}${value.shape ? ' · ' + value.shape.join(' × ') : ''}${value.dtype ? ' · ' + value.dtype : ''}`, 'muted small'));
+  if (value.encoding === 'matplotlib') { image(container, value.file); container.append(nativeText('p', value.limitation, 'muted small')); }
+  if (value.encoding === 'r') {
+    container.append(nativeText('p', `R type: ${value.r_type}; classes: ${(value.classes || []).join(', ')}${value.slots?.length ? '; slots: ' + value.slots.join(', ') : ''}`, 'muted small'));
+    if (value.names?.length) container.append(nativeText('p', 'Names: ' + value.names.join(', '), 'muted small'));
+  }
   if (['dataframe','series'].includes(value.encoding) && value.preview) {
     const data = JSON.parse(value.preview), table = document.createElement('table');
     const header = document.createElement('tr');
@@ -2977,7 +3003,7 @@ function nativeRenderValue(container, value) {
     data.data.forEach((values, i) => { const row = document.createElement('tr'); for (const item of [data.index[i], ...(Array.isArray(values) ? values : [values])]) row.append(nativeText('td', item === null ? 'null' : String(item))); table.append(row); });
     container.append(table);
   } else if (value.preview !== undefined) container.append(nativeText('pre', typeof value.preview === 'string' ? value.preview : JSON.stringify(value.preview, null, 2)));
-  if (value.items) { for (const [i, item] of value.items.entries()) { container.append(nativeText('h5', value.encoding === 'dict' ? String(item.key.value ?? i) : String(i))); nativeRenderValue(container, value.encoding === 'dict' ? item.value : item); } }
+  if (value.items) { for (const [i, item] of value.items.entries()) { container.append(nativeText('h5', value.encoding === 'dict' ? String(item.key.value ?? i) : String(i))); nativeRenderValue(container, value.encoding === 'dict' ? item.value : item, image); } }
   if (value.encoding === 'json') container.append(nativeText('p', value.value === null ? 'None' : String(value.value)));
   if (value.length !== undefined) container.append(nativeText('p', `${value.length} members; full values are saved.`, 'muted small'));
 }

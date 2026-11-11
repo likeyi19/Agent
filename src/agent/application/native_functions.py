@@ -94,6 +94,10 @@ def bind(app, session_id, payload):
             if set(entry) != {'adapter', 'revision_id', 'output'}: raise ValueError('Invalid accepted output selection')
             revision, manifest = _accepted(app, session_id, entry['revision_id'])
             descriptor = _descriptors(manifest)[entry['output']]
+            if descriptor.get('restorable') is False:
+                raise ValueError('Rendered images cannot restore the original native object; use its downloadable visual artifact')
+            if descriptor['encoding'] == 'r' and package not in owner.R_RUNTIMES:
+                raise ValueError('The selected RDS object requires an installed R runtime')
             if file_parameter(key) and descriptor['encoding'] != 'file':
                 raise ValueError(key + ' requires an accepted native-produced file')
             root = Path(manifest['arguments']['output_dir']) / 'objects'
@@ -167,7 +171,8 @@ def history(app, session_id):
             revision, manifest = _accepted(app, session_id, turn.revision_id)
             row['preview'] = manifest['result']['preview']
             row['outputs'] = [dict(key=k, type=v['type'], encoding=v['encoding'], shape=v.get('shape'))
-                for k, v in _descriptors(manifest).items() if not (v['encoding'] == 'json' and v['value'] is None)]
+                for k, v in _descriptors(manifest).items() if v.get('restorable') is not False
+                and not (v['encoding'] == 'json' and v['value'] is None)]
             from .native_delivery import accepted_artifacts
             row['downloads'] = [a.reference.to_dict() for a in accepted_artifacts(app, session_id, revision, turn, revision.outputs[0])]
         calls.append(row)

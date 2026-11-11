@@ -581,8 +581,7 @@ from .fragment_features import REPORT_FIELDS as _FRAGMENT_FEATURE_REPORT_FIELDS
 
 _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
     'inspect_scATAC_fragments': _FRAGMENT_INSPECTION_FIELDS,
-    'pca_embed_cells': ('n_cells','n_features','embedding_dim','embedding_dtype','method','representation',
-                       'parameters','software_versions','finite','cell_order_preserved','backend'),
+
     "build_scATAC_cell_by_features": _FRAGMENT_FEATURE_REPORT_FIELDS,
     "adopt_scATAC_cell_by_features": _ADOPTED_MATRIX_REPORT_FIELDS,
     "adapt_epizoo_species": _ADAPTATION_REPORT_FIELDS,
@@ -640,37 +639,9 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
         "finite",
         "cell_order_preserved",
     ),
-    "build_cell_neighbors": (
-        "n_cells",
-        "embedding_dim",
-        "n_neighbors",
-        "metric",
-        "neighbors_method",
-        "transformer",
-        "random_seed",
-        "connectivities_nnz",
-        "distances_nnz",
-        "backend",
-    ),
-    "cluster_cells": (
-        "n_cells",
-        "n_clusters",
-        "cluster_key",
-        "algorithm",
-        "resolution",
-        "random_seed",
-        "backend",
-    ),
-    "compute_cell_umap": (
-        "n_cells",
-        "n_components",
-        "umap_key",
-        "coordinate_dtype",
-        "min_dist",
-        "spread",
-        "random_seed",
-        "backend",
-    ),
+
+
+
     "evaluate_cell_clustering": (
         "n_cells",
         "n_reference_classes",
@@ -794,7 +765,7 @@ _TOOL_TITLES: Mapping[str, str] = {
     "evaluate_regulatory_predictions": "Matched DNase prediction evaluation",
     "posttrain_epizoo_model": "EpiZooX post-training",
     'inspect_scATAC_fragments': 'Bounded fragment structure inspection',
-    'pca_embed_cells': 'Centered PCA representation',
+
     "compute_scATAC_qc": "Observed-barcode scATAC QC",
     "build_scATAC_cell_by_ccre": "Cell-by-cCRE matrix",
     "adopt_scATAC_cell_by_ccre": "External cell-by-cCRE adoption",
@@ -809,9 +780,9 @@ _TOOL_TITLES: Mapping[str, str] = {
     "inspect_raw_scATAC": "Raw scATAC Intake",
     "inspect_scATAC": "Dataset inspection",
     "epizoo_embed_cells": "EpiZoo representation",
-    "build_cell_neighbors": "Cell-neighbor graph",
-    "cluster_cells": "Leiden clustering",
-    "compute_cell_umap": "UMAP",
+
+
+
     "evaluate_cell_clustering": "Clustering evaluation",
     "transfer_cell_labels": "Cell-label transfer",
     "validate_scATAC_feature_space": "Regulatory feature space",
@@ -1046,7 +1017,6 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
     ("native_motif_matches", "Native sequence motif matches", frozenset({"run_motifmatchr"})),
     ("motif_accessibility", "Motif-associated accessibility", frozenset({"compute_motif_accessibility"})),
     ("regulatory_sequence", "Regulatory sequence analysis and design", frozenset({"predict_regulatory_sequences", "evaluate_regulatory_predictions", "optimize_regulatory_sequences", "generate_regulatory_sequences", "prepare_scatac_regulatory_sequences"})),
-    ('pca_representation', 'Centered PCA Representation', frozenset({'pca_embed_cells'})),
     ("fragment_features", "Fragment-derived regulatory-feature matrix", frozenset({"build_scATAC_cell_by_features"})),
     ("primary_cell_type_annotation", "Primary cell-type annotation", frozenset({"annotate_scATAC_cell_types"})),
     ("bam_fragments", "BAM Fragment Preparation", frozenset({"prepare_scATAC_bam_fragments"})),
@@ -1064,11 +1034,6 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
         "epizoo_representation",
         "EpiZoo Representation",
         frozenset({"epizoo_embed_cells"}),
-    ),
-    (
-        "clustering_umap",
-        "Clustering and UMAP",
-        frozenset({"build_cell_neighbors", "cluster_cells", "compute_cell_umap"}),
     ),
     (
         "clustering_evaluation",
@@ -1109,7 +1074,7 @@ _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
     "predict_regulatory_sequences": ("measurement", "folds", "model_release", "normalization"),
     "evaluate_regulatory_predictions": ("measurement", "limitations"),
     'inspect_scATAC_fragments': ('record_limit', 'reached_eof', 'index_status', 'limitations'),
-    'pca_embed_cells': ('method','representation','parameters','software_versions'),
+
     "annotate_scATAC_cell_types": ("annotation_profile", "context", "source_authority_sha256"),
     "adapt_epizoo_species": ("strategy", "profile_sha256", "source_model_identity_sha256", "seam_bundle_identity_sha256"),
     "posttrain_epizoo_model": ("strategy", "profile_sha256", "parent_model_manifest_sha256", "source_model_identity_sha256", "seam_bundle_identity_sha256"),
@@ -1125,15 +1090,9 @@ _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
     "inspect_raw_scATAC": ("input_kind", "intake_contract_version"),
     "inspect_scATAC": ("x_storage_type", "x_is_sparse", "x_dtype"),
     "epizoo_embed_cells": ("species", "backend", "checkpoint_path", "device"),
-    "build_cell_neighbors": (
-        "n_neighbors",
-        "metric",
-        "neighbors_method",
-        "transformer",
-        "random_seed",
-    ),
-    "cluster_cells": ("algorithm", "resolution", "random_seed"),
-    "compute_cell_umap": ("n_components", "min_dist", "spread", "random_seed"),
+
+
+
     "evaluate_cell_clustering": ("average_method", "metric_backend"),
     "transfer_cell_labels": (
         "n_neighbors",
@@ -1195,12 +1154,6 @@ def report_fact_fields(tool_name, raw_facts):
         fields = (*fields, 'result_files')
     if tool_name == 'run_motifmatchr' and 'n_positions' in raw_facts:
         fields = (*fields, 'n_positions')
-    if tool_name in ('build_cell_neighbors','cluster_cells','compute_cell_umap') and 'embedding_method' in raw_facts:
-        fields = (*fields, 'embedding_method', 'representation')
-        if 'embedding_parameters' in raw_facts:
-            fields = (*fields, 'embedding_parameters')
-    if tool_name == 'compute_cell_umap' and 'clustering_present' in raw_facts:
-        fields = (*fields, 'clustering_present')
     if tool_name in ('adapt_epizoo_species','posttrain_epizoo_model') and 'training_method' in raw_facts:
         fields = (*fields, 'training_method', 'training_configuration', 'training_biological_performance')
         if 'model_state' in raw_facts: fields=(*fields,'model_state','transfer_assessment','parent_initialized_manifest_sha256')
@@ -1376,12 +1329,6 @@ def _project_report(
     for section_id, title, tools in _SECTION_SPECS:
         included = tuple(step for step in steps if step.tool_name in tools)
         if included:
-            if section_id == "clustering_umap" and not any(
-                    step.tool_name == "cluster_cells" for step in included):
-                # Preserve historical titles, including standalone clustered runs.
-                if any(fact.field == "clustering_present" and fact.value is False
-                       for step in included for fact in step.facts):
-                    title = "Neighbors and UMAP"
             sections.append(
                 _Section(
                     section_id,
@@ -1792,10 +1739,10 @@ def _render_summary(
         "prepare_scATAC_fragments": "FASTQ preprocessing succeeded; canonical fragments were produced and independently verified",
         "inspect_scATAC": "Dataset inspection completed",
         "epizoo_embed_cells": "EpiZoo representation produced",
-        "pca_embed_cells": "Centered PCA representation produced",
-        "build_cell_neighbors": "Cell-neighbor graph produced",
-        "cluster_cells": "Leiden clustering produced",
-        "compute_cell_umap": "UMAP coordinates produced",
+
+
+
+
         "evaluate_cell_clustering": "Clustering evaluation available",
         "transfer_cell_labels": "Cell-label transfer performed",
         "validate_scATAC_feature_space": "Regulatory feature space validated",

@@ -1,4 +1,4 @@
-"""Supervised evaluation of fixed Milestone 6.1 cell clustering artifacts."""
+"""Supervised evaluation of fixed native cell clustering categories."""
 
 from __future__ import annotations
 
@@ -23,15 +23,8 @@ from sklearn.metrics import (
     normalized_mutual_info_score,
 )
 
-from .embedding_analysis import (
-    PROVENANCE_KEY,
-    UMAP_KEY,
-    _cell_order_digest,
-    _provenance,
-    _read_analysis,
-    _validate_cluster_labels,
-    _validate_neighbors_artifact,
-)
+from .embedding_analysis import _cell_order_digest, _read_analysis
+
 from .categorical import ordered_ids as _ordered_ids, label_token as _label_token, require_same_cells
 
 
@@ -214,89 +207,6 @@ def _close_adata(adata: ad.AnnData) -> None:
         file_manager.close()
 
 
-def _validate_evaluation_analysis(analysis: ad.AnnData) -> tuple[tuple[str, ...], str]:
-    """Validate the Milestone 6.1 structures relevant to evaluation."""
-
-    from .embedding_analysis import representation
-    cell_ids, _, _ = _validate_neighbors_artifact(
-        analysis, expected_stages=frozenset({"clustering", "umap"})
-    )
-    _validate_cluster_labels(analysis)
-    provenance = _provenance(analysis)
-    stage = provenance.get("stage")
-    parameters = provenance.get("parameters")
-    neighbors = parameters.get("neighbors") if isinstance(parameters, Mapping) else None
-    clustering = parameters.get("clustering") if isinstance(parameters, Mapping) else None
-    if not isinstance(neighbors, Mapping):
-        raise ValueError("Analysis artifact lacks upstream neighbors provenance.")
-    n_neighbors = neighbors.get("n_neighbors")
-    neighbor_seed = neighbors.get("random_seed")
-    if (
-        isinstance(n_neighbors, bool)
-        or not isinstance(n_neighbors, int)
-        or not 2 <= n_neighbors < analysis.n_obs
-        or neighbors.get("metric") not in {"euclidean", "cosine"}
-        or neighbors.get("method") != "umap"
-        or neighbors.get("transformer") != "none"
-        or isinstance(neighbor_seed, bool)
-        or not isinstance(neighbor_seed, int)
-        or neighbor_seed < 0
-        or neighbors.get("use_rep") != representation(analysis)[0]
-    ):
-        raise ValueError("Analysis artifact has invalid upstream neighbors provenance.")
-    if not isinstance(clustering, Mapping):
-        raise ValueError("Analysis artifact lacks upstream clustering provenance.")
-    resolution = clustering.get("resolution")
-    clustering_seed = clustering.get("random_seed")
-    if (
-        clustering.get("algorithm") != "leiden"
-        or isinstance(resolution, bool)
-        or not isinstance(resolution, (int, float))
-        or not math.isfinite(float(resolution))
-        or float(resolution) <= 0
-        or clustering.get("flavor") != "igraph"
-        or clustering.get("n_iterations") != 2
-        or clustering.get("directed") is not False
-        or clustering.get("use_weights") is not True
-        or isinstance(clustering_seed, bool)
-        or not isinstance(clustering_seed, int)
-        or clustering_seed < 0
-        or clustering.get("key_added") != "leiden"
-    ):
-        raise ValueError("Analysis artifact has invalid upstream clustering provenance.")
-    source_path = provenance.get("source_analysis_path")
-    if not isinstance(source_path, str) or not source_path.strip():
-        raise ValueError("Analysis artifact lacks its upstream analysis path provenance.")
-    if stage == "umap":
-        umap = parameters.get("umap") if isinstance(parameters, Mapping) else None
-        min_dist = umap.get("min_dist") if isinstance(umap, Mapping) else None
-        spread = umap.get("spread") if isinstance(umap, Mapping) else None
-        umap_seed = umap.get("random_seed") if isinstance(umap, Mapping) else None
-        if (
-            not isinstance(umap, Mapping)
-            or isinstance(min_dist, bool)
-            or not isinstance(min_dist, (int, float))
-            or not math.isfinite(float(min_dist))
-            or float(min_dist) < 0
-            or isinstance(spread, bool)
-            or not isinstance(spread, (int, float))
-            or not math.isfinite(float(spread))
-            or float(spread) <= 0
-            or float(min_dist) > float(spread)
-            or umap.get("n_components") != 2
-            or umap.get("init_pos") != "spectral"
-            or isinstance(umap_seed, bool)
-            or not isinstance(umap_seed, int)
-            or umap_seed < 0
-            or umap.get("key_added") != UMAP_KEY
-        ):
-            raise ValueError("UMAP artifact has invalid UMAP provenance.")
-        if UMAP_KEY not in analysis.obsm:
-            raise ValueError("UMAP artifact lacks UMAP coordinates.")
-        coordinates = np.asarray(analysis.obsm[UMAP_KEY])
-        if coordinates.shape != (analysis.n_obs, 2) or not np.isfinite(coordinates).all():
-            raise ValueError("UMAP artifact has invalid UMAP coordinates.")
-    return cell_ids, str(stage)
 
 
 def _evaluate_sources(
@@ -314,16 +224,16 @@ def _evaluate_sources(
 
     analysis = _read_analysis(resolved_analysis)
     try:
-        analysis_ids, stage = _validate_evaluation_analysis(analysis)
-        provenance = _provenance(analysis)
+        native = analysis.uns.get('agent_native_invocation')
+        if not isinstance(native, Mapping):
+            raise ValueError('Clustering evaluation requires native invocation provenance')
+        analysis_ids = _ordered_ids(analysis.obs_names, source='Native analysis')
+        stage = 'umap' if str(native.get('function', '')).endswith('.tl.umap') else 'clustering'
+        provenance = native
         if normalized_cluster_key not in analysis.obs:
-            raise ValueError(
-                f"Analysis artifact lacks cluster key {normalized_cluster_key!r}."
-            )
+            raise ValueError(f'Analysis artifact lacks cluster key {normalized_cluster_key!r}.')
         predicted = analysis.obs[normalized_cluster_key].copy()
-        analysis_provenance_sha256 = _canonical_digest(
-            analysis.uns[PROVENANCE_KEY]
-        )
+        analysis_provenance_sha256 = _canonical_digest(provenance)
     finally:
         _close_adata(analysis)
 

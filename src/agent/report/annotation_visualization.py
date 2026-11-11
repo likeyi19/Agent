@@ -113,16 +113,11 @@ def projections(snapshot, *, marker_activity=True):
             capability = snapshot.cell_results.get(coordinate['producing_step_id'])
             native = (coordinate['artifact_kind'] == 'native_matrix_h5ad' and capability is not None
                       and capability['coordinates'])
-            if coordinate['artifact_kind']!='cell_umap_h5ad' and not native:continue
+            if not native:continue
             cp=_pin(coordinate)
             from agent.tools.analysis.categorical import coordinates
-            ids,xy=coordinates(cp,_sha(coordinate), capability['coordinates'] if native else 'X_umap')
-            if native:
-                source_identity = capability['source_sha256']
-            else:
-                from agent.tools.analysis.embedding_analysis import PROVENANCE_KEY
-                with h5py.File(cp,'r') as handle:metadata=read_elem(handle['uns'][PROVENANCE_KEY])
-                source_identity = metadata.get('embedding',{}).get('source_sha256')
+            ids,xy=coordinates(cp,_sha(coordinate), capability['coordinates'])
+            source_identity = capability['source_sha256']
             if source_identity!=data['source_sha256']:
                 continue  # No relationship: do not assume it or refit.
             if marker_activity and source_identity is not None and data['genes'] and set(ids)==set(data['cells']):

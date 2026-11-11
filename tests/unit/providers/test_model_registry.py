@@ -16,7 +16,6 @@ import agent.providers.openai_planning as openai_module
 import agent.providers.openrouter_planning as openrouter_module
 import benchmarks.planner.run_benchmark as benchmark_cli
 from agent.orchestration import (
-    DeterministicPlanner,
     PlanningModel,
     PlanningModelProfile,
 )
@@ -293,16 +292,7 @@ def test_cli_and_benchmark_use_the_same_profile_factory_contract(
     assert application_options["planning_model_factory_registry"] is registry
     assert benchmark_model.model_id == "groq:model-a"
     assert registry.profiles == [benchmark_profile]
-    deterministic = cli_module._planning_options(
-        SimpleNamespace(
-            planner="deterministic",
-            provider=None,
-            model=None,
-            secondary_provider=None,
-            secondary_model=None,
-        )
-    )
-    assert isinstance(deterministic["planner"], DeterministicPlanner)
+
 
 
 def test_profile_and_registry_never_receive_environment_credentials(

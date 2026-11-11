@@ -1,21 +1,16 @@
-# Historical PCA representations and explicit native PCA
+# Explicit native PCA
 
-Ordinary compatible scATAC analysis now uses [native feature selection and
-Spectral](native-scatac-analysis.md). The dedicated `pca_embed_cells` tool and
-its optional TF-IDF/L2 execution path are retired.
+AI Research can select `run_scanpy` / `pp.pca` or `run_episcanpy` / `tl.pca`.
+Both are supported native APIs. Select methods by scientific purpose and researcher
+intent, with no package priority. Parameters pass through native kwargs; omitted
+values retain installed defaults. See [native scATAC analysis](native-scatac-analysis.md)
+for graph prerequisites and representation handling.
 
-Accepted historical results remain readable with their exact meanings:
+The dedicated `pca_embed_cells` tool, its Agent TF-IDF/L2 execution path, historical
+publication readers and tests are removed. Development Sessions and generated
+results impose no compatibility requirement. Independent acceptance reports retain
+their evidence of earlier testing.
 
-- v1: centered Scanpy PCA of supplied X unchanged.
-- v2: scikit-learn smoothed document-frequency TF-IDF, L2 cell normalization,
-  then centered Scanpy PCA. This was exploratory PCA, not Signac LSI.
-
-Historical descriptors, method parameters, reports, downloads and accepted source
-lineage are retained. Read-only reuse does not refit PCA, reopen the source matrix,
-or reinterpret old evidence under a current method. Unaccepted old publications
-cannot acquire new scientific authority.
-
-For explicit new PCA requests use the existing native `run_scanpy` / `pp.pca`
-or `run_episcanpy` / `tl.pca` interface. Researcher parameters pass through its
-native kwargs; omitted values retain installed defaults. EpiZoo remains a
-separate model-based capability with its own reference/vocabulary requirements.
+Native Functions retains independent installed public-function discovery and uses
+no provider. EpiZoo remains a separate model capability with its own reference and
+vocabulary requirements; its compact embedding H5AD is not a count matrix.

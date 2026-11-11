@@ -105,9 +105,10 @@ def test_one_structurally_stable_schema_and_complete_inventory(registry):
         projection = _interpretation_public(public, 'Explore the supplied data.')['dialogue']
         capabilities = projection['capabilities']
         assert set(capabilities) == set(registry.names())
-        assert len(capabilities) == 37
-        assert sum(len(c.get('functions', {})) for c in capabilities.values()) == 82
-        assert sum(len(c['parameters']) for c in capabilities.values()) == 180
+        assert len(capabilities) == len(registry.names())
+        assert sum(len(c.get('functions', {})) for c in capabilities.values()) == sum(
+            len(registry.get(n).native_functions.functions) for n in registry.names() if registry.get(n).native_functions is not None)
+        assert sum(len(c['parameters']) for c in capabilities.values()) == len(scientific_parameters(registry))
         for row in scientific_parameters(registry):
             actual=dict(capabilities[row['tool']]['parameters'][row['argument']])
             expected={k:v for k,v in row.items() if k not in ('tool','argument')}
@@ -137,7 +138,7 @@ def test_explicit_api_detail_is_exact_without_filtering_discovery(registry):
     public = context(registry)
     for utterance, expected in [
         ('Run scanpy.pp.pca with n_comps=10.', {'run_scanpy': {'pp.pca'}}),
-        ('Run scanpy.pp.pca then scanpy.pp.neighbors.', {'run_scanpy': {'pp.pca', 'pp.neighbors'}}),
+        ('Run scanpy.pp.pca then snapatac2.pp.knn.', {'run_scanpy': {'pp.pca'}, 'run_snapatac2': {'pp.knn'}}),
         ('Run chromVAR::getBackgroundPeaks.', {'run_chromvar': {'getBackgroundPeaks'}}),
     ]:
         capabilities = _interpretation_public(public, utterance)['dialogue']['capabilities']
@@ -257,13 +258,6 @@ def test_missing_field_projection_does_not_authorize_normalized_observation(regi
     decision=interpret_value(execute([raw],target='evaluate_cell_clustering',roles=[]),utterance,context(registry))
     with pytest.raises(IntentError):
         _bind_arguments(registry,utterance,{},decision.arguments,field_choices={})
-
-
-def test_retired_initialization_parameters_stay_readable_but_cannot_be_new_intent(registry):
-    from agent.application.turn_decisions import ScopedArgument
-    declaration=ScopedArgument('adapt_epizoo_species','max_steps','10',0,2)
-    with pytest.raises(IntentError):_bind_arguments(registry,'10',{},(declaration,))
-    assert _bind_arguments(registry,'10',{},(declaration,),historical=True)['max_steps']==10
 
 
 def test_clarification_schema_agrees_with_parameter_choice_admission():

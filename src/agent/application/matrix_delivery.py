@@ -296,15 +296,12 @@ def _snapshot_source(path, root, size, sha256, destination):
 
 
 MATRIX_CONTRACTS = {
-    'build_scATAC_cell_by_ccre': frozenset({'scatac-cell-by-ccre.v1'}),
     'adopt_scATAC_cell_by_ccre': frozenset({'scatac-cell-by-ccre.external.v1'}),
-    'build_scATAC_cell_by_features': frozenset({
-        'scatac-cell-by-features.v1', 'scatac-cell-by-features.qc-selected.v1'}),
     'adopt_scATAC_cell_by_features': frozenset({'scatac-cell-by-features.external.v1'}),
 }
 
 def selects_matrix_port(registry, tool_name, output_key):
-    spec = registry.accepted(tool_name)
+    spec = registry.get(tool_name)
     ports = [p for p in spec.semantic_planning.producer_ports
              if output_key in {member.field_name for member in p.members}]
     return len(ports) == 1 and ports[0].name in {'matrix', 'dataset'}
@@ -332,7 +329,7 @@ def accepted_matrix(service, session_id, revision, origin, output, *, step_id=No
             or record['scope'] != 'scientific_correctness.v1'
             or record['completion'] != 'succeeded'):
         raise ValueError('Unsupported accepted matrix authority.')
-    spec = service._application.registry.accepted(step.tool_name)
+    spec = service._application.registry.get(step.tool_name)
     spec.result_contract.validate(result)
     output_key = 'manifest_path' if output is None else output.output_key
     if not selects_matrix_port(service._application.registry, step.tool_name, output_key):
@@ -364,17 +361,10 @@ def accepted_matrix(service, session_id, revision, origin, output, *, step_id=No
             or record['science_profile'] != manifest['profile_sha256']
             or _serialize(record['resources']['manifest_identity']) != manifest):
         raise ValueError('Matrix result, manifest and authority differ.')
-    if step.tool_name == 'build_scATAC_cell_by_ccre':
-        from agent.tools.data.raw_history import matrix_summary as _summary
-        expected = _summary(manifest, manifest_path, result['manifest_sha256'])
-    elif step.tool_name == 'build_scATAC_cell_by_features':
-        from agent.tools.data.raw_history import feature_matrix_summary as _summary
-        expected = _summary(manifest, manifest_path, result['manifest_sha256'])
-    else:
-        from agent.tools.data.scatac_matrix_adoption import _summary
-        from agent.tools.data.external_matrix_contract import contract_for
-        expected = _summary(manifest, manifest_path, result['manifest_sha256'],
-                            contract=contract_for(manifest))
+    from agent.tools.data.scatac_matrix_adoption import _summary
+    from agent.tools.data.external_matrix_contract import contract_for
+    expected = _summary(manifest, manifest_path, result['manifest_sha256'],
+                        contract=contract_for(manifest))
     if result != expected:
         raise ValueError('Accepted result differs from the matrix owner summary.')
     payload = manifest_path.parent / manifest['matrix']['path']
@@ -640,7 +630,7 @@ class MatrixDownloadPreparer:
     def _prepare(self, artifact):
         """Pin accepted bytes and apply the closed role's reviewed delivery policy."""
         matrix = artifact.contract in _CREATED_CONTRACTS | _ADOPTED_CONTRACTS
-        from agent.tools.analysis import neighbors_delivery, neighbors_publication
+        from agent.tools.analysis import h5ad_delivery
         from . import annotation_delivery, analysis_delivery, model_delivery, statistical_delivery
         from . import sequence_delivery, native_delivery
         native = native_delivery.for_artifact(artifact)
@@ -656,16 +646,14 @@ class MatrixDownloadPreparer:
         annotation_evidence = (artifact.contract == annotation_delivery.CONTRACT
                                and getattr(artifact, 'role', None) in annotation_delivery.EVIDENCE_FILES)
         annotation_projection = annotation_evidence and artifact.role.endswith(('.json', '.tsv'))
-        processed = (artifact.contract in neighbors_publication.PROFILES
-                     and getattr(artifact, 'role', None) == neighbors_delivery.ROLE)
         compact = (artifact.contract == analysis_delivery.CONTRACT
                    and getattr(artifact, 'role', None) == analysis_delivery.ROLE)
         integrated = (artifact.contract == analysis_delivery.CONTRACT
                       and getattr(artifact, 'role', None) == analysis_delivery.INTEGRATED_ROLE)
         composed = (artifact.contract == analysis_delivery.COMPOSED_CONTRACT
                     and getattr(artifact, 'role', None) == analysis_delivery.COMPOSED_ROLE)
-        export = processed or annotation or compact or integrated or composed or statistical or native_h5ad
-        exporter = analysis_delivery if compact else annotation_delivery if annotation else neighbors_delivery
+        export = annotation or compact or integrated or composed or statistical or native_h5ad
+        exporter = analysis_delivery if compact else annotation_delivery
         prefix = 'MATRIX' if matrix else 'SCIENTIFIC'
         if matrix:
             if getattr(artifact, 'role', 'matrix') != 'matrix':
@@ -710,7 +698,7 @@ class MatrixDownloadPreparer:
             raise MatrixDeliveryError(prefix + '_DOWNLOAD_LIMIT')
         if type(artifact.sha256) is not str or re.fullmatch('[0-9a-f]{64}', artifact.sha256) is None:
             raise MatrixDeliveryError(prefix + '_DOWNLOAD_UNAVAILABLE')
-        delivered_limit = min(size + neighbors_delivery.DESTINATION_OVERHEAD_BYTES, self.policy.delivered_bytes)
+        delivered_limit = min(size + h5ad_delivery.DESTINATION_OVERHEAD_BYTES, self.policy.delivered_bytes)
         original = artifact.manifest['original_source'] if integrated else None
         original_size = 0 if original is None else original['size_bytes']
         if integrated:
@@ -718,7 +706,7 @@ class MatrixDownloadPreparer:
                 raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_UNAVAILABLE')
             if original_size > self.policy.source_bytes:
                 raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT')
-            delivered_limit = min(original_size + size + neighbors_delivery.DESTINATION_OVERHEAD_BYTES,
+            delivered_limit = min(original_size + size + h5ad_delivery.DESTINATION_OVERHEAD_BYTES,
                                   self.policy.delivered_bytes)
         extra_sources = artifact.manifest['sources'] if composed else ()
         if (composed and (not 1 <= len(extra_sources) <= 32 or any(
@@ -785,8 +773,7 @@ class MatrixDownloadPreparer:
                 else:
                     create_export = (statistical_delivery.create_statistical_export if statistical or native_h5ad else
                                      analysis_delivery.create_analysis_export if compact else
-                                     annotation_delivery.create_annotation_export if annotation
-                                     else neighbors_delivery.create_neighbors_export)
+                                     annotation_delivery.create_annotation_export)
                     create_export(snapshot, derivative, artifact.manifest,
                         source_sha256=artifact.sha256, source_size_bytes=size,
                         manifest_sha256=artifact.manifest_sha256, max_bytes=delivered_limit)

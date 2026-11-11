@@ -28,9 +28,6 @@ from agent.orchestration import (
     verify_step,
 )
 from agent.tools import (
-    build_cell_neighbors,
-    cluster_cells,
-    compute_cell_umap,
     transfer_cell_labels,
 )
 
@@ -67,6 +64,8 @@ def _embedding_result(
     n_cells: int = 2,
 ) -> dict[str, object]:
     return {
+        "analysis_path": str(Path(cell_ids_path).parent/'embeddings.h5ad'),
+        "analysis_sha256": __import__('hashlib').sha256((Path(cell_ids_path).parent/'embeddings.h5ad').read_bytes()).hexdigest(),
         "status": "success",
         "input_path": input_path,
         "embedding_path": embedding_path,
@@ -103,8 +102,10 @@ def _embedding_step(*, with_dependency: bool = False) -> PlanStep:
 def _artifacts(tmp_path):
     embedding_path = tmp_path / "embeddings.npy"
     cell_ids_path = tmp_path / "obs_names.txt"
-    embedding_path.write_bytes(b"npy artifact")
+    np.save(embedding_path, np.ones((2,512), dtype=np.float32))
     cell_ids_path.write_text("cell-1\ncell-2\n", encoding="utf-8")
+    from agent.tools.analysis.epizoo_embedding import _publish_compact_embedding
+    _publish_compact_embedding(dict(embedding_path=str(embedding_path),cell_ids_path=str(cell_ids_path)),overwrite=False)
     return embedding_path, cell_ids_path
 
 
@@ -124,8 +125,7 @@ def test_partial_embedding_export_returns_verification_failure(registry, tmp_pat
     del result[missing]
     verification = verify_step(step, step.arguments, result, registry)
     assert not verification.passed
-    assert verification.error.code == 'RESULT_IDENTITY_MISMATCH'
-    assert 'embedding_export_conservation' in verification.error.details['failed_checks']
+    assert verification.error.code == 'RESULT_CONTRACT_INVALID'
 
 
 def _resource_provenance(pins: dict[str, str]) -> dict[str, object]:
@@ -200,26 +200,6 @@ def test_pinned_verification_checks_omitted_device_and_checkpoint_owner_defaults
     assert "resource_identity_pins_match" in switched.error.details["failed_checks"]
 
 
-def _downstream_artifacts(tmp_path: Path):
-    rng = np.random.default_rng(11)
-    embedding_path = tmp_path / "embedding.npy"
-    cell_ids_path = tmp_path / "ids.txt"
-    np.save(
-        embedding_path,
-        rng.normal(size=(32, 512)).astype(np.float32),
-        allow_pickle=False,
-    )
-    cell_ids_path.write_text(
-        "".join(f"cell-{index}\n" for index in range(32)), encoding="utf-8"
-    )
-    neighbors = build_cell_neighbors(
-        embedding_path, cell_ids_path, tmp_path / "neighbors"
-    )
-    clustering = cluster_cells(
-        neighbors["analysis_path"], tmp_path / "clustering"
-    )
-    umap = compute_cell_umap(clustering["analysis_path"], tmp_path / "umap")
-    return embedding_path, cell_ids_path, neighbors, clustering, umap
 
 
 def _label_transfer_artifacts(tmp_path: Path):
@@ -322,63 +302,8 @@ def test_changed_reference_labels_fail_source_verification(
     assert "label_transfer_sources" in verification.error.details["failed_checks"]
 
 
-def test_valid_downstream_artifacts_pass_explicit_verification(
-    registry, tmp_path: Path
-) -> None:
-    embedding_path, cell_ids_path, neighbors, clustering, umap = (
-        _downstream_artifacts(tmp_path)
-    )
-    neighbors_step = PlanStep(
-        "neighbors",
-        "build_cell_neighbors",
-        {
-            "embedding_path": str(embedding_path),
-            "cell_ids_path": str(cell_ids_path),
-            "output_dir": str(tmp_path / "neighbors"),
-        },
-    )
-    cluster_step = PlanStep(
-        "cluster",
-        "cluster_cells",
-        {
-            "analysis_path": neighbors["analysis_path"],
-            "output_dir": str(tmp_path / "clustering"),
-        },
-    )
-    umap_step = PlanStep(
-        "umap",
-        "compute_cell_umap",
-        {
-            "analysis_path": clustering["analysis_path"],
-            "output_dir": str(tmp_path / "umap"),
-        },
-    )
-    assert verify_step(
-        neighbors_step, neighbors_step.arguments, neighbors, registry
-    ).passed
-    assert verify_step(cluster_step, cluster_step.arguments, clustering, registry).passed
-    assert verify_step(umap_step, umap_step.arguments, umap, registry).passed
 
 
-def test_corrupted_umap_artifact_fails_explicit_verification(
-    registry, tmp_path: Path
-) -> None:
-    _, _, _, clustering, umap = _downstream_artifacts(tmp_path)
-    artifact = ad.read_h5ad(umap["analysis_path"])
-    artifact.obsm["X_umap"][0, 0] = np.nan
-    artifact.write_h5ad(umap["analysis_path"])
-    step = PlanStep(
-        "umap",
-        "compute_cell_umap",
-        {
-            "analysis_path": clustering["analysis_path"],
-            "output_dir": str(tmp_path / "umap"),
-        },
-    )
-    result = verify_step(step, step.arguments, umap, registry)
-    assert not result.passed
-    assert result.error is not None
-    assert "umap_artifact_structure" in result.error.details["failed_checks"]
 
 
 def test_valid_inspection_result_passes(registry) -> None:
@@ -516,7 +441,7 @@ def test_missing_embedding_artifact_fails(
 
     assert not result.passed
     assert result.error is not None
-    assert result.error.code == "ARTIFACT_MISSING"
+    assert result.error.code == "RESULT_IDENTITY_MISMATCH"
 
 
 @pytest.mark.parametrize("empty_field", ["embedding_path", "cell_ids_path"])
@@ -536,7 +461,7 @@ def test_empty_artifact_fails(registry, tmp_path, empty_field) -> None:
 
     assert not result.passed
     assert result.error is not None
-    assert result.error.code == "ARTIFACT_EMPTY"
+    assert result.error.code == "RESULT_IDENTITY_MISMATCH"
 
 
 @pytest.mark.parametrize("field", ["finite", "cell_order_preserved"])

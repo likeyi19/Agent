@@ -5,7 +5,7 @@ import json
 import pytest
 
 from agent.application.turn_decisions import (
-    Execute, IntentError, LeidenResolution, ParameterAnswer, ScopedArgument,
+    Execute, IntentError, ParameterAnswer, ScopedArgument,
     SpeciesAnswer, admit_scientific_argument,
     decision_schema, interpret, parse_decision,
 )
@@ -27,7 +27,7 @@ def registry():
     return build_default_tool_registry()
 
 
-def declaration(utterance, literal, tool='select_scATAC_cells', argument='min_tss_enrichment'):
+def declaration(utterance, literal, tool='call_scATAC_peaks', argument='qvalue'):
     start = utterance.index(literal)
     return ScopedArgument(tool, argument, literal, start, start + len(literal))
 
@@ -42,7 +42,7 @@ def public(*, pending=False):
         scientific_parameters=[
             dict(tool='cluster_cells', argument='resolution', description='Registered clustering resolution.', required=False),
             dict(tool='select_scATAC_cells', argument='min_qc_fragment_records', description='Registered depth threshold.', required=True),
-            dict(tool='select_scATAC_cells', argument='min_tss_enrichment', description='Registered exact TSS threshold.', required=True),
+            dict(tool='call_scATAC_peaks', argument='qvalue', description='Registered exact TSS threshold.', required=True),
             dict(tool='compute_cell_umap', argument='min_dist', description='Registered UMAP parameter.', required=False),
         ]))
     if pending:
@@ -71,45 +71,12 @@ def test_species_identity_stays_distinct_from_registered_parameter_bindings():
             '@species', 'human', arguments=(argument,))
 
 
-@pytest.mark.parametrize('literal,argument,expected', [
-    ('1200', 'min_qc_fragment_records', 1200),
-    ('0', 'min_qc_fragment_records', 0),
-    ('4', 'min_tss_enrichment', 4),
-    ('4.000', 'min_tss_enrichment', '4.000'),
-    ('4/3', 'min_tss_enrichment', '4/3'),
-    ('0.123456789012345678', 'min_tss_enrichment', '0.123456789012345678'),
-])
-def test_historical_metadata_preserves_numeric_literal_representation(registry, literal, argument, expected):
-    utterance = 'Use threshold ' + literal + '.'
-    spec = registry.accepted('select_scATAC_cells').optional_arguments[argument]
-    result = admit_scientific_argument(declaration(utterance, literal, argument=argument), utterance, spec)
-    assert result == expected and type(result) is type(expected)
 
 
-@pytest.mark.parametrize('literal', ['-1', '0', 'NaN', '1/0'])
-def test_invalid_current_resolution_never_becomes_a_default(registry, literal):
-    utterance = 'Use resolution ' + literal + '.'
-    spec = registry.get('cluster_cells').optional_arguments['resolution']
-    with pytest.raises(IntentError, match='invalid_parameter_value'):
-        admit_scientific_argument(declaration(utterance, literal, 'cluster_cells', 'resolution'), utterance, spec)
 
 
-def test_additional_existing_registered_parameter_needs_no_tool_specific_parser(registry):
-    utterance = 'Use UMAP minimum distance .2.'
-    argument = declaration(utterance, '.2', 'compute_cell_umap', 'min_dist')
-    result = admit_scientific_argument(argument, utterance,
-        registry.get('compute_cell_umap').optional_arguments['min_dist'])
-    assert result == .2 and type(result) is float
 
 
-def test_historical_resolution_class_and_admission_stay_strict_and_share_validation(registry):
-    utterance = 'Use resolution 1.'
-    generic = declaration(utterance, '1', 'cluster_cells', 'resolution')
-    historical = LeidenResolution(**asdict(generic))
-    spec = registry.get('cluster_cells').optional_arguments['resolution']
-    assert admit_scientific_argument(generic, utterance, spec) == admit_scientific_argument(historical, utterance, spec) == 1.0
-    with pytest.raises(ValueError):
-        LeidenResolution(**(asdict(generic) | {'tool': 'compute_cell_umap'}))
 
 
 @pytest.mark.parametrize('utterance,literal', [
@@ -120,13 +87,13 @@ def test_historical_resolution_class_and_admission_stay_strict_and_share_validat
 def test_generic_numeric_spans_reject_truncation_and_units(registry, utterance, literal):
     with pytest.raises(IntentError, match='ungrounded_operand'):
         admit_scientific_argument(declaration(utterance, literal), utterance,
-            registry.accepted('select_scATAC_cells').optional_arguments['min_tss_enrichment'])
+            registry.get('call_scATAC_peaks').optional_arguments['qvalue'])
 
 
 def test_exact_literal_and_utterance_identity_are_checked(registry):
     utterance = 'Use threshold 4.5.'
     candidate = declaration(utterance, '4.5')
-    spec = registry.accepted('select_scATAC_cells').optional_arguments['min_tss_enrichment']
+    spec = registry.get('call_scATAC_peaks').optional_arguments['qvalue']
     for invalid in (replace(candidate, literal='4.6'), replace(candidate, end=100)):
         with pytest.raises(IntentError, match='ungrounded_operand'):
             admit_scientific_argument(invalid, utterance, spec)
@@ -219,7 +186,7 @@ def test_registry_metadata_offers_only_reviewed_free_text_declarations(registry)
     eligible = set()
     unreviewed = set()
     for tool_name in registry.names():
-        tool = registry.accepted(tool_name)
+        tool = registry.get(tool_name)
         for name, spec in {**tool.required_arguments, **tool.optional_arguments}.items():
             if is_exact_string_argument(spec):
                 eligible.add((tool_name, name))
@@ -279,14 +246,14 @@ def test_arbitrary_scientific_strings_and_query_operands_do_not_gain_declaration
     ('epizoo_embed_cells', 'checkpoint_path'),
     ('epizoo_embed_cells', 'device'),
     ('evaluate_cell_clustering', 'output_dir'),
-    ('build_scATAC_cell_by_ccre', 'reference_manifest_sha256'),
+    ('adopt_scATAC_cell_by_ccre', 'reference_manifest_sha256'),
     ('adopt_scATAC_cell_by_ccre', 'assembly'),
 ])
 def test_paths_devices_unreviewed_assemblies_and_digests_stay_excluded(registry, tool, name):
     from agent.application.dialogue_execution import _parameter_input, scientific_parameters
     from agent.application.turn_decisions import is_exact_string_argument
 
-    registered = registry.accepted(tool)
+    registered = registry.get(tool)
     spec = registered.required_arguments.get(name, registered.optional_arguments.get(name))
     assert str in spec.accepted_types and not is_exact_string_argument(spec)
     assert not any((item['tool'], item['argument']) == (tool, name)

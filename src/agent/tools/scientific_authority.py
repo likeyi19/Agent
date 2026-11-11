@@ -54,8 +54,6 @@ def validate_registry_hooks(registry):
 
 def hooks_for_tool(tool_name, registry=None):
     """Return only explicit Registry owner hooks; raw contracts remain separate."""
-    if tool_name == 'pca_embed_cells':
-        return _registry(registry).accepted(tool_name).scientific_authority
     return _registered_hooks(registry)[0].get(tool_name)
 
 
@@ -81,13 +79,12 @@ def qualified_port(tool_name, port_name, registry=None):
         return port_name in hooks.producer_ports
     if tool_name not in _raw().TOOLS:
         return False
-    semantic = admitted_registry.accepted(tool_name).semantic_planning
+    semantic = admitted_registry.get(tool_name).semantic_planning
     return semantic is not None and port_name in {port.name for port in semantic.producer_ports}
 
 
 def _hooks_for_kind(kind, registry=None):
-    hooks = (hooks_for_tool('pca_embed_cells', registry) if kind == 'cell_pca'
-             else _registered_hooks(registry)[1].get(kind))
+    hooks = _registered_hooks(registry)[1].get(kind)
     if hooks is None and kind not in _raw_kinds():
         raise AuthorityError('Unsupported scientific authority contract.')
     return hooks
@@ -119,8 +116,6 @@ def _publication_record(context, tool_name, arguments, result, execution_identit
 
 
 def issue(context, tool_name, arguments, result, execution_identity, *, registry=None):
-    if tool_name == 'pca_embed_cells':
-        raise AuthorityError('Retired PCA cannot issue new scientific authority.')
     hooks = hooks_for_tool(tool_name, registry)
     if hooks is None:
         tool_kind(tool_name, registry)

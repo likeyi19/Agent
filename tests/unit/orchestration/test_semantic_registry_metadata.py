@@ -508,21 +508,9 @@ def test_scoped_optional_selectors_are_registry_authoritative_and_isolated() -> 
     contract = build_semantic_compiler_contract(registry)
     expected = {
         "embedding_overwrite": ("epizoo_embed_cells", "overwrite", "overwrite"),
-        "neighbors_overwrite": ("build_cell_neighbors", "overwrite", "overwrite"),
-        "cluster_overwrite": ("cluster_cells", "overwrite", "overwrite"),
-        "umap_overwrite": ("compute_cell_umap", "overwrite", "overwrite"),
-        "transfer_overwrite": ("transfer_cell_labels", "overwrite", "overwrite"),
-        "neighbors_random_seed": (
-            "build_cell_neighbors",
-            "random_seed",
-            "random_seed",
-        ),
-        "cluster_random_seed": ("cluster_cells", "random_seed", "random_seed"),
-        "umap_random_seed": (
-            "compute_cell_umap",
-            "random_seed",
-            "random_seed",
-        ),
+        'run_snapatac2__pp_knn__kwargs': ('run_snapatac2', 'kwargs', 'kwargs'),
+        'run_snapatac2__tl_leiden__kwargs': ('run_snapatac2', 'kwargs', 'kwargs'),
+        'run_snapatac2__tl_umap__kwargs': ('run_snapatac2', 'kwargs', 'kwargs'),
     }
 
     destinations = {
@@ -539,41 +527,6 @@ def test_scoped_optional_selectors_are_registry_authoritative_and_isolated() -> 
     }
 
 
-def test_grouped_direct_embedding_source_expands_request_inputs() -> None:
-    registry = build_default_tool_registry()
-    request = AgentRequest(
-        "direct-neighbors",
-        "Build neighbors from these aligned artifacts.",
-        {
-            "embedding_path": "/inputs/cells.npy",
-            "cell_ids_path": "/inputs/cells.ids.txt",
-            "output_dir": "/outputs",
-        },
-    )
-    candidate = SemanticPlanCandidate(
-        (
-            SemanticPlanStep(
-                "neighbors",
-                "build_cell_neighbors",
-                sources=(
-                    SemanticRequestInputSource("embedding", "embedding_path"),
-                ),
-            ),
-        )
-    )
-
-    plan = compile_semantic_plan(
-        request,
-        candidate,
-        registry,
-        build_semantic_compiler_contract(registry),
-    )
-
-    assert dict(plan.steps[0].arguments) == {
-        "embedding_path": "/inputs/cells.npy",
-        "cell_ids_path": "/inputs/cells.ids.txt",
-        "output_dir": "/outputs",
-    }
 
 
 def test_grouped_direct_transfer_sources_preserve_explicit_lineage() -> None:
@@ -630,34 +583,6 @@ def test_grouped_direct_transfer_sources_preserve_explicit_lineage() -> None:
     assert plan.steps[0].depends_on == ()
 
 
-def test_grouped_direct_source_missing_companion_fails_closed() -> None:
-    registry = build_default_tool_registry()
-    request = AgentRequest(
-        "missing-companion",
-        "Build neighbors.",
-        {"embedding_path": "/inputs/cells.npy", "output_dir": "/outputs"},
-    )
-    candidate = SemanticPlanCandidate(
-        (
-            SemanticPlanStep(
-                "neighbors",
-                "build_cell_neighbors",
-                sources=(
-                    SemanticRequestInputSource("embedding", "embedding_path"),
-                ),
-            ),
-        )
-    )
-
-    with pytest.raises(SemanticPlanCompileError) as caught:
-        compile_semantic_plan(
-            request,
-            candidate,
-            registry,
-            build_semantic_compiler_contract(registry),
-        )
-
-    assert caught.value.code == "MISSING_REQUEST_SOURCE_MEMBER"
 
 
 def test_multiple_complete_grouped_request_sources_are_ambiguous() -> None:

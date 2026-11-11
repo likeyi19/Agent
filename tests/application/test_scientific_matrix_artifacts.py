@@ -119,7 +119,7 @@ def matrix_accepted(application, monkeypatch, *, name='initial', tool='build_scA
         result = _summary(manifest, path, sha, contract=contract)
     arguments = dict(output_dir=str(root))
     plan = AgentPlan(name + ':plan', name, 'fixture', (PlanStep('step0', tool, arguments),))
-    identity = execution_identity(name + ':run', plan, plan.steps[0], application.registry.accepted(tool))
+    identity = execution_identity(name + ':run', plan, plan.steps[0], application.registry.get(tool))
     proof = {k: manifest[k] for k in ('identity_sha256', 'logical_matrix_sha256', 'nnz',
                                    'total_count', 'zero_row_count')}
     if 'diagnostic' in manifest:

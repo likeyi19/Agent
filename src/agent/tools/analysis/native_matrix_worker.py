@@ -1,4 +1,5 @@
 """Isolated, repository-controlled Python package dispatch; no user code."""
+from collections.abc import Mapping
 import hashlib
 import importlib.metadata
 import inspect
@@ -39,6 +40,14 @@ def returned_data(result):
     raise TypeError('Unrepresented native return type: ' + str(type(result)))
 
 
+def _receipt_default(value):
+    # Installed signatures may use immutable mappings (Scanpy metric_kwds).
+    # Preserve their exact contents as JSON objects, without stringifying values.
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError('Unsupported native receipt value: ' + type(value).__name__)
+
+
 def main(request_path):
     raw = Path(request_path).read_bytes(); req = json.loads(raw)
     stage = Path(req['stage'])
@@ -62,7 +71,24 @@ def main(request_path):
             while marker in a.var: marker += '_'
             a.var[marker] = np.arange(a.n_vars)
         obs_before, var_before = set(a.obs), set(a.var)
-        result = function(a, **kwargs)
+        # SnapATAC2 2.9's KD-tree FFI accepts f64, while EpiZoo publishes
+        # f32. Widen only the selected local view for the native call. Every
+        # f32 value is exact in f64; preserve the published representation.
+        restored_rep = None
+        adaptation = None
+        if package == 'snapatac2' and name == 'pp.knn' and kwargs.get('method', 'kdtree') == 'kdtree':
+            key = kwargs.get('use_rep', 'X_spectral')
+            values = a.obsm[key]
+            if values.dtype == np.dtype('float32'):
+                restored_rep = (key, values)
+                a.obsm[key] = values.astype(np.float64)
+                adaptation = dict(slot='obsm.' + key, source_dtype='float32', execution_dtype='float64',
+                    conversion='lossless widening for native KD-tree FFI; original representation restored')
+        try:
+            result = function(a, **kwargs)
+        finally:
+            if restored_rep is not None:
+                a.obsm[restored_rep[0]] = restored_rep[1]
         native_type = type(result).__module__ + '.' + type(result).__name__
         independent = result is not None and not isinstance(result, ad.AnnData)
         if isinstance(result, ad.AnnData):
@@ -141,10 +167,12 @@ def main(request_path):
             if p.default is not inspect.Parameter.empty}
         effective.update(kwargs)
         receipt['effective_parameters'] = effective
+        if adaptation is not None:
+            receipt['input_adaptation'] = adaptation
         receipt['result_shapes'] = {s: list(getattr(a, s.partition('.')[0])[s.partition('.')[2]].shape)
             for s in slots if s.startswith(('obsm.', 'obsp.'))}
         if axis_positions is not None: receipt['source_axis_positions'] = axis_positions
-        (stage / 'native-receipt.json').write_text(json.dumps(receipt, indent=2))
+        (stage / 'native-receipt.json').write_text(json.dumps(receipt, indent=2, default=_receipt_default))
     except Exception as exc:
         (stage / 'native-error.json').write_text(json.dumps(dict(message=str(exc), type=type(exc).__name__)))
         traceback.print_exc()

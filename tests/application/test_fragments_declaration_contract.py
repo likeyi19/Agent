@@ -44,19 +44,6 @@ def test_scientific_arguments_cannot_replace_source_declarations():
         _fragments_values(declared, selected, {'namespace': 'other'}, None)
 
 
-def test_ordinary_provenance_can_bind_reviewed_choice_without_internal_name():
-    from agent.application.dialogue_execution import _bind_arguments
-    from agent.application.turn_decisions import ScalarChoiceArgument
-    from agent.orchestration.registry import build_default_tool_registry
-    utterance = ('Import this 10x ATAC export with already Tn5-adjusted zero-based half-open '
-                 'intervals, corrected barcodes and read-pair support.')
-    declaration = ScalarChoiceArgument('import_scATAC_fragments', 'source_profile',
-        utterance[7:-1], 7, len(utterance)-1, '10x-atac-fragments.v1')
-    from agent.orchestration.raw_history import ReplayRegistry
-    with pytest.raises(ValueError): _bind_arguments(build_default_tool_registry(),utterance,{},(declaration,))
-    assert _bind_arguments(ReplayRegistry(build_default_tool_registry()),utterance,{},(declaration,),historical=True)=={'source_profile':'10x-atac-fragments.v1'}
-
-
 @pytest.mark.parametrize('reason', ['invalid_parameter_value', 'ungrounded_operand',
                                     'conflicting_scientific_parameter'])
 def test_named_parameter_clarification_matches_offered_wire(reason):

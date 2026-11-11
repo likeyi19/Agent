@@ -179,7 +179,7 @@ def bound_records(admitted, interactions, registry, *, current_utterance=None):
             elif spec.planning.observation_source:
                 value = getattr(declaration, 'value', declaration.literal)
             else:
-                value = admit_scientific_argument(declaration, utterance, spec, historical=True)
+                value = admit_scientific_argument(declaration, utterance, spec)
             rows.append(scope | {'value': _serialize(value)})
             found.add(identity)
     return rows

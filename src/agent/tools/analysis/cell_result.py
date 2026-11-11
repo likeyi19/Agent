@@ -5,12 +5,11 @@ never grant these capabilities. No catalog, authority or scientific work lives h
 """
 from collections.abc import Mapping
 
-DEDICATED = ('pca_embed_cells', 'build_cell_neighbors', 'cluster_cells',
-             'compute_cell_umap', 'annotate_scATAC_cell_types')
+DEDICATED = ('annotate_scATAC_cell_types',)
 NATIVE = ('run_snapatac2', 'run_scanpy', 'run_episcanpy')
 TOOLS = DEDICATED + NATIVE
-_PRESERVE = frozenset(('pp.select_features', 'tl.spectral', 'pp.knn', 'pp.neighbors',
-                      'tl.leiden', 'tl.umap', 'pp.pca', 'tl.pca'))
+_PRESERVE = frozenset(('pp.select_features', 'tl.spectral', 'pp.knn',
+                      'tl.leiden', 'tl.umap', 'pp.pca', 'tl.pca', 'pp.neighbors'))
 
 
 def describe(tool, result):
@@ -20,13 +19,6 @@ def describe(tool, result):
     if tool == 'annotate_scATAC_cell_types':
         return dict(path_field='annotated_h5ad_path', sha_field='annotated_h5ad_sha256',
                     coordinates=None, grouping=None, preserves_counts=True, input_argument='source_path')
-    if tool in DEDICATED:
-        if 'analysis_path' not in result or 'analysis_sha256' not in result:
-            return None
-        return dict(path_field='analysis_path', sha_field='analysis_sha256',
-            coordinates='X_umap' if tool == 'compute_cell_umap' else None,
-            grouping='leiden' if tool == 'cluster_cells' else None,
-            preserves_counts=False, input_argument='embedding_path' if tool == 'build_cell_neighbors' else 'analysis_path')
     package = tool.removeprefix('run_')
     if result.get('contract_version') != 'native-' + package + '-matrix.v1' or not result.get('matrix_path'):
         return None
@@ -60,7 +52,7 @@ def file(tool, result):
 
 def planned_coordinates(tool, arguments):
     """Selection offer only; actual written slots are checked after acceptance."""
-    return tool == 'compute_cell_umap' or (tool in NATIVE
+    return (tool in NATIVE
         and arguments.get('function_name') == 'tl.umap'
         and arguments.get('kwargs', {}).get('inplace', True) is not False)
 
@@ -137,3 +129,12 @@ def native_group_rows(context, path, sha, source_sha, cell_ids):
         raise ValueError('Selected grouping contains missing labels.')
     context.validate_anchors()
     return list(zip(ids, map(str, labels)))
+
+
+def source_bound_cluster_rows(cell_ids, analysis_path, analysis_sha256, source_sha256):
+    """Project accepted native labels only for the exact source and ordered cells."""
+    from agent.tools.data.authority_context import current
+    rows = native_group_rows(current(), analysis_path, analysis_sha256, source_sha256, cell_ids)
+    if rows is None:
+        raise ValueError('Grouping requires an accepted native clustering of the exact source')
+    return rows

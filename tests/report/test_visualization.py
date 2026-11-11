@@ -74,7 +74,7 @@ def _artifact(step_id: str, tool_name: str, kind: str, path: Path) -> dict[str, 
     return {
         "producing_step_id": step_id,
         "tool_name": tool_name,
-        "result_field": "analysis_path" if tool_name == "compute_cell_umap" else "report_path",
+        "result_field": "matrix_path" if tool_name == "run_snapatac2" else "report_path",
         "artifact_kind": kind,
         "artifact_path": str(path.resolve()),
         "integrity": {"basis": ["fresh_tool_verifier"]},
@@ -85,7 +85,7 @@ def _source(
     tmp_path: Path,
     *,
     tools: tuple[str, ...] = (
-        "compute_cell_umap",
+        "run_snapatac2",
         "evaluate_cell_clustering",
 
     ),
@@ -100,8 +100,8 @@ def _source(
     definitions: list[tuple[str, str, dict[str, object], dict[str, object] | None]] = []
     counters: dict[str, int] = {}
     paths = {
-        "compute_cell_umap": (
-            "cell_umap_h5ad",
+        "run_snapatac2": (
+            "native_matrix_h5ad",
             umap_path,
             {"n_cells": 3},
         ),
@@ -113,7 +113,7 @@ def _source(
 
         "inspect_scATAC": ("", tmp_path / "input.h5ad", {}),
     }
-    selected = tools + (("compute_cell_umap",) if duplicate_umap else ())
+    selected = tools + (("run_snapatac2",) if duplicate_umap else ())
     artifacts: list[dict[str, object]] = []
     for tool_name in selected:
         counters[tool_name] = counters.get(tool_name, 0) + 1
@@ -184,6 +184,22 @@ def _source(
 @pytest.fixture(autouse=True)
 def _verified_sources(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(visualization_module, "verify_analysis_evidence", lambda *a, **k: _passed())
+    original = visualization_module._verified_evidence_snapshot
+    def snapshot(*args, **kwargs):
+        value = original(*args, **kwargs)
+        # Simulated acceptance metadata; numerical rendering reads actual H5AD.
+        capabilities = {}
+        for row in value.payload['steps']:
+            if row['tool_name'] != 'run_snapatac2':
+                continue
+            path = value.path.parent/'source.umap.h5ad'
+            sha = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else 'a'*64
+            capabilities[row['step_id']] = dict(coordinates='X_umap',file=dict(path=str(path),sha256=sha),
+                source_sha256='b'*64,groups=dict(path=str(path),sha256=sha,field='leiden',
+                    step_id=row['step_id'],tool_name='run_snapatac2'))
+        return replace(value,cell_results=capabilities)
+    monkeypatch.setattr(visualization_module,'_verified_evidence_snapshot',snapshot)
+
 
 
 
@@ -204,7 +220,7 @@ def _overlay_source():
         field='result:condition',correspondence=dict(basis='exact_original_source',n_cells=4,cell_order_sha256='a'*64),
         sources=[dict(role=role,producing_step_id=step,tool_name=tool,artifact_path='/private/fixture',
             integrity=dict(sha256='b'*64)) for role,step,tool in (
-            ('coordinates','old-umap','compute_cell_umap'),('categories','new-labels','cluster_cells'))])
+            ('coordinates','old-umap','run_snapatac2'),('categories','new-labels','run_snapatac2'))])
     return payload
 
 
@@ -252,22 +268,6 @@ def test_interaction_figure_large_dimensions_fail_before_render_without_dropping
     assert len(payload['labels']) == 3000
 
 
-def test_historical_run_overlay_manifest_remains_readable_without_rewriting(tmp_path):
-    run,evidence,_,_=_source(tmp_path,tools=('inspect_scATAC',))
-    read = lambda:_overlay_source()
-    result = visualization_module.build_cell_overlay_visualizations(read,tmp_path/'output',
-        publisher=dict(session_id='session',turn_id='figure-request'))
-    # Construct the historical schema-1 fixture, using its genuine existing Run
-    # fixture identity. There is no active public Run-owned overlay writer.
-    projections = visualization_module._cell_overlay_projection(read)
-    snapshot = visualization_module._verified_evidence_snapshot(run,evidence,_guarded_registry())
-    manifest = visualization_module._manifest_payload(snapshot,projections,
-        {f['figure_id']:f['png_sha256'] for f in result['figures']},visualization_module._renderer_contract())
-    path = Path(result['manifest_path'])
-    path.write_bytes(visualization_module._canonical_json_bytes(manifest))
-    original = path.read_bytes()
-    assert verify_analysis_visualizations(run,evidence,path,registry=_guarded_registry(),cell_overlay=read).passed
-    assert path.read_bytes() == original
 
 
 def test_supported_visualization_kinds_are_ordered_and_do_not_render(
@@ -278,7 +278,7 @@ def test_supported_visualization_kinds_are_ordered_and_do_not_render(
         tools=(
             "inspect_scATAC",
 
-            "compute_cell_umap",
+            "run_snapatac2",
             "evaluate_cell_clustering",
         ),
     )
@@ -379,39 +379,6 @@ def test_palette_extension_is_fixed_and_deterministic() -> None:
 
 
 
-def test_umap_presentation_reader_does_not_access_scientific_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class AllowedMapping:
-        def __init__(self, key: str, value: object) -> None:
-            self.key = key
-            self.value = value
-
-        def __getitem__(self, key: str) -> object:
-            assert key == self.key
-            return self.value
-
-    class File:
-        def close(self) -> None:
-            pass
-
-    class Guarded:
-        obs_names = pd.Index(["c1", "c2"])
-        obsm = AllowedMapping("X_umap", np.asarray([[0, 1], [2, 3]], dtype=np.float32))
-        obs = AllowedMapping("leiden", pd.Series(["x", "y"]))
-        file = File()
-
-        @property
-        def X(self) -> object:
-            raise AssertionError(".X must not be accessed")
-
-        @property
-        def obsp(self) -> object:
-            raise AssertionError("neighbor graphs must not be accessed")
-
-    monkeypatch.setattr(visualization_module.ad, "read_h5ad", lambda *a, **k: Guarded())
-    data = visualization_module._read_umap_presentation(Path("ignored"), expected_n_cells=2)
-    assert data.cell_ids == ("c1", "c2")
 
 
 def test_multiple_supported_steps_have_stable_order_and_safe_names(tmp_path: Path) -> None:
@@ -663,42 +630,8 @@ def test_successful_overwrite_replaces_complete_bundle(tmp_path: Path) -> None:
     }
 
 
-def test_historical_bundle_with_annotation_keeps_original_figure_set(tmp_path,monkeypatch):
-    """New automatic annotation plots do not reinterpret an accepted old bundle."""
-    run,evidence,_,_=_source(tmp_path)
-    snapshot=visualization_module._verified_evidence_snapshot(run,evidence,_guarded_registry())
-    payload=dict(snapshot.payload)
-    payload['steps']=[*payload['steps'],dict(step_id='historical_annotation',tool_name='annotate_scATAC_cell_types',facts={})]
-    payload['workflow']=dict(payload['workflow'],ordered_steps=[*payload['workflow']['ordered_steps'],
-        dict(step_id='historical_annotation',tool_name='annotate_scATAC_cell_types')])
-    snapshot=replace(snapshot,payload=payload)
-    monkeypatch.setattr(visualization_module,'_verified_evidence_snapshot',lambda *a,**k:snapshot)
-    original=visualization_module._derive_figure_projections(snapshot,annotation_figures=False)
-    assert len(original)==2
-    built=visualization_module._build_bundle(tmp_path/'historical',original,lambda:original,
-        lambda projections,pngs,renderer:visualization_module._manifest_payload(snapshot,projections,pngs,renderer),overwrite=False)
-    path=built['manifest_path'];raw=Path(path).read_bytes()
-    assert 'annotation_projection_version' not in json.loads(raw)['figure_set']
-    assert verify_analysis_visualizations(run,evidence,path,registry=_guarded_registry()).passed
-    assert Path(path).read_bytes()==raw
 
 
-def test_historical_native_result_does_not_acquire_new_bundle_figures(tmp_path, monkeypatch):
-    run,evidence,_,_=_source(tmp_path)
-    snapshot=visualization_module._verified_evidence_snapshot(run,evidence,_guarded_registry())
-    payload=dict(snapshot.payload)
-    payload['steps']=[*payload['steps'],dict(step_id='native',tool_name='run_snapatac2',facts={})]
-    payload['workflow']=dict(payload['workflow'],ordered_steps=[*payload['workflow']['ordered_steps'],
-        dict(step_id='native',tool_name='run_snapatac2')])
-    historical=replace(snapshot,payload=payload,cell_results={})
-    original=visualization_module._derive_figure_projections(historical)
-    built=visualization_module._build_bundle(tmp_path/'historical',original,lambda:original,
-        lambda projections,pngs,renderer:visualization_module._manifest_payload(historical,projections,pngs,renderer),overwrite=False)
-    current=replace(historical,cell_results={'native':dict(coordinates='X_umap',groups=None)})
-    monkeypatch.setattr(visualization_module,'_verified_evidence_snapshot',lambda *a,**k:current)
-    path=Path(built['manifest_path']);before=path.read_bytes()
-    assert verify_analysis_visualizations(run,evidence,path,registry=_guarded_registry()).passed
-    assert path.read_bytes()==before
 
 
 @pytest.mark.parametrize('figure_set', [None, [], 'invalid', {'annotation_projection_version': True}, {'annotation_projection_version': 3}])

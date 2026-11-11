@@ -182,14 +182,14 @@ history; new DA v2 completion checks no longer replay edgeR. Historical v1
 readers remain, and independent scientific qualification tests are retained.
 EpiZoo vocabulary requirements and raw-data/QC/matrix scientific contracts remain.
 
-Ordinary compatible scATAC analysis uses native SnapATAC2 feature selection,
-Spectral, KNN, Leiden and UMAP, including processed peak-count H5AD. Uncalled
+AI Research selects native package methods by scientific purpose, without package
+priority. Scanpy, epiScanpy and SnapATAC2 retain their own reductions, compatible
+graphs, clustering and UMAP APIs, including processed peak-count H5AD inputs. Uncalled
 single-sample raw fragments use sample-level Otsu thresholds on native depth and
 TSS enrichment, with explicit researcher thresholds taking precedence. EpiZoo
 remains a separate model-based capability. The [native scATAC guide](docs/guides/native-scatac-analysis.md)
 records exact methods and input populations. Dedicated PCA execution is retired;
-accepted [historical PCA results](docs/guides/pca-analysis.md) remain readable,
-and explicit native PCA remains available.
+[native PCA functions](docs/guides/pca-analysis.md) remain available.
 
 [UA3.6.5-R3](docs/history/ua3.6.5-r3-native-tool-first-simplification.md) removes the
 primary-nuclear-only restriction from direct MAESTRO annotation. Supplied peaks,
@@ -647,8 +647,7 @@ missing necessary scientific declarations retain typed clarification.
 
 The former two-stage scope-selection experiments remain historical evidence.
 Their live runners are retired; no historical result is regenerated or scored
-as an R5 result. Explicit v3 and the deterministic offline planner retain their
-supported contracts. No keyword routing or automatic workflow completion is added.
+as an R5 result. Explicit v3 remains a supported LLM planning contract. No keyword routing or automatic workflow completion is added.
 
 The compiler deterministically lowers semantic choices into executable plan
 contracts. It derives only unique mappings explicitly authorized by reviewed
@@ -690,11 +689,11 @@ single semantic authority; this fix adds no workflow inference or planner layer.
 `PlanningModelProfile` and adapter-only `PlanningModelFactoryRegistry` separate
 configuration from planning. OpenAI, Gemini, Groq, and custom `PlanningModel`
 injection are supported; no production model is hard-coded. Application/CLI new
-runs require an explicit primary LLM profile unless deterministic planning or
-another Planner is explicitly selected. Missing configuration fails clearly.
-Low-level `AgentRuntime()` retains its deterministic offline default; that
-runtime construction is separate from normal application LLM planning. The
-deterministic planner is not a semantic oracle for LLM output.
+runs require an explicit primary LLM profile. Missing configuration fails clearly.
+Low-level `AgentRuntime()` supports prepared execution without a planner and
+fails explicitly when asked to plan without one. The historical rule-based
+planner and deterministic CLI option are removed. Explicit Planner injection
+remains available for testing and integrations; normal Web AI Research uses LLMPlanner.
 
 ## Scientific capabilities
 
@@ -840,7 +839,7 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 | BAM fragments | `run_snapatac2` → `pp.make_fragment_file`: native BAM method and recorded parameters |
 | Native QC and filtering | `run_snapatac2`: native import observations, `metrics.tsse`, library `metrics.frag_size_distr` and `pp.filter_cells` |
 | Inspect and embed | `inspect_scATAC`, `epizoo_embed_cells`: safe H5AD inspection, validated sparse preprocessing, process-local EpiZoo model reuse, 512-dimensional embeddings plus ordered cell IDs |
-| Downstream embedding analysis | `build_cell_neighbors`, `cluster_cells`, `compute_cell_umap`: compact copy-on-write H5ADs with sparse graphs, weighted Leiden labels, and 2D UMAP |
+| Downstream embedding analysis | `run_scanpy`, `run_episcanpy`, `run_snapatac2`: native neighbors, Leiden and UMAP with each API’s compatible graph/representation, exact axes and source identities |
 | Clustering evaluation | `evaluate_cell_clustering`: NMI, ARI, AMI, and Homogeneity for fixed clustering; arithmetic averaging for NMI/AMI |
 | Primary marker annotation | `annotate_scATAC_cell_types`: canonical matrix, exact groups and pinned context/resources; separate annotation authority and annotated H5AD |
 | Neutral matrix adoption | `adopt_scATAC_cell_by_features`: exact complete regulatory-feature reference and declared external value semantics |
@@ -1038,15 +1037,6 @@ remains separate.
 
 Run from the repository using the configured Python environment. Packaging and
 an installed console script remain deferred. API keys stay in the environment.
-For explicit offline inspection planning:
-
-```bash
-PYTHONPATH=src python -m agent run \
-  --request-id inspect-demo --request "Inspect this scATAC dataset" \
-  --workspace /path/to/workspace --input /path/to/cells.h5ad \
-  --planner deterministic --plan-only
-```
-
 For default semantic v4 LLM planning (the model shown is a prior
 Groq acceptance configuration, not an automatically selected default):
 
@@ -1061,8 +1051,7 @@ Omit `--wire-mode` for v4, or select `--wire-mode v3` for compatibility. Explici
 `--wire-mode v4` is also supported. `LLMPlanner(model)` defaults to v4, as does
 application-owned LLM planning when `planning_wire_mode` is omitted. Optional
 `--secondary-provider` and `--secondary-model` configure the single final
-failover. `--provider deterministic` remains a compatibility alias for explicit
-deterministic planning; deterministic mode rejects LLM wire/model settings.
+failover. Scientific planning has no deterministic CLI alternative or fallback.
 Use `--inputs-json /path/to/inputs.json` for additional structured scientific
 inputs; embedding also accepts `--species`, `--checkpoint`, and `--device`.
 Remove `--plan-only` to execute and compose supported verified outputs.

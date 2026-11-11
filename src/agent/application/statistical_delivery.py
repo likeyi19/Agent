@@ -10,7 +10,7 @@ from pathlib import Path
 import h5py
 
 from . import matrix_delivery as matrix
-from agent.tools.analysis import neighbors_delivery as io
+from agent.tools.analysis import h5ad_delivery as io
 
 CONTRACT = 'statistical-h5ad-delivery.v1'
 ROLE = 'statistical_export'

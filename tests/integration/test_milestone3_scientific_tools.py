@@ -11,6 +11,7 @@ import scipy.sparse as sp
 from agent.orchestration import (
     AgentRequest,
     AgentRuntime,
+    LLMPlanner,
     RunMode,
     RunStatus,
     StepStatus,
@@ -48,7 +49,7 @@ def test_real_inspect_scatac_executes_through_agent_runtime(tmp_path) -> None:
         mode=RunMode.EXECUTE,
     )
 
-    result = AgentRuntime().run(request)
+    result = AgentRuntime(planner=LLMPlanner(_InspectionModel())).run(request)
 
     assert result.status is RunStatus.SUCCEEDED
     assert result.planning_only is False
@@ -95,7 +96,7 @@ def test_real_inspect_scatac_plan_only_has_no_execution_or_mutation(tmp_path) ->
         mode=RunMode.PLAN_ONLY,
     )
 
-    result = AgentRuntime().run(request)
+    result = AgentRuntime(planner=LLMPlanner(_InspectionModel())).run(request)
 
     assert result.status is RunStatus.PLANNED
     assert result.planning_only is True
@@ -112,3 +113,10 @@ def test_real_inspect_scatac_plan_only_has_no_execution_or_mutation(tmp_path) ->
     assert after_stat.st_size == before_stat.st_size
     assert after_stat.st_mtime_ns == before_stat.st_mtime_ns
     json.dumps(result.to_dict())
+
+
+class _InspectionModel:
+    model_id = 'scripted-inspection'
+    def complete(self, **kwargs):
+        return json.dumps({'schema_version': 4, 'decision': {'kind': 'plan', 'steps': [
+            {'step_id': 'inspect', 'tool': 'inspect_scATAC', 'sources': [], 'control_dependencies': []}]}})

@@ -10,7 +10,6 @@ import numpy as np
 import pytest
 
 from agent.application import analysis_delivery, result_reading
-from test_analysis_export import accepted_export
 from test_dialogue_evidence import app, accepted, files, forbid_work
 
 
@@ -195,35 +194,3 @@ def test_new_coordinate_and_label_purposes_resolve_only_after_acceptance(app,tmp
     turn = replace(turn,status='run_succeeded',revision_id=None,completion_files=(),run_result_sha256=None)
     with pytest.raises(ValueError,match='not been accepted'):
         result_reading.visualization_inputs(app.sessions,'session',origin)
-
-
-def test_export_projection_uses_existing_inventory_without_preparing_or_qualifying_bytes(app, monkeypatch):
-    _, revision_id = accepted_export(app, monkeypatch)
-    guarded = forbid_work(app, monkeypatch)
-    monkeypatch.setattr('agent.application.matrix_delivery.MatrixDownloadPreparer.prepare',
-        lambda *a, **k: pytest.fail('Export description prepared download bytes.'))
-    revision = guarded.sessions.load('session').revisions[0]
-    output = revision.outputs[0]
-    target = dict(revision_id=revision_id, output_name=output.name,
-                  accepted_step_sha256=output.accepted_step_sha256, subject=None)
-    before = files(app)
-    descriptions = analysis_delivery.export_descriptions(guarded.sessions, 'session', (target,))
-    assert {d['artifact_type'] for d in descriptions} == {'scientific_analysis', 'scientific_integrated'}
-    assert all(d['status'] == 'available_for_preparation' and d['payload_checks'] == 'performed_on_download'
-               and d['target'] == 0 for d in descriptions)
-    integrated = next(d for d in descriptions if d['original_measurements'])
-    compact = next(d for d in descriptions if not d['original_measurements'])
-    assert integrated['size_bytes'] is None and compact['size_bytes'] > 0
-    assert not integrated['selected_result']['umap_coordinates']
-    assert not integrated['selected_result']['leiden_assignments']
-    assert integrated['original_feature_axis'] and not compact['original_feature_axis']
-    assert str(app.workspace_root) not in json.dumps(descriptions)
-    assert all(not {'sha256', 'run_id', 'path'} & set(d) for d in descriptions)
-    assert files(app) == before
-
-
-def test_export_projection_rejects_wrong_accepted_target(app, monkeypatch):
-    _, revision_id = accepted_export(app, monkeypatch)
-    with pytest.raises(ValueError, match='accepted output'):
-        analysis_delivery.export_descriptions(app.sessions, 'session', (
-            dict(revision_id=revision_id, output_name='output0', accepted_step_sha256='0'*64),))

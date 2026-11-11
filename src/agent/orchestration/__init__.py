@@ -36,7 +36,7 @@ from .executor import (
 )
 from .llm_planner import DEFAULT_PLANNING_WIRE_MODE, LLMPlanner, PlanningWireMode
 from .planning_scope import PlanningScope
-from .planner import DeterministicPlanner, Planner, PlannerError
+from .planner import Planner, PlannerError
 from .planning_model import (
     PlanningModel,
     PlanningModelError,
@@ -144,7 +144,6 @@ __all__ = [
     "CancellationStateCorruptionError",
     "CancellationStateVersionError",
     "ChannelMember",
-    "DeterministicPlanner",
     "ErrorCategory",
     "ErrorClassification",
     "ExecutionOutcome",

@@ -74,7 +74,7 @@ def group_rows(a, spec):
         if frame.columns.tolist()!=['cell_id','group']: raise ValueError('Grouping TSV requires exact cell_id/group columns')
         rows=list(frame.itertuples(index=False,name=None))
     elif 'analysis_path' in selected:
-        from . import embedding_analysis as analysis
+        from . import cell_result as analysis
         rows = analysis.source_bound_cluster_rows(a.obs_names, selected['analysis_path'],
             selected['analysis_sha256'], selected['source_sha256'])
     else:

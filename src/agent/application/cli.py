@@ -10,7 +10,6 @@ from typing import Sequence
 
 from agent.orchestration import (
     DEFAULT_PLANNING_WIRE_MODE,
-    DeterministicPlanner,
     PlanningWireMode,
     RunStoreError,
 )
@@ -54,13 +53,13 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--plan-only", action="store_true")
     run.add_argument(
         "--planner",
-        choices=("llm", "deterministic"),
+        choices=("llm",),
         help="New-run planning mode (default: llm).",
     )
     run.add_argument(
         "--provider",
-        choices=("deterministic", *BUILTIN_PLANNING_PROVIDER_IDS),
-        help="Explicit LLM provider; deterministic is a compatibility alias.",
+        choices=BUILTIN_PLANNING_PROVIDER_IDS,
+        help="Explicit LLM provider.",
     )
     run.add_argument("--model")
     run.add_argument(
@@ -120,35 +119,12 @@ def _strict_inputs(path: Path | None) -> dict[str, object]:
 
 
 def _planning_options(arguments: argparse.Namespace) -> dict[str, object]:
-    planner_mode = arguments.planner
     provider = arguments.provider
     model = arguments.model
     secondary_provider = arguments.secondary_provider
     secondary_model = arguments.secondary_model
     wire_mode = getattr(arguments, "wire_mode", None)
 
-    deterministic_alias = provider == "deterministic"
-    deterministic_mode = planner_mode == "deterministic" or (
-        planner_mode is None and deterministic_alias
-    )
-    if deterministic_mode:
-        conflicting = bool(
-            (provider is not None and provider != "deterministic")
-            or model is not None
-            or secondary_provider is not None
-            or secondary_model is not None
-            or wire_mode is not None
-        )
-        if conflicting:
-            raise _CliInputError(
-                "Deterministic planning cannot use LLM planning configuration."
-            )
-        return {"planner": DeterministicPlanner()}
-
-    if deterministic_alias:
-        raise _CliInputError(
-            "The deterministic provider alias conflicts with LLM planner mode."
-        )
     if provider is None and model is None:
         if secondary_provider is not None or secondary_model is not None:
             raise _CliInputError(

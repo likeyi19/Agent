@@ -8,7 +8,7 @@ from . import delivery_policy
 import h5py
 import numpy as np
 from agent.tools.analysis import annotation_contract as owner
-from agent.tools.analysis import neighbors_delivery as io
+from agent.tools.analysis import h5ad_delivery as io
 from . import matrix_delivery as matrix
 from .matrix_delivery import _string_block, _private_metadata, _redactions, _copy
 
@@ -219,7 +219,7 @@ def accepted_annotation(app, session_id, revision, origin, output, *, step_id=No
             or record['science_profile'] != owner.profile_sha(step.resolved_arguments, result['artifact_schema_version'])
             or record['verifier'] != owner.verifier(result['artifact_schema_version'])):
         raise ValueError('Unsupported annotation authority.')
-    spec = app._application.registry.accepted(step.tool_name)
+    spec = app._application.registry.get(step.tool_name)
     spec.result_contract.validate(result)
     key = 'manifest_path' if output is None else output.output_key
     if key not in {'manifest_path', 'manifest_sha256', 'annotated_h5ad_path'}:

@@ -249,6 +249,9 @@ _ERROR_POLICY_CATALOG: dict[str, ErrorPolicyEntry] = {
         "The planning provider could not be initialized from its configuration.",
         _USER,
     ),
+    "PLANNING_PROFILE_REQUIRED": ErrorPolicyEntry(
+        "Scientific planning requires a configured LLM planner.", _USER
+    ),
     "MISSING_REQUIRED_INPUT": ErrorPolicyEntry(
         "The request is missing a required structured input.", _USER
     ),

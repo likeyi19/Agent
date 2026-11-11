@@ -20,7 +20,6 @@ from agent.application import (
 )
 from agent.orchestration import (
     AgentRuntime,
-    DeterministicPlanner,
     LLMPlanner,
     PlanningModelError,
     PlanningModelProfile,
@@ -68,11 +67,11 @@ def _request(path: Path, request_id: str = "application-inspect") -> AgentReques
     )
 
 
-def _deterministic_application(
+def _scripted_application(
     workspace: Path, **kwargs: object
 ) -> ResearchAgentApplication:
     return ResearchAgentApplication(
-        workspace, planner=DeterministicPlanner(), **kwargs
+        workspace, planner=LLMPlanner(_ScriptedPlanningModel(*[_semantic_planning_response()] * 8)), **kwargs
     )
 
 
@@ -287,13 +286,12 @@ def test_missing_primary_profile_fails_before_durable_state_creation(
 
     assert raised.value.error.code == "PLANNING_MODEL_PROFILE_REQUIRED"
     assert tuple(application._workspace.run_state.iterdir()) == ()
-    assert not isinstance(application.runtime.planner, DeterministicPlanner)
 
 
 def test_explicit_planner_is_authoritative_and_conflicting_profiles_are_rejected(
     tmp_path: Path,
 ) -> None:
-    planner = DeterministicPlanner()
+    planner = LLMPlanner(_ScriptedPlanningModel(_semantic_planning_response()))
     application = ResearchAgentApplication(tmp_path / "explicit", planner=planner)
 
     assert application.runtime.planner is planner
@@ -384,8 +382,12 @@ def test_application_preserves_sanitized_provider_construction_errors(
     assert secret not in raised.value.error.message
 
 
-def test_low_level_runtime_default_remains_deterministic() -> None:
-    assert isinstance(AgentRuntime().planner, DeterministicPlanner)
+def test_low_level_runtime_requires_a_planner_for_new_science() -> None:
+    runtime = AgentRuntime()
+    assert runtime.planner is None
+    result = runtime.run(AgentRequest("no-planner", "Inspect data", {}))
+    assert result.status is RunStatus.FAILED
+    assert result.errors[0].code == "PLANNING_PROFILE_REQUIRED"
 
 
 def test_figureless_application_run_is_verified_json_safe_and_nonmutating(
@@ -393,7 +395,7 @@ def test_figureless_application_run_is_verified_json_safe_and_nonmutating(
 ) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     calls: list[str] = []
-    application = _deterministic_application(
+    application = _scripted_application(
         tmp_path / "workspace", registry=_counting_registry(calls)
     )
     request = _request(source)
@@ -420,7 +422,7 @@ def test_terminal_resume_reuses_verified_reporting_without_scientific_execution(
 ) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     calls: list[str] = []
-    application = _deterministic_application(
+    application = _scripted_application(
         tmp_path / "workspace", registry=_counting_registry(calls)
     )
     first = application.run(_request(source, "resume-success"))
@@ -440,7 +442,7 @@ def test_duplicate_run_preserves_run_store_semantics_and_requires_resume(
     tmp_path: Path,
 ) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
-    application = _deterministic_application(tmp_path / "workspace")
+    application = _scripted_application(tmp_path / "workspace")
     request = _request(source, "duplicate-run")
     first = application.run(request)
 
@@ -453,7 +455,7 @@ def test_duplicate_run_preserves_run_store_semantics_and_requires_resume(
 def test_missing_report_is_rebuilt_without_rerunning_science(tmp_path: Path) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     calls: list[str] = []
-    application = _deterministic_application(
+    application = _scripted_application(
         tmp_path / "workspace", registry=_counting_registry(calls)
     )
     first = application.run(_request(source, "rebuild-report"))
@@ -470,7 +472,7 @@ def test_missing_report_is_rebuilt_without_rerunning_science(tmp_path: Path) -> 
 def test_missing_evidence_is_rebuilt_without_rerunning_science(tmp_path: Path) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     calls: list[str] = []
-    application = _deterministic_application(
+    application = _scripted_application(
         tmp_path / "workspace", registry=_counting_registry(calls)
     )
     first = application.run(_request(source, "rebuild-evidence"))
@@ -486,7 +488,7 @@ def test_missing_evidence_is_rebuilt_without_rerunning_science(tmp_path: Path) -
 def test_tampered_evidence_fails_closed_without_rerunning_science(tmp_path: Path) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     calls: list[str] = []
-    application = _deterministic_application(
+    application = _scripted_application(
         tmp_path / "workspace", registry=_counting_registry(calls)
     )
     first = application.run(_request(source, "tampered-evidence"))
@@ -504,7 +506,7 @@ def test_tampered_evidence_fails_closed_without_rerunning_science(tmp_path: Path
 def test_tampered_report_fails_closed_without_rerunning_science(tmp_path: Path) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     calls: list[str] = []
-    application = _deterministic_application(
+    application = _scripted_application(
         tmp_path / "workspace", registry=_counting_registry(calls)
     )
     first = application.run(_request(source, "tampered-report"))
@@ -523,7 +525,7 @@ def test_tampered_report_fails_closed_without_rerunning_science(tmp_path: Path) 
 def test_plan_only_has_zero_execution_and_zero_reporting(tmp_path: Path) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
     calls: list[str] = []
-    application = _deterministic_application(
+    application = _scripted_application(
         tmp_path / "workspace", registry=_counting_registry(calls)
     )
     request = replace(_request(source, "plan-only"), mode=RunMode.PLAN_ONLY)
@@ -539,7 +541,7 @@ def test_plan_only_has_zero_execution_and_zero_reporting(tmp_path: Path) -> None
 def test_planning_failure_preserves_runtime_error_and_skips_reporting(
     tmp_path: Path,
 ) -> None:
-    application = _deterministic_application(tmp_path / "workspace")
+    application = _scripted_application(tmp_path / "workspace")
     request = AgentRequest("unsupported", "Write a poem.", {})
 
     result = application.run(request)
@@ -568,7 +570,7 @@ def test_execution_failure_and_terminal_resume_preserve_sanitized_runtime_error(
             for spec in (default.get(name) for name in default.names())
         )
     )
-    application = _deterministic_application(
+    application = _scripted_application(
         tmp_path / "workspace", registry=registry
     )
 
@@ -620,7 +622,7 @@ def test_preflight_failure_executes_no_tool_and_creates_no_reporting(
 def test_reserved_or_overwriting_request_inputs_are_rejected(
     tmp_path: Path, inputs: dict[str, object]
 ) -> None:
-    application = _deterministic_application(tmp_path / "workspace")
+    application = _scripted_application(tmp_path / "workspace")
 
     with pytest.raises(ApplicationServiceError) as caught:
         application.run(AgentRequest("invalid", "Inspect this dataset.", inputs))
@@ -630,7 +632,7 @@ def test_reserved_or_overwriting_request_inputs_are_rejected(
 
 def test_incomplete_evidence_destination_fails_as_output_conflict(tmp_path: Path) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
-    application = _deterministic_application(tmp_path / "workspace")
+    application = _scripted_application(tmp_path / "workspace")
     run = application._workspace.run_paths("conflict:run")
     (run.evidence / "partial.tmp").write_text("partial", encoding="utf-8")
 
@@ -643,7 +645,7 @@ def test_incomplete_evidence_destination_fails_as_output_conflict(tmp_path: Path
 
 def test_active_composition_lock_fails_safely(tmp_path: Path) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
-    application = _deterministic_application(tmp_path / "workspace")
+    application = _scripted_application(tmp_path / "workspace")
     first = application.run(_request(source, "active-composer"))
     run = application._workspace.run_paths(first.run_id)
 
@@ -657,7 +659,7 @@ def test_active_composition_lock_fails_safely(tmp_path: Path) -> None:
 
 def test_cancel_delegates_to_runtime_receipt(tmp_path: Path) -> None:
     source = _tiny_h5ad(tmp_path / "tiny.h5ad")
-    producer = _deterministic_application(tmp_path / "workspace")
+    producer = _scripted_application(tmp_path / "workspace")
     completed = producer.run(_request(source, "terminal-cancel"))
     application = ResearchAgentApplication(tmp_path / "workspace")
 
@@ -687,7 +689,7 @@ def test_cooperative_runtime_cancellation_produces_no_reporting(tmp_path: Path) 
             for spec in (default.get(name) for name in default.names())
         )
     )
-    application = _deterministic_application(
+    application = _scripted_application(
         tmp_path / "workspace", registry=registry
     )
     request = _request(source, "cancel-running")
@@ -750,6 +752,8 @@ def test_interrupted_durable_run_resumes_without_replanning_completed_step(
             else payload["decision"]["steps"]
         )
         first = steps[0]
+        if wire_mode is PlanningWireMode.V4:
+            first = dict(first, sources=[dict(target="dataset", source=dict(kind="input", input="input_path"))])
         steps[:] = [dict(first, step_id="inspect-1"), dict(first, step_id="inspect-2")]
         model = _ScriptedPlanningModel(json.dumps(payload))
         planner = LLMPlanner(model, wire_mode=wire_mode)

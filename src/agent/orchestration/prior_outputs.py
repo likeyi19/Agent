@@ -71,7 +71,7 @@ def references(plan):
 
 
 def source_port(registry, tool_name, name):
-    semantic = registry.accepted(tool_name).semantic_planning
+    semantic = registry.get(tool_name).semantic_planning
     ports = [] if semantic is None else [p for p in semantic.producer_ports if p.name == name]
     if len(ports) != 1:
         raise AuthorityError('Unknown historical semantic output port.')
@@ -92,7 +92,7 @@ def bind_output(store, registry, run_id, step_id, port_name):
         # This is exact accepted-file reuse, not a schema-2 publication upgrade.
         # The consumer retains its native scientific eligibility checks.
         from agent.schemas.orchestration import _serialize
-        registry.accepted(stored.tool_name).result_contract.validate(_serialize(stored.result))
+        registry.get(stored.tool_name).result_contract.validate(_serialize(stored.result))
         sha = stored.result[port.accepted_file_sha256_field]
         path = stored.result[port.members[0].field_name]
         from pathlib import Path
@@ -170,7 +170,7 @@ def channel_for(binding, tool_name, target_port, registry):
     if channel.required_lineage is not None:
         # A fixed owner-qualified source role survives acceptance. An unresolved
         # branch role still cannot be invented from step order or a path.
-        semantic = registry.accepted(binding.tool_name).semantic_planning
+        semantic = registry.get(binding.tool_name).semantic_planning
         producer = source_port(registry, binding.tool_name, binding.source_port)
         sources = [p for p in semantic.consumer_ports if p.name == producer.lineage_from_port]
         if len(sources) != 1 or sources[0].required_lineage != channel.required_lineage:
@@ -182,7 +182,7 @@ def validate_step_references(step, registry, *, integrity=True):
     refs = {k: a for k, a in step.arguments.items() if isinstance(a, PriorOutputRef)}
     if not refs:
         return
-    semantic = registry.accepted(step.tool_name).semantic_planning
+    semantic = registry.get(step.tool_name).semantic_planning
     covered = set()
     for port in (() if semantic is None else semantic.consumer_ports):
         names = {m.field_name for m in port.members}
@@ -240,7 +240,7 @@ def binding_for_locator(locator, store, registry):
     step, _, _ = _accepted_step(store, locator.run_id, locator.step_id)
     if accepted_step_digest(step) != locator.accepted_step_sha256:
         raise AuthorityError('Active locator accepted-step anchor changed.')
-    semantic = registry.accepted(step.tool_name).semantic_planning
+    semantic = registry.get(step.tool_name).semantic_planning
     ports = [] if semantic is None else [p for p in semantic.producer_ports
         if locator.output_key in {m.field_name for m in p.members}
              and not (p.name=='dataset' and any(m.name=='sha256' and m.field_name==locator.output_key for m in p.members))]
@@ -269,7 +269,7 @@ def _optional_member_binding(run_id, step_id, output_key, anchor, store, registr
     authority = None
     if stored.verification.artifact_authority is not None or step_id in qualified:
         _, authority, _, _ = _accepted(store, run_id, step_id)
-    semantic = registry.accepted(stored.tool_name).semantic_planning
+    semantic = registry.get(stored.tool_name).semantic_planning
     ports = [] if semantic is None else [port for port in semantic.producer_ports
         if output_key in {member.field_name for member in port.members}
         and not (port.name=='dataset' and any(m.name=='sha256' and m.field_name==output_key for m in port.members))]
@@ -302,7 +302,7 @@ def matrix_dataset_binding(binding, store, registry):
     """
     from agent.tools.scientific_authority import tool_kind
     if binding.verification_mode!='scientific-authority.v2' or binding.source_port!='matrix':return None
-    spec=registry.accepted(binding.tool_name)
+    spec=registry.get(binding.tool_name)
     legacy=tool_kind(binding.tool_name,registry)=='matrix'
     native=spec.scientific_authority is not None and spec.scientific_authority.kind.startswith('native_')
     if not legacy and not native:return None

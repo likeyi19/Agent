@@ -29,8 +29,9 @@ def test_native_kwargs_cannot_supply_code_or_unbound_objects(function, kw):
 def test_values_are_not_repaired_and_omission_stays_omission():
     for name, kw in [('pp.normalize_total', {'target_sum':-1}), ('tl.leiden', {'resolution':-7}),
                      ('pp.highly_variable_genes', {'n_top_genes':-3})]:
-        assert owner.SCANPY.native_arguments(dict(function_name=name, kwargs=kw)) == kw
-        assert owner.SCANPY.native_arguments(dict(function_name=name)) == {}
+        package = owner.SNAPATAC2 if name == 'tl.leiden' else owner.SCANPY
+        assert package.native_arguments(dict(function_name=name, kwargs=kw)) == kw
+        assert package.native_arguments(dict(function_name=name)) == {}
     assert MACS3.native_arguments(dict(function_name='pileup', kwargs={'extsize':-1})) == {'extsize':-1}
     assert MACS3.parameter_prerequisites(dict(function_name='cmbreps')) == ('control_path',)
     with pytest.raises(ValueError): MACS3.native_arguments(dict(function_name='pileup',kwargs={'ofile':'/tmp/escape'}))
@@ -151,7 +152,7 @@ def test_bed_strands_survive_delivery_without_admitting_formulas():
 def test_reuploaded_native_export_delivers_again_without_science(tmp_path,has_x):
     import hashlib
     from agent.application.statistical_delivery import create_statistical_export
-    from agent.tools.analysis.neighbors_delivery import EXPORT_KEY
+    from agent.tools.analysis.h5ad_delivery import EXPORT_KEY
     a=ad.AnnData(X=np.ones((3,2)) if has_x else None,obs=pd.DataFrame(index=['a','b','c']),var=pd.DataFrame(index=['p','q']))
     a.obsm['X_pca']=np.arange(6).reshape(3,2)
     paths=[tmp_path/(str(i)+'.h5ad') for i in range(3)];a.write_h5ad(paths[0])

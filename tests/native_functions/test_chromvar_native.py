@@ -146,16 +146,6 @@ def test_structured_native_members_use_existing_grounding():
     assert _bind_arguments(build_default_tool_registry(),text,{},decision.arguments)=={'kwargs':{'bootstrap_error':False,'bootstrap_samples':25}}
 
 
-def test_historical_measurement_choice_replays_without_restricting_new_values():
-    from agent.application.dialogue_execution import _bind_arguments
-    from agent.application.turn_decisions import ScalarChoiceArgument, ScopedArgument, IntentError
-    from agent.orchestration import build_default_tool_registry
-    registry=build_default_tool_registry(); text='insertion counts'
-    declaration=ScalarChoiceArgument('run_chromvar','matrix_semantics',text,0,len(text),'insertion_counts')
-    assert _bind_arguments(registry,text,{},(declaration,),historical=True)=={'matrix_semantics':'insertion_counts'}
-    with pytest.raises(IntentError):_bind_arguments(registry,text,{},(declaration,))
-    current='signed_transformed'
-    assert _bind_arguments(registry,current,{},(ScopedArgument('run_chromvar','matrix_semantics',current,0,len(current)),))=={'matrix_semantics':current}
 
 
 def test_variability_uses_explicit_assay_slots_without_metadata_certificate(source,tmp_path):

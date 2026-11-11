@@ -64,8 +64,8 @@ RESULT_LIMITATIONS = {
     'build_scATAC_cell_by_features': 'Matrix dimensions and count summaries describe structure and value semantics, not biological quality.',
     'adapt_epizoo_species': 'Model state and optimizer updates distinguish initialization from historical trained adaptation. Initialization performs native parameter transfer and zero target optimizer updates. Usable mapping fraction divides targets overlapping the exact retained reference vocabulary by all target features; liftOver success alone is insufficient. Automatic thresholds are operational preferences, not biological performance thresholds. An unavailable mapping assessment is not zero measured coverage.',
     'posttrain_epizoo_model': 'Post-training warm-starts the exact initialized checkpoint with a fresh optimizer and scheduler. Attempted steps, applied optimizer updates and AMP skips are distinct. Finite losses and completed updates do not establish biological convergence or better embeddings. Independent UMAP layouts cannot establish improvement.',
-    'cluster_cells': 'Clusters are computational groups, not independently validated cell identities.',
-    'compute_cell_umap': 'UMAP separation alone does not establish biological identity or biological change.',
+
+
     'inspect_scATAC': 'Inspection describes the stored matrix structure; it does not establish biological quality.',
 }
 
@@ -260,7 +260,7 @@ def _step_summary(sessions, run, step, planned, value):
     projection = _TOOL_PROJECTIONS.get(step.tool_name)
     if projection is None:
         raise _Unsupported('unsupported_tool')
-    spec = sessions._application.registry.accepted(step.tool_name)
+    spec = sessions._application.registry.get(step.tool_name)
     if (frozenset(spec.result_contract.required_fields) != projection.contract_fields
             or spec.recovery_policy_version != projection.recovery_identity):
         raise _Unsupported('unsupported_result_contract')
@@ -290,10 +290,6 @@ def _step_summary(sessions, run, step, planned, value):
     if any(k not in facts or k not in step.result or _bytes(facts[k]) != _bytes(step.result[k])
            for k in projection.fact_fields):
         raise _Unavailable('evidence_fact_mismatch')
-    if step.tool_name == 'compute_cell_umap' and (
-            'clustering_present' in facts or 'clustering_present' in step.result):
-        if facts.get('clustering_present') is not False or step.result.get('clustering_present') is not False:
-            raise _Unavailable('evidence_fact_mismatch')
     if len(facts) > MAX_FIELDS:
         raise _Unavailable('evidence_field_limit')
     workflow = _one([s for s in value['workflow']['ordered_steps'] if s['step_id'] == step.step_id])
@@ -302,116 +298,10 @@ def _step_summary(sessions, run, step, planned, value):
     return spec, projection, index, evidence
 
 
-def _clustering_source(run, step, planned):
-    """UMAP attribution requires its exact accepted same-plan clustering binding."""
-    if step.tool_name not in ('cluster_cells', 'compute_cell_umap'):
-        return None
-    if step.tool_name == 'compute_cell_umap':
-        reference = planned.arguments.get('analysis_path')
-        if not isinstance(reference, StepOutputRef) or reference.output_key != 'analysis_path':
-            return None
-        source_step = _one([s for s in run.steps if s.step_id == reference.step_id])
-        source_plan = _one([s for s in run.plan.steps if s.step_id == reference.step_id])
-        if source_step.tool_name != 'cluster_cells' or source_plan.tool_name != 'cluster_cells':
-            return None
-        if (reference.step_id not in planned.depends_on or source_step.result is None
-                or step.resolved_arguments.get('analysis_path') != source_step.result.get('analysis_path')):
-            raise _Unavailable('clustering_source_binding_mismatch')
-        step, planned = source_step, source_plan
-    return step, planned
 
 
-def _clustering_parameter_facts(sessions, run, step, planned, value):
-    """Project recorded values only; defaults never come from current code."""
-    if step.tool_name not in ('cluster_cells', 'compute_cell_umap'):
-        return ()
-    if step.tool_name == 'compute_cell_umap' and step.result.get('clustering_present') is False:
-        return tuple(EvidenceFact(name, 'unavailable', reason='clustering_not_performed')
-                     for name in ('clustering_parameters', 'clustering_resolution_origin'))
-    source = _clustering_source(run, step, planned)
-    if source is None:
-        return tuple(EvidenceFact(name, 'unavailable', reason='exact_clustering_source_not_recorded')
-                     for name in ('clustering_parameters', 'clustering_resolution_origin'))
-    step, planned = source
-    spec, _, index, evidence = _step_summary(sessions, run, step, planned, value)
-    fields = evidence['facts']
-    explicit = 'resolution' in step.resolved_arguments
-    if explicit != ('resolution' in planned.arguments):
-        raise _Unavailable('clustering_arguments_mismatch')
-    if explicit:
-        argument = step.resolved_arguments['resolution']
-        try:
-            spec.optional_arguments['resolution'].validate('resolution', planned.arguments['resolution'])
-            spec.optional_arguments['resolution'].validate('resolution', argument)
-        except (ValueError, TypeError) as exc:
-            raise _Unavailable('clustering_arguments_invalid') from exc
-        if (isinstance(argument, (PriorOutputRef, StepOutputRef))
-                or _bytes(argument) != _bytes(planned.arguments['resolution'])
-                or argument != fields['resolution']):
-            raise _Unavailable('clustering_arguments_mismatch')
-    run_index = _one([i for i, item in enumerate(run.steps) if item.step_id == step.step_id])
-    return (
-        EvidenceFact('clustering_parameters', 'available',
-            {'resolution': fields['resolution'], 'random_seed': fields['random_seed']},
-            f'/steps/{index}/facts', reason='accepted_clustering_summary'),
-        EvidenceFact('clustering_resolution_origin', 'available',
-            'explicit_execution_argument' if explicit else 'existing_owner_default',
-            f'/steps/{run_index}/resolved_arguments', reason='accepted_execution_argument_presence',
-            artifact_sha256=digest(run.to_dict()), artifact_name='accepted_run_result'),
-    )
 
 
-def _clustering_neighbors_facts(sessions, run, step, planned):
-    """Recorded qualified input identity, without owner work or artifact reads.
-
-    Equality means the same accepted graph publication/population, not matching
-    cluster labels. A literal path or an unqualified legacy graph supplies no
-    compatibility evidence.
-    """
-    unclustered_umap = step.tool_name == 'compute_cell_umap' and step.result.get('clustering_present') is False
-    source = (step, planned) if unclustered_umap else _clustering_source(run, step, planned)
-    if source is None:
-        return ()
-    step, planned = source
-    reference = planned.arguments.get('analysis_path')
-    from agent.orchestration.prior_outputs import bind_output, validate_binding
-    from agent.schemas.verification_authority import AuthorityError
-    store, registry = sessions._application.run_store, sessions._application.registry
-    if isinstance(reference, StepOutputRef):
-        producer = _one([s for s in run.steps if s.step_id == reference.step_id])
-        if producer.tool_name != 'build_cell_neighbors':
-            return ()
-        if reference.step_id not in planned.depends_on or reference.output_key != 'analysis_path':
-            raise _Unavailable('clustering_neighbors_binding_mismatch')
-        # Existing unqualified results can still supply their independent facts.
-        if producer.verification.artifact_authority is None:
-            return ()
-        try:
-            binding = bind_output(store, registry, run.run_id, reference.step_id, 'neighbors')
-        except AuthorityError as exc:
-            raise _Unavailable('clustering_neighbors_authority_mismatch') from exc
-        consumption = 'same_plan_qualified_output'
-    elif isinstance(reference, PriorOutputRef):
-        binding = reference.binding
-        if (binding.tool_name != 'build_cell_neighbors' or binding.source_port != 'neighbors'
-                or reference.output_key != 'analysis_path'):
-            raise _Unavailable('clustering_neighbors_binding_mismatch')
-        try:
-            producer = validate_binding(binding, store=store, registry=registry)
-        except AuthorityError as exc:
-            raise _Unavailable('clustering_neighbors_authority_mismatch') from exc
-        consumption = 'qualified_historical_output'
-    else:
-        return ()
-    if step.resolved_arguments.get('analysis_path') != producer.result.get('analysis_path'):
-        raise _Unavailable('clustering_neighbors_binding_mismatch')
-    index = _one([i for i, s in enumerate(run.plan.steps) if s.step_id == step.step_id])
-    pointer = f'/plan/steps/{index}/arguments/analysis_path'
-    return tuple(EvidenceFact(name, 'available', value, pointer,
-        artifact_name='accepted_run_result', artifact_sha256=digest(run.to_dict()))
-        for name, value in (
-            ('umap_neighbors_identity_sha256' if unclustered_umap else 'clustering_neighbors_identity_sha256', digest(binding.to_dict())),
-            ('umap_neighbors_consumption' if unclustered_umap else 'clustering_neighbors_consumption', consumption)))
 
 
 def _selection_parameter_facts(sessions, run, step, planned, evidence):
@@ -425,7 +315,7 @@ def _selection_parameter_facts(sessions, run, step, planned, evidence):
     # readable, but cannot establish the additional parameter-origin facts.
     if not isinstance(effective, Mapping) or set(effective) != set(names):
         return ()
-    spec = sessions._application.registry.accepted(step.tool_name)
+    spec = sessions._application.registry.get(step.tool_name)
     try:
         for name in names:
             declaration = name in planned.arguments
@@ -458,11 +348,6 @@ def _explicit_user_parameter_facts(sessions, state, run, step, planned):
     was supplied. Follow only recorded continuation links; conversation order or
     matching values in unrelated turns confer no attribution.
     """
-    if step.tool_name == 'compute_cell_umap':
-        source = _clustering_source(run, step, planned)
-        if source is None:
-            return ()
-        step, planned = source
     turn = _one([t for t in state.turns if t.run_id == run.run_id])
     matches = [i for i in state.interactions if i.turn_id == turn.turn_id]
     if not matches:
@@ -509,7 +394,7 @@ def _explicit_user_parameter_facts(sessions, state, run, step, planned):
                 if source not in scope_origins:
                     scope_origins.append(source)
             values = _bind_arguments(sessions._application.registry, source.utterance,
-                _serialize(record.get('inputs', {})), arguments, field_choices=fields, historical=True)
+                _serialize(record.get('inputs', {})), arguments, field_choices=fields)
             if values != _serialize(record.get('inputs', {})):
                 raise ValueError('Declarations differ from their admitted binding.')
             for declaration in arguments:
@@ -566,8 +451,6 @@ def _project(sessions, state, revision, output, fields, detail):
     spec, projection, index, evidence = _step_summary(sessions, run, step, planned, value)
     facts = evidence['facts']
     parameters = {fact.field: fact for fact in (
-        *_clustering_parameter_facts(sessions, run, step, planned, value),
-        *_clustering_neighbors_facts(sessions, run, step, planned),
         *_selection_parameter_facts(sessions, run, step, planned, evidence),
         *_explicit_user_parameter_facts(sessions, state, run, step, planned))}
     if len(set(facts) | set(parameters)) > MAX_FIELDS:
@@ -857,7 +740,7 @@ METHOD_FIELDS = frozenset(('parameters', 'function_name', 'software_versions',
 def field_semantics(registry, tool, field):
     """Shared reviewed meanings for R5 and interactive evidence; no new facts."""
     from agent.report.analysis_report import _FIELD_LABELS, _REPORT_FIELDS
-    spec = registry.accepted(tool)
+    spec = registry.get(tool)
     semantics = {}
     if field in METHOD_FIELDS:
         semantics.update(kind='recorded_method_configuration',
@@ -961,11 +844,11 @@ def public_citation_source(source):
 # Unlisted tools continue to use their existing reviewed report fields.
 RESULT_SUMMARY_FIELDS = {
     'inspect_scATAC': ('n_cells', 'n_features', 'x_storage_type', 'nnz', 'density'),
-    'pca_embed_cells': ('n_cells', 'n_features', 'embedding_dim', 'representation'),
+
     'epizoo_embed_cells': ('n_cells', 'embedding_dim', 'species'),
-    'build_cell_neighbors': ('n_cells', 'n_neighbors', 'metric'),
-    'cluster_cells': ('n_cells', 'n_clusters'),
-    'compute_cell_umap': ('n_cells', 'n_components'),
+
+
+
     'annotate_scATAC_cell_types': ('n_cells', 'n_groups', 'assigned_cells',
         'unassigned_cells', 'ambiguous_cells', 'group_summary', 'groups_omitted', 'validation_state'),
 }

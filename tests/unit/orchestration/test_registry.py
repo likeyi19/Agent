@@ -26,6 +26,7 @@ def registry():
 
 def test_default_registry_contains_exact_allowlist(registry) -> None:
     assert registry.names() == (
+        "invoke_native_function",
         "inspect_scATAC",
         "compute_motif_accessibility",
         "run_motifmatchr",
@@ -42,9 +43,6 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
         "run_archr",
         "call_scATAC_peaks",
         "epizoo_embed_cells",
-        "build_cell_neighbors",
-        "cluster_cells",
-        "compute_cell_umap",
         "evaluate_cell_clustering",
         "transfer_cell_labels",
 
@@ -68,9 +66,9 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
     )
     assert registry.contains("inspect_scATAC")
     assert registry.contains("epizoo_embed_cells")
-    assert registry.contains("build_cell_neighbors")
-    assert registry.contains("cluster_cells")
-    assert registry.contains("compute_cell_umap")
+    assert not registry.contains("build_cell_neighbors")
+    assert not registry.contains("cluster_cells")
+    assert not registry.contains("compute_cell_umap")
     assert registry.contains("evaluate_cell_clustering")
     assert registry.contains("transfer_cell_labels")
     assert not registry.contains("arbitrary_python")
@@ -81,20 +79,8 @@ def test_unknown_tool_is_rejected(registry) -> None:
         registry.get("arbitrary_python")
 
 
-@pytest.mark.parametrize('value', [0, -0.7, float('nan'), float('inf'), float('-inf'), True, '0.7'])
-def test_clustering_resolution_argument_uses_existing_owner_constraints(registry, value):
-    with pytest.raises(ToolArgumentError):
-        registry.validate_arguments('cluster_cells',
-            dict(analysis_path='neighbors.h5ad', output_dir='/tmp/clusters', resolution=value))
 
 
-@pytest.mark.parametrize('value', [0.7, 1, 2.5])
-def test_clustering_resolution_argument_retains_valid_types_and_owner_default(registry, value):
-    arguments = dict(analysis_path='neighbors.h5ad', output_dir='/tmp/clusters', resolution=value)
-    assert registry.validate_arguments('cluster_cells', arguments) == arguments
-    assert inspect.signature(registry.get('cluster_cells').function).parameters['resolution'].default == 1.0
-    omitted = dict(analysis_path='neighbors.h5ad', output_dir='/tmp/clusters')
-    assert registry.validate_arguments('cluster_cells', omitted) == omitted
 
 
 def test_valid_inspection_arguments(registry) -> None:
@@ -215,32 +201,8 @@ def test_step_output_ref_is_accepted_before_resolution(registry) -> None:
 
 
 def test_valid_downstream_arguments_and_choices(registry) -> None:
-    neighbors = registry.validate_arguments(
-        "build_cell_neighbors",
-        {
-            "embedding_path": "embedding.npy",
-            "cell_ids_path": "ids.txt",
-            "output_dir": "output",
-            "n_neighbors": 15,
-            "metric": "cosine",
-            "random_seed": 0,
-            "overwrite": False,
-        },
-    )
-    assert neighbors["metric"] == "cosine"
-    registry.validate_arguments(
-        "cluster_cells",
-        {"analysis_path": "neighbors.h5ad", "output_dir": "output", "resolution": 1},
-    )
-    registry.validate_arguments(
-        "compute_cell_umap",
-        {
-            "analysis_path": "clustered.h5ad",
-            "output_dir": "output",
-            "min_dist": 0.5,
-            "spread": 1,
-        },
-    )
+    for fn in ('pp.knn', 'tl.leiden', 'tl.umap'):
+        registry.validate_arguments('run_snapatac2', dict(input_path='source.h5ad', output_dir='out', function_name=fn))
     evaluation = registry.validate_arguments(
         "evaluate_cell_clustering",
         {
@@ -254,16 +216,6 @@ def test_valid_downstream_arguments_and_choices(registry) -> None:
     spec = registry.get("evaluate_cell_clustering")
     assert spec.recovery_policy_version == "evaluate-cell-clustering-v1"
     assert spec.retryable_error_codes == frozenset()
-    with pytest.raises(ToolArgumentError, match="must be one of"):
-        registry.validate_arguments(
-            "build_cell_neighbors",
-            {
-                "embedding_path": "embedding.npy",
-                "cell_ids_path": "ids.txt",
-                "output_dir": "output",
-                "metric": "manhattan",
-            },
-        )
 
 
 def test_registry_contracts_match_current_public_signatures(registry) -> None:
@@ -309,6 +261,7 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
     assert {
         name: registry.get(name).recovery_policy_version for name in registry.names()
     } == {
+        "invoke_native_function": "native-callable-v1",
         "compute_motif_accessibility": "chromvar-native-v1",
         "run_motifmatchr": "motifmatchr-native-v1",
         "run_chromvar": "chromvar-native-statistics-v1",
@@ -339,9 +292,6 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
         "adapt_epizoo_species": "adapt-epizoo-species-v1",
         "posttrain_epizoo_model": "adapt-epizoo-species-v1",
         "epizoo_embed_cells": "epizoo-embed-cells-v2",
-        "build_cell_neighbors": "build-cell-neighbors-v1",
-        "cluster_cells": "cluster-cells-v1",
-        "compute_cell_umap": "compute-cell-umap-v1",
         "evaluate_cell_clustering": "evaluate-cell-clustering-v1",
         "transfer_cell_labels": "transfer-cell-labels-v1",
 
@@ -459,6 +409,8 @@ def test_result_contracts_validate_lightweight_real_shapes(registry) -> None:
         "var_names_sample": ["peak-1", "peak-2", "peak-3"],
     }
     embedding = {
+        "analysis_path": "/output/embeddings.h5ad",
+        "analysis_sha256": "a" * 64,
         "status": "success",
         "input_path": "/data/input.h5ad",
         "embedding_path": "/output/embeddings.npy",
@@ -472,57 +424,6 @@ def test_result_contracts_validate_lightweight_real_shapes(registry) -> None:
         "species": "mouse",
         "checkpoint_path": "/models/epizoo.pth",
         "device": "cuda:0",
-    }
-    versions = {"scanpy": "1.11.5"}
-    neighbors = {
-        "status": "success",
-        "embedding_path": "/output/embeddings.npy",
-        "cell_ids_path": "/output/obs_names.txt",
-        "analysis_path": "/output/neighbors.h5ad",
-        "n_cells": 2,
-        "embedding_dim": 512,
-        "n_neighbors": 1,
-        "metric": "euclidean",
-        "neighbors_method": "umap",
-        "transformer": "none",
-        "random_seed": 0,
-        "connectivities_nnz": 2,
-        "distances_nnz": 2,
-        "finite": True,
-        "cell_order_preserved": True,
-        "backend": "Scanpy",
-        "software_versions": versions,
-    }
-    clustering = {
-        "status": "success",
-        "input_analysis_path": "/output/neighbors.h5ad",
-        "analysis_path": "/output/clustered.h5ad",
-            "analysis_sha256": "a" * 64,
-        "n_cells": 2,
-        "n_clusters": 1,
-        "cluster_key": "leiden",
-        "algorithm": "leiden",
-        "resolution": 1.0,
-        "random_seed": 0,
-        "cell_order_preserved": True,
-        "backend": "Scanpy",
-        "software_versions": versions,
-    }
-    umap = {
-        "status": "success",
-        "input_analysis_path": "/output/clustered.h5ad",
-        "analysis_path": "/output/umap.h5ad",
-        "n_cells": 2,
-        "n_components": 2,
-        "umap_key": "X_umap",
-        "coordinate_dtype": "float32",
-        "finite": True,
-        "min_dist": 0.5,
-        "spread": 1.0,
-        "random_seed": 0,
-        "cell_order_preserved": True,
-        "backend": "Scanpy",
-        "software_versions": versions,
     }
     evaluation = {
         "status": "success",
@@ -550,18 +451,12 @@ def test_result_contracts_validate_lightweight_real_shapes(registry) -> None:
 
     registry.validate_result("inspect_scATAC", inspection)
     registry.validate_result("epizoo_embed_cells", embedding)
-    registry.validate_result("build_cell_neighbors", neighbors)
-    registry.validate_result("cluster_cells", clustering)
-    registry.validate_result("compute_cell_umap", umap)
     registry.validate_result("evaluate_cell_clustering", evaluation)
 
     assert registry.get("inspect_scATAC").result_contract.name == "ScATACInspection"
     assert (
         registry.get("epizoo_embed_cells").result_contract.name
         == "EpiZooEmbeddingToolResult"
-    )
-    assert registry.get("build_cell_neighbors").result_contract.name == (
-        "CellNeighborsToolResult"
     )
 
 
@@ -651,14 +546,6 @@ def test_builtin_exception_classification(registry, exception, category, code) -
     assert error.recoverable is False
 
 
-@pytest.mark.parametrize("exception", [TypeError("bad type"), ValueError("bad value")])
-def test_analysis_validation_exception_is_classified_as_invalid_argument(
-    registry, exception
-) -> None:
-    error = registry.classify_exception("build_cell_neighbors", exception)
-    assert error.category is ErrorCategory.USER_INPUT_ERROR
-    assert error.code == "INVALID_ARGUMENT"
-    assert error.recoverable is False
 
 
 def test_real_tools_are_non_retryable(registry) -> None:

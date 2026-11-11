@@ -23,7 +23,8 @@ from agent.orchestration import (
     AgentPlan,
     AgentRequest,
     AgentRuntime,
-    DeterministicPlanner,
+    LLMPlanner,
+    PlanningWireMode,
     ErrorCategory,
     FileRunStore,
     PlanStep,
@@ -720,7 +721,7 @@ def test_figureless_evidence_report_and_application_paths(
         tmp_path / "fixture", low_replication=True
     )
     application = ResearchAgentApplication(
-        tmp_path / "workspace", planner=DeterministicPlanner()
+        tmp_path / "workspace", planner=_application_planner()
     )
     request = AgentRequest(
         "m82-application",
@@ -775,7 +776,7 @@ def test_complete_raw_to_da_application_chain_is_figureless(
 ) -> None:
     raw, _ = _source_and_pseudobulk(tmp_path / "fixture")
     application = ResearchAgentApplication(
-        tmp_path / "workspace", planner=DeterministicPlanner()
+        tmp_path / "workspace", planner=_application_planner(raw=True)
     )
     result = application.run(
         AgentRequest(
@@ -821,7 +822,7 @@ def test_terminal_application_composition_rejects_da_drift(
 ) -> None:
     _, pseudobulk = _source_and_pseudobulk(tmp_path / "fixture")
     application = ResearchAgentApplication(
-        tmp_path / "workspace", planner=DeterministicPlanner()
+        tmp_path / "workspace", planner=_application_planner()
     )
     result = application.run(
         AgentRequest(
@@ -849,3 +850,31 @@ def test_terminal_application_composition_rejects_da_drift(
     assert resumed.status is ApplicationStatus.FAILED
     assert resumed.error is not None
     assert resumed.error.code == "APP_EVIDENCE_FAILED"
+
+
+def _application_planner(*, raw=False):
+    # Fixed fixture responses exercise the real LLM compiler and lifecycle; no prompt rules.
+    def inputs(*names):
+        return {name: {'binding_type': 'input', 'input_name': name} for name in names}
+    def ref(step, key):
+        return {'binding_type': 'ref', 'ref_step_id': step, 'ref_output_key': key}
+    steps = []
+    if raw:
+        steps = [dict(step_id='features', tool_name='validate_scATAC_feature_space',
+            arguments=inputs('input_path', 'output_dir', 'matrix_source', 'matrix_semantics', 'species',
+                'genome_assembly', 'coordinate_source', 'feature_chrom_key', 'feature_start_key', 'feature_end_key', 'coordinate_system'), depends_on=[], description=None),
+            dict(step_id='bulk', tool_name='build_replicate_pseudobulk', arguments={
+                **inputs('output_dir', 'replicate_key', 'group_key', 'condition_key', 'group_source'),
+                'feature_space_path': ref('features', 'feature_space_path')}, depends_on=['features'], description=None)]
+    steps.append(dict(step_id='da', tool_name='run_replicate_differential_accessibility', arguments={
+        **inputs('output_dir', 'group_value', 'condition_key', 'numerator_condition', 'denominator_condition', 'design_type'),
+        'pseudobulk_path': ref('bulk', 'pseudobulk_path') if raw else inputs('pseudobulk_path')['pseudobulk_path']},
+        depends_on=['bulk'] if raw else [], description=None))
+    for step in steps:
+        spec = build_default_tool_registry().get(step['tool_name'])
+        step['arguments'] = {**dict.fromkeys(spec.optional_arguments), **step['arguments']}
+    class Model:
+        model_id = 'scripted-da'
+        def complete(self, **kwargs):
+            return json.dumps(dict(schema_version=3, status='plan', steps=steps, reason=None))
+    return LLMPlanner(Model(), wire_mode=PlanningWireMode.V3)

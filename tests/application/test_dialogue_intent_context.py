@@ -21,7 +21,7 @@ def test_generic_available_result_visibility_and_scientific_admission(app, tool,
         assert item['is_active'] and item['evidence_status']=='available'
         assert field in item['available_fields']
         assert 'value' not in item and 'facts' not in item
-        spec=app.registry.accepted(tool)
+        spec=app.registry.get(tool)
         assert d['semantics'][tool]['description']==('' if spec.planning is None else spec.planning.description)
         assert d['semantics'][tool]['result_contract']==spec.result_contract.name
         assert 'unavailable_context only' in ' '.join(prompt['instructions'])

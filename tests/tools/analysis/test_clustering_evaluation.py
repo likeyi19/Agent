@@ -22,7 +22,7 @@ from agent.tools.analysis.clustering_evaluation import (
     _normalized_labels,
     evaluate_cell_clustering,
 )
-from agent.tools.analysis.embedding_analysis import PROVENANCE_KEY, _cell_order_digest
+
 
 
 IDS = tuple(f"cell-{index}" for index in range(8))
@@ -39,52 +39,10 @@ def _write_analysis(
 ) -> Path:
     obs = pd.DataFrame({"leiden": list(labels)}, index=pd.Index(ids, dtype="object"))
     artifact = ad.AnnData(obs=obs)
-    artifact.obsm["X_epizoo"] = np.zeros((len(ids), 512), dtype=np.float32)
-    graph = sparse.eye(len(ids), format="csr", dtype=np.float32)
-    artifact.obsp["distances"] = graph
-    artifact.obsp["connectivities"] = graph.copy()
-    artifact.uns["neighbors"] = {
-        "distances_key": "distances",
-        "connectivities_key": "connectivities",
-    }
-    parameters: dict[str, object] = {
-        "neighbors": {
-            "n_neighbors": 2,
-            "metric": "euclidean",
-            "method": "umap",
-            "transformer": "none",
-            "random_seed": 0,
-            "use_rep": "X_epizoo",
-        },
-        "clustering": {
-            "algorithm": "leiden",
-            "resolution": 1.0,
-            "flavor": "igraph",
-            "n_iterations": 2,
-            "directed": False,
-            "use_weights": True,
-            "random_seed": 0,
-            "key_added": "leiden",
-        }
-    }
-    if stage == "umap":
-        artifact.obsm["X_umap"] = np.zeros((len(ids), 2), dtype=np.float32)
-        parameters["umap"] = {
-            "min_dist": 0.5,
-            "spread": 1.0,
-            "n_components": 2,
-            "init_pos": "spectral",
-            "random_seed": 0,
-            "key_added": "X_umap",
-        }
-    artifact.uns[PROVENANCE_KEY] = {
-        "schema_version": 1,
-        "stage": stage,
-        "cell_order_sha256": _cell_order_digest(tuple(str(value) for value in ids)),
-        "source_analysis_path": str(path.with_name("upstream.h5ad").resolve()),
-        "parameters": parameters,
-        "software_versions": {},
-    }
+    artifact.uns['agent_native_invocation'] = dict(function='snapatac2.tl.umap' if stage=='umap' else 'snapatac2.tl.leiden',
+        parameters={'resolution':1.,'random_state':0}, source_sha256='a'*64)
+    if stage == 'neighbors':
+        del artifact.obs['leiden']
     artifact.write_h5ad(path)
     return path
 
@@ -154,7 +112,7 @@ def test_one_predicted_cluster_is_valid(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("stage", ["clustering", "umap"])
-def test_accepted_milestone6_stages(stage: str, tmp_path: Path) -> None:
+def test_fixed_native_categories(stage: str, tmp_path: Path) -> None:
     analysis = _write_analysis(tmp_path / f"{stage}.h5ad", stage=stage)
     reference = _write_reference(tmp_path / "reference.h5ad")
     result = evaluate_cell_clustering(analysis, reference, "celltype", tmp_path / "out")
@@ -234,10 +192,10 @@ def test_malformed_inputs_and_invalid_stage_are_rejected(tmp_path: Path) -> None
     malformed_analysis = tmp_path / "bad-analysis.h5ad"
     malformed_analysis.write_text("not hdf5")
     reference = _write_reference(tmp_path / "reference.h5ad")
-    with pytest.raises(ValueError, match="Milestone 6 analysis"):
+    with pytest.raises(ValueError, match="analysis"):
         evaluate_cell_clustering(malformed_analysis, reference, "celltype", tmp_path / "two")
     wrong_stage = _write_analysis(tmp_path / "wrong.h5ad", stage="neighbors")
-    with pytest.raises(ValueError, match="unexpected Milestone 6 stage"):
+    with pytest.raises(ValueError, match='lacks cluster key'):
         evaluate_cell_clustering(wrong_stage, reference, "celltype", tmp_path / "three")
 
 

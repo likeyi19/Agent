@@ -33,7 +33,7 @@ AUXILIARY_PINS = {
               '96a80287ae085d7e9e10d05f0dd7d5b266ad86d08b91b01ccc07af6b9b01e393'),
 }
 OBJECTIVE = 'Analyze this dataset using EpiZoo, neighbors, Leiden and UMAP.'
-TOOLS = ('epizoo_embed_cells', 'build_cell_neighbors', 'cluster_cells', 'compute_cell_umap')
+TOOLS = ('epizoo_embed_cells', 'run_snapatac2', 'run_snapatac2', 'run_snapatac2')
 
 
 def configuration(tmp_path, *, explicit_species=None):
@@ -103,7 +103,7 @@ class MappingWitness:
             return json.dumps(dict(verdicts={p['id']:dict(verdict='entailed',independent=True)
                 for p in value['paragraphs']}))
         if 'turn_schema_version' in value:
-            target = 'epizoo_embed_cells' if self.embedding_only else 'compute_cell_umap'
+            target = 'epizoo_embed_cells' if self.embedding_only else 'run_snapatac2'
             decision = (dict(kind='execute_plan', target=target)
                 if value['utterance'] == self.objective else
                 dict(kind='answer_prerequisite', pending='@species', species=self.species))
@@ -113,20 +113,23 @@ class MappingWitness:
                 decision=dict(kind='select', capability_ids=['embedding_analysis']))
         elif 'output_selection_schema_version' in value:
             outputs = (
-                ('embeddings', 'embed', 'embedding_path'), ('neighbors', 'neighbors', 'analysis_path'),
-                ('clusters', 'cluster', 'analysis_path'), ('umap', 'umap', 'analysis_path'))
+                ('embeddings', 'embed', 'embedding_path'), ('neighbors', 'neighbors', 'matrix_path'),
+                ('clusters', 'cluster', 'matrix_path'), ('umap', 'umap', 'matrix_path'))
             response = dict(outputs=[dict(name=name, step_id=step, output_key=key)
                 for name, step, key in (outputs[:1] if self.embedding_only else outputs)])
         else:
             assert 'semantic_prompt_version' in value
-            rows = [('embed', TOOLS[0], None, None), ('neighbors', TOOLS[1], 'embedding', 'embed'),
-                    ('cluster', TOOLS[2], 'analysis', 'neighbors'), ('umap', TOOLS[3], 'analysis', 'cluster')]
-            if self.embedding_only:
-                rows = rows[:1]
-            response = dict(schema_version=4, decision=dict(kind='plan', steps=[dict(
-                step_id=step, tool=tool, sources=[] if target is None else
-                [dict(kind='step', target=target, step=upstream)], control_dependencies=[])
-                for step, tool, target, upstream in rows]))
+            steps = [dict(step_id='embed', tool='epizoo_embed_cells', sources=[dict(kind='input',target='dataset',input='input_path'),
+                *([dict(kind='input', target='species', input='species')]
+                  if 'species' in value['catalog']['request_inputs'] else [])], control_dependencies=[])]
+            if not self.embedding_only:
+                for step, fn in [('neighbors', 'pp.knn'), ('cluster', 'tl.leiden'), ('umap', 'tl.umap')]:
+                    sources = [dict(kind='step_port', target='dataset', step=steps[-1]['step_id'], source_port='dataset'),
+                               dict(kind='registered_choice', target='function_name', choice=fn)]
+                    if fn in ('pp.knn', 'tl.umap'):
+                        sources.append(dict(kind='registered_choice', target='use_rep', choice='X_epizoo'))
+                    steps.append(dict(step_id=step, tool='run_snapatac2', sources=sources, control_dependencies=[]))
+            response = dict(schema_version=4, decision=dict(kind='plan', steps=steps))
         return json.dumps(response)
 
     def close(self):
@@ -166,7 +169,7 @@ def test_species_answer_resumes_original_registered_request_with_exact_default_a
     binding = app.resources.compose_h5ad(record.resource_id, config.input_sets[0].inputs(),
         resource_selection_error='EPIZOO_RESOURCE_REQUIRED')
     pending = app.submit_turn('session', 'initial', OBJECTIVE, expected_generation=0, registered_input=binding)
-    assert pending.status == 'clarification' and pending.revision_id is None
+    assert pending.status == 'clarification' and pending.revision_id is None, pending.to_dict()
     assert pending.response.clarification['reason'] == 'missing_species'
     state = app._application.sessions.load('session')
     original = state.interactions[0]
@@ -195,10 +198,10 @@ def test_species_answer_resumes_original_registered_request_with_exact_default_a
     assert embedded.arguments['species'] == species
     assert embedded.arguments['checkpoint_path'] == expected.checkpoint_path
     assert _serialize(embedded.arguments['expected_resource_identity']) == expected.inputs()['expected_resource_identity']
-    assert neighbors.arguments['embedding_path'] == StepOutputRef('embed', 'embedding_path')
-    assert neighbors.arguments['cell_ids_path'] == StepOutputRef('embed', 'cell_ids_path')
-    assert clustered.arguments['analysis_path'] == StepOutputRef('neighbors', 'analysis_path')
-    assert umap.arguments['analysis_path'] == StepOutputRef('cluster', 'analysis_path')
+    assert neighbors.arguments['input_path'] == StepOutputRef('embed', 'analysis_path')
+    assert neighbors.arguments['use_rep'] == 'X_epizoo'
+    assert clustered.arguments['input_path'] == StepOutputRef('neighbors', 'matrix_path')
+    assert umap.arguments['input_path'] == StepOutputRef('cluster', 'matrix_path')
     assert 'n_neighbors' not in neighbors.arguments and 'resolution' not in clustered.arguments
     assert 'min_dist' not in umap.arguments and 'spread' not in umap.arguments
     state = app._application.sessions.load('session')
@@ -238,7 +241,7 @@ def test_exact_human_species_variant_resumes_single_embedding_request_without_sc
         resource_selection_error='EPIZOO_RESOURCE_REQUIRED')
     pending = app.submit_turn('session', 'initial', objective,
         expected_generation=0, registered_input=binding)
-    assert pending.status == 'clarification' and pending.revision_id is None
+    assert pending.status == 'clarification' and pending.revision_id is None, pending.to_dict()
     assert pending.response.clarification['reason'] == 'missing_species'
     state = app._application.sessions.load('session')
     original = state.interactions[0]

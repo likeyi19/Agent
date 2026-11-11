@@ -36,9 +36,7 @@ def analysis_lineage(store, run_id, step_id):
     seen = {(run_id, step_id)}
     while True:
         descriptor = describe(stored.tool_name, stored.result)
-        if stored.tool_name in ('compute_cell_umap', 'cluster_cells', 'build_cell_neighbors'):
-            argument = 'embedding_path' if stored.tool_name == 'build_cell_neighbors' else 'analysis_path'
-        elif stored.tool_name == 'annotate_scATAC_cell_types':
+        if stored.tool_name == 'annotate_scATAC_cell_types':
             argument = 'source_path'
         elif descriptor and descriptor['preserves_counts'] and stored.tool_name != 'annotate_scATAC_cell_types':
             argument = descriptor['input_argument']
@@ -75,17 +73,11 @@ def original_source(store, run_id, step_id):
                 raise ValueError('Native source identity changed.')
             return dict(path=stored.resolved_arguments['input_path'], sha256=identity['sha256'])
         return result_file(stored.tool_name, stored.result)
-    if stored.tool_name != 'pca_embed_cells':
-        # Raw native matrix publications are count-population roots, never
-        # coordinate/group computations inferred from their file contents.
-        if stored.result.get('matrix_path') and stored.result.get('matrix_sha256'):
-            from agent.orchestration.verification_authority import _accepted
-            _accepted(store, run_id, stored.step_id)
-            return dict(path=stored.result['matrix_path'], sha256=stored.result['matrix_sha256'])
-        return None
-    from agent.orchestration.verification_authority import _accepted
-    _accepted(store, run_id, stored.step_id)  # Existing authority anchor; no publication reconstruction.
-    return dict(path=stored.result['input_path'], sha256=stored.result['source_sha256'])
+    if stored.result.get('matrix_path') and stored.result.get('matrix_sha256'):
+        from agent.orchestration.verification_authority import _accepted
+        _accepted(store, run_id, stored.step_id)
+        return dict(path=stored.result['matrix_path'], sha256=stored.result['matrix_sha256'])
+    return None
 
 
 def handoff(store, run_id, step_id):
@@ -113,12 +105,7 @@ def handoff(store, run_id, step_id):
                 accepted_step_sha256=accepted_step_digest(parent), field=item['grouping'],
                 **result_file(parent.tool_name, parent.result))
             break
-    try:
-        source = original_source(store, run_id, step_id)
-    except (ValueError, KeyError, OSError):
-        if stored.tool_name.startswith('run_'):
-            raise
-        source = None  # Dedicated historical results retain bounded standalone reads.
+    source = original_source(store, run_id, step_id)
     return dict(**descriptor, file=result_file(stored.tool_name, stored.result), source=source, groups=grouping)
 
 

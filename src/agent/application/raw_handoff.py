@@ -252,10 +252,9 @@ def validate_downstream_annotation(value):
 
 def validate_arguments(arguments, field='fastq'):
     from .epizoo_handoff import TOOLS
-    downstream=('build_cell_neighbors','cluster_cells','compute_cell_umap')
     allowed = {'epizoo':TOOLS, 'annotation':('annotate_scATAC_cell_types',),
-        'fragments':('run_snapatac2',)+downstream, 'bam':('run_snapatac2',)+downstream,
-        'fastq':('run_chromap','run_snapatac2')+downstream}[field]
+        'fragments':('run_snapatac2',), 'bam':('run_snapatac2',),
+        'fastq':('run_chromap','run_snapatac2')}[field]
     if any(a.tool not in allowed for a in arguments):
         raise ValueError('FASTQ task arguments must belong to its registered scientific consumers.')
 
@@ -656,7 +655,7 @@ def attachment_binding(origin, source, interaction, field):
     return _role_binding(origin, source, interaction)
 
 
-def requirements(binding, declared, input_sets, *, evidence=None, pinned=None, historical=False):
+def requirements(binding, declared, input_sets, *, evidence=None, pinned=None):
     """Read saved pre-component raw declarations; new raw tasks use the native owner."""
     field = 'annotation' if isinstance(declared, AnnotationDeclaration) else 'fragments' if isinstance(declared, FragmentsDeclaration) else 'bam' if isinstance(declared, BamDeclaration) else 'fastq'
     from types import SimpleNamespace
@@ -667,11 +666,9 @@ def requirements(binding, declared, input_sets, *, evidence=None, pinned=None, h
             ('namespace', 'Name the single processing library represented by these fragments.'),
             ('species', 'Specify human or mouse.'), ('assembly', 'Specify the source assembly: hg38 or mm10.'),
             ('source_profile', 'Confirm 10x ATAC/ARC fragment semantics: zero-based half-open adjusted intervals, corrected barcode identifiers and read-pair support.'))
-            if getattr(declared, key) is None and (historical or key not in ('namespace', 'source_profile'))]
+            if getattr(declared, key) is None and key not in ('namespace', 'source_profile')]
         if any(int(h.split('.')[1]) >= len(binding.members) for h in source_handles(declared)):
             raise ValueError('Fragment role is outside captured attachments.')
-        if historical and declared.feature_category is not None and declared.feature_source is None:
-            missing.append('Attach the custom BED to define the exact matrix regions; its intervals must use the declared assembly and zero-based half-open coordinates.')
         if declared.genome_index_source is not None and declared.genome_source is None:
             missing.append('Identify the plain FASTA paired with the supplied FAI.')
         if declared.genome_source is not None and declared.feature_source is None:
@@ -687,7 +684,7 @@ def requirements(binding, declared, input_sets, *, evidence=None, pinned=None, h
             ('assembly', 'Specify the source assembly: hg38 or mm10.'),
             ('barcode_policy', 'Confirm from its processing history that CB tags are already corrected cell-barcode identifiers.'),
             ('source_profile', 'Confirm unshifted paired ATAC alignments with duplicate pairs retained.'))
-            if getattr(declared, key) is None and (historical or key not in ('namespace', 'source_profile', 'barcode_policy'))]
+            if getattr(declared, key) is None and key not in ('namespace', 'source_profile', 'barcode_policy')]
         if declared.source is not None and int(declared.source.split('.')[1]) >= len(binding.members):
             raise ValueError('BAM source is outside captured attachments.')
     else:
@@ -773,7 +770,7 @@ def _extend_catalog(previous, current):
     return current
 
 
-def _completion(interaction, origin, source, addition, arguments, rows, registry, field='fastq', evidence=None, source_evidence=None, resource_observation=None, *, unknown_fields=(), declared=None, historical=False, native=False):
+def _completion(interaction, origin, source, addition, arguments, rows, registry, field='fastq', evidence=None, source_evidence=None, resource_observation=None, *, unknown_fields=(), declared=None, native=False):
     from .dialogue_execution import _bind_arguments, _with_retained
     from .input_sets import ScientificInputSet
     binding = source_binding(origin, source, interaction, field)
@@ -850,7 +847,7 @@ def _completion(interaction, origin, source, addition, arguments, rows, registry
             if questions:
                 return binding, declared, values, questions, None
             declared = replace(declared, resource='resource.' + preferred.input_set_id)
-        missing, selected = requirements(binding, declared, choices, evidence=evidence, pinned=pinned, historical=historical)
+        missing, selected = requirements(binding, declared, choices, evidence=evidence, pinned=pinned)
     return binding, declared, values, missing, selected
 
 
@@ -1133,14 +1130,10 @@ def validate(interaction, preceding):
                     or (rows != previous_rows if evidence is None else _extend_catalog(previous_rows, rows) != rows))):
             raise ValueError('FASTQ resource catalog changed.')
         registry = build_default_tool_registry()
-        historical = admitted.get('tool') in ('prepare_scATAC_fragments', 'prepare_scATAC_bam_fragments', 'import_scATAC_fragments')
-        if historical:
-            from agent.orchestration.raw_history import ReplayRegistry
-            registry = ReplayRegistry(registry)
         binding, declared, values, missing, selected = _completion(interaction, origin, source,
             declaration(admitted[field + '_addition'], field), _scientific_arguments(admitted['arguments']),
             rows, registry, field, evidence, admitted.get(field + '_source_evidence'),
-            admitted.get('annotation_resource_observation'), unknown_fields=tuple(admitted.get('unknown_fields', ())), historical=historical,
+            admitted.get('annotation_resource_observation'), unknown_fields=tuple(admitted.get('unknown_fields', ())),
             native=admitted.get('resource_resolution') == 'native-inputs.v1')
         expected_choice = (None if selected is None else 'resource.' + selected.input_set_id) if admitted.get('resource_resolution') == 'native-inputs.v1' else (declared.resource or
             ('resource.' + selected.input_set_id if selected is not None else
@@ -1148,15 +1141,13 @@ def validate(interaction, preceding):
         if evidence is not None and admitted.get('raw_resource_choice') != expected_choice:
             raise ValueError('Captured resource selection changed.')
         if (admitted[field] != _serialize(declaration_dict(declared)) or admitted[field + '_sources'] != binding.attribution()
-                or admitted[field + '_arguments'] != values or admitted['tool'] != (
-                    {'fragments': 'import_scATAC_fragments', 'bam': 'prepare_scATAC_bam_fragments', 'fastq': 'prepare_scATAC_fragments'}[field]
-                    if historical else target(field, declared))
+                or admitted[field + '_arguments'] != values or admitted['tool'] != target(field, declared)
                 or admitted['revision_id'] != interaction.base_revision_id or admitted['roles']):
             raise ValueError('FASTQ declarations changed.')
         if source is not None and admitted.get('continuation') != {
                 k: expected[k] for k in ('origin_turn_id', 'binding_turn_id', 'field')}:
             raise ValueError('FASTQ continuation changed.')
-        if missing or not historical and admitted['kind'] == 'clarify':
+        if missing or admitted['kind'] == 'clarify':
             pending = dict(origin_turn_id=origin.turn_id, binding_turn_id=interaction.turn_id,
                 field=field, tool=target(field, declared), resource_context_sha256=digest(rows))
             # Saved prerequisite prose is immutable presentation, not admission

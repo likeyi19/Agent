@@ -291,7 +291,7 @@ def public(captured, state, registry, *, sessions, utterance, execution_inputs=N
         row.pop('description', None)
         row.pop('ports', None)
         if row['tool'] not in semantics:
-            spec = registry.accepted(row['tool'])
+            spec = registry.get(row['tool'])
             semantics[row['tool']] = dict(result_contract=spec.result_contract.name,
                 description='' if spec.planning is None else spec.planning.description[:1200],
                 roles=[] if spec.semantic_planning is None else [dict(name=p.name, semantic_type=p.semantic_type)
@@ -553,19 +553,6 @@ def _comparison_fields(views, targets):
                    b.source.output_locator['run_id'], b.source.output_locator['step_id'],
                    targets[1]['accepted_step_sha256'])
     if not same_result:
-        if a.source.tool_name == 'cluster_cells':
-            # Owner-aware summary eligibility uses an exact qualified graph,
-            # never dimensions, display labels or cluster IDs as correspondence.
-            keys = ('clustering_neighbors_identity_sha256', 'algorithm', 'n_cells')
-            if any(k not in af or af[k] is None or af[k] != bf.get(k) for k in keys):
-                return frozenset()
-            if any(not any(f.field == keys[0] and f.artifact_name == 'accepted_run_result'
-                           and f.artifact_sha256 == v.source.source_run_result_sha256
-                           for f in v.facts) for v in views):
-                return frozenset()
-            return frozenset(('n_clusters', 'n_cells', 'resolution', 'random_seed',
-                'clustering_parameters.resolution', 'clustering_parameters.random_seed',
-                'clustering_resolution_origin'))
         if a.source.tool_name != 'select_scATAC_cells':
             return frozenset()
         for key in ('qc_identity_sha256', 'contract_version', 'selection_method',
@@ -831,11 +818,6 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                 'Other facts retain their separate attribution. Descriptive agreement does not validate biological identities or establish significance or causality.')
         public['limitations'].append(boundary)
         public['meanings']['comparison_scope'] = boundary
-        if comparison_fields and all(v.source.tool_name == 'cluster_cells' for v in views[:2]):
-            public['meanings']['comparison_basis'] = (
-                'These clustering summaries consumed the same qualified neighbors publication, '
-                'so their recorded resolutions and cluster counts describe the same graph population. '
-                'Cluster labels and assignments are not matched across results.')
         # Direct accepted records only. No differences, statistics or rankings
         # are calculated. Candidate row offsets are not subject correspondence.
         def comparable(a, b):

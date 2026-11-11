@@ -39,7 +39,8 @@ def tool_spec():
     ports.extend((Consumer('matrix',(member('manifest_path','matrix_manifest_path'),member('manifest_sha256','matrix_manifest_sha256')),False,
         accepted_upstream_types=('scatac_cell_by_features.v1','scatac_cell_by_ccre.v1')),
         Consumer('clustering',(member('analysis','group_analysis_path'),member('sha256','group_analysis_sha256')),False,
-        accepted_upstream_types=('clustered_analysis.v1',))))
+        accepted_upstream_types=('native_matrix_h5ad.v1',),
+        upstream_member_names=(('native_matrix_h5ad.v1','analysis','dataset'),))))
     optional['group_label']=arg((str,),'Exact accepted clustering label selecting one population; requires its exact original fragment-derived count matrix.',scientific_parameter=True,conversational_exact_string=True)
     ports.append(scalar('group_label',required=False))
     required['output_dir']=arg((str,Path),'Managed native peak publication directory.')

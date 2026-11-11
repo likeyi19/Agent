@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import json
 from pathlib import Path
-from unittest.mock import Mock
 
 import anndata as ad
 import numpy as np
@@ -17,18 +15,15 @@ from agent.orchestration import (
     AgentPlan,
     AgentRequest,
     AgentRuntime,
-    DeterministicPlanner,
     FileRunStore,
     PlanStep,
     RunStatus,
-    RunMode,
     StepOutputRef,
     build_default_tool_registry,
-    ToolRegistry,
     verify_step,
 )
 from agent.tools import evaluate_cell_clustering
-from agent.tools.analysis.embedding_analysis import PROVENANCE_KEY, _cell_order_digest
+
 
 
 class FixedPlanner:
@@ -51,41 +46,7 @@ def _artifacts(tmp_path: Path) -> tuple[Path, Path, tuple[str, ...]]:
     analysis = ad.AnnData(
         obs=pd.DataFrame({"leiden": labels}, index=pd.Index(ids))
     )
-    analysis.obsm["X_epizoo"] = np.zeros((8, 512), dtype=np.float32)
-    graph = sparse.eye(8, format="csr", dtype=np.float32)
-    analysis.obsp["distances"] = graph
-    analysis.obsp["connectivities"] = graph.copy()
-    analysis.uns["neighbors"] = {
-        "distances_key": "distances",
-        "connectivities_key": "connectivities",
-    }
-    analysis.uns[PROVENANCE_KEY] = {
-        "schema_version": 1,
-        "stage": "clustering",
-        "cell_order_sha256": _cell_order_digest(ids),
-        "source_analysis_path": str((tmp_path / "upstream.h5ad").resolve()),
-        "parameters": {
-            "neighbors": {
-                "n_neighbors": 2,
-                "metric": "euclidean",
-                "method": "umap",
-                "transformer": "none",
-                "random_seed": 0,
-                "use_rep": "X_epizoo",
-            },
-            "clustering": {
-                "algorithm": "leiden",
-                "resolution": 1.0,
-                "flavor": "igraph",
-                "n_iterations": 2,
-                "directed": False,
-                "use_weights": True,
-                "random_seed": 0,
-                "key_added": "leiden",
-            }
-        },
-        "software_versions": {},
-    }
+    analysis.uns['agent_native_invocation'] = dict(function='snapatac2.tl.leiden', parameters={'resolution':1.},source_sha256='a'*64)
     analysis_path = tmp_path / "clustered.h5ad"
     analysis.write_h5ad(analysis_path)
     return reference_path, analysis_path, ids
@@ -135,40 +96,6 @@ def test_real_evaluation_through_registry_verifier_and_durable_runtime(
     json.dumps(result.to_dict(), allow_nan=False)
 
 
-def test_evaluation_plan_only_invokes_zero_scientific_tools(tmp_path: Path) -> None:
-    default = build_default_tool_registry()
-    guarded = {
-        name: Mock(side_effect=AssertionError(f"PLAN_ONLY invoked {name}"))
-        for name in default.names()
-    }
-    registry = ToolRegistry(
-        tuple(
-            replace(default.get(name), function=guarded[name])
-            for name in default.names()
-        )
-    )
-    result = AgentRuntime(
-        planner=DeterministicPlanner(), registry=registry
-    ).run(
-        AgentRequest(
-            "request-plan-only",
-            "Analyze with EpiZoo and evaluate the clustering",
-            {
-                "input_path": str(tmp_path / "not-opened.h5ad"),
-                "output_dir": str(tmp_path / "not-created"),
-                "species": "mouse",
-                "label_key": "celltype",
-            },
-            RunMode.PLAN_ONLY,
-        )
-    )
-    assert result.status is RunStatus.PLANNED
-    assert tuple(step.step_id for step in result.plan.steps) == (  # type: ignore[union-attr]
-        "inspect", "embed", "neighbors", "cluster", "evaluate"
-    )
-    assert not (tmp_path / "not-created").exists()
-    for function in guarded.values():
-        function.assert_not_called()
 
 
 def _verification_case(tmp_path: Path):
@@ -237,7 +164,7 @@ def test_verifier_rejects_stale_corrupt_or_missing_evaluation_evidence(
         if mutation == "predicted_labels":
             source.obs.loc[source.obs_names[0], "leiden"] = "b"
         else:
-            source.uns[PROVENANCE_KEY]["parameters"]["clustering"]["flavor"] = "invalid"
+            source.uns['agent_native_invocation']['parameters']['resolution'] = 7.
         source.write_h5ad(analysis)
     elif mutation == "missing_analysis":
         analysis.unlink()

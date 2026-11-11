@@ -14,14 +14,11 @@ import re
 from agent.schemas import AgentRequest
 from agent.schemas.orchestration import _serialize, freeze_json_mapping
 from .session_state import OutputSelection, SessionTurn, SessionConflictError, digest, selection_uses
-from .turn_decisions import (IntentError, ExplicitArgument, LeidenResolution, ScalarChoiceArgument, SourceFieldArgument, SourceScopedArgument, SourceScopedChoiceArgument, InputRole,
+from .turn_decisions import (IntentError, ExplicitArgument, ScalarChoiceArgument, SourceFieldArgument, SourceScopedArgument, SourceScopedChoiceArgument, InputRole,
     _input_roles, _scientific_arguments, is_exact_string_argument, is_json_object_argument, _object, _shape,
 )
 
 
-def _resolution_input(registry):
-    """Read the pre-generic species-continuation parameter contract."""
-    return _parameter_input(registry, 'cluster_cells', 'resolution')
 
 
 def _parameter_input(registry, tool_name, argument_name):
@@ -282,7 +279,7 @@ def _research_intent(interaction, decision):
             labels = drawing['activity'] if drawing.get('kind') == 'marker_activity_umap' else drawing['labels']
             if coordinate != 'new' and (coordinate not in by_handle
                     or not by_handle[coordinate].get('cell_capabilities', {
-                        'coordinates': 'X_umap' if by_handle[coordinate]['tool'] == 'compute_cell_umap' else None
+                        'coordinates': None
                     }).get('coordinates')):
                 raise IntentError('invalid_reference')
             if labels.startswith('source.'):
@@ -448,30 +445,23 @@ def _validate_research_intent(interaction):
 
 
 def _bind_arguments(registry, utterance, inputs, declarations, *, replace_existing=False,
-                    field_choices=None, historical=False):
+                    field_choices=None):
     from .turn_decisions import admit_scientific_argument
     values = dict(inputs)
     names = {}
     scopes = {}
-    if not historical:
-        from .structured_parameters import shadowed_arguments
-        explicit = tuple(d for d in declarations if isinstance(d, ExplicitArgument))
-        declarations = _scientific_arguments(shadowed_arguments(
-            [asdict(d) for d in declarations if not isinstance(d, ExplicitArgument)],
-            [asdict(d) for d in explicit])) + explicit
+    from .structured_parameters import shadowed_arguments
+    explicit = tuple(d for d in declarations if isinstance(d, ExplicitArgument))
+    declarations = _scientific_arguments(shadowed_arguments(
+        [asdict(d) for d in declarations if not isinstance(d, ExplicitArgument)],
+        [asdict(d) for d in explicit])) + explicit
     from agent.orchestration.native_parameters import declaration_input
     explicit_names = {declaration_input(registry, d, _parameter_input(registry, d.tool, d.argument)[0])
                       for d in declarations if isinstance(d, ExplicitArgument)}
     for declaration in sorted(declarations, key=lambda d: isinstance(d, ExplicitArgument)):
-        if not historical and not _current_parameter(declaration.tool, declaration.argument):
+        if not _current_parameter(declaration.tool, declaration.argument):
             raise IntentError('unsupported_intent')
         name, specification = _parameter_input(registry, declaration.tool, declaration.argument)
-        if (historical and declaration.tool == 'run_chromvar' and declaration.argument == 'matrix_semantics'
-                and isinstance(declaration, ScalarChoiceArgument)):
-            # Read the exact pre-STE-NFI-1E choice meaning; new requests use optional free text.
-            from agent.tools.analysis.chromvar_native import MEASUREMENTS
-            specification = replace(specification, choices=MEASUREMENTS, planning=replace(
-                specification.planning, conversational_exact_string=False, conversational_choice=True))
         column = specification.planning.observation_source is not None
         if not isinstance(declaration, ExplicitArgument) and not column and specification.planning.conversational_choice != isinstance(declaration, ScalarChoiceArgument):
             raise IntentError('unsupported_intent', diagnostic_reason='parameter_form_mismatch',
@@ -488,8 +478,7 @@ def _bind_arguments(registry, utterance, inputs, declarations, *, replace_existi
                     value = {**values.get(name, {}), **value}
             else:
                 value = admit_scientific_argument(declaration, utterance, specification,
-                    observation_fields=(field_choices or {}).get((declaration.tool, declaration.argument)),
-                    historical=historical)
+                    observation_fields=(field_choices or {}).get((declaration.tool, declaration.argument)))
         except IntentError as exc:
             raise IntentError(exc.reason, diagnostic_reason=exc.diagnostic_reason,
                 operand=exc.operand, parameters=(declaration.tool + '.' + declaration.argument,)) from exc
@@ -547,7 +536,7 @@ def _replay_initial_inputs(registry, interaction, declarations):
         roles = [asdict(item) for item in _input_roles(admitted.get('roles', []))]
         values = _bind_arguments(registry, interaction.utterance,
             _with_retained(registry, group_role_inputs(binding, roles, registry), admitted.get('retained_parameters', ())), declarations,
-            field_choices=_argument_fields(registry, interaction, binding, roles, declarations=declarations), historical=True)
+            field_choices=_argument_fields(registry, interaction, binding, roles, declarations=declarations))
         receipt = admitted.get('resource_selection')
         if receipt is not None:
             _shape(receipt, ('catalog', 'resource_context_sha256'))
@@ -567,7 +556,7 @@ def _replay_initial_inputs(registry, interaction, declarations):
             raise ValueError('Scientific input role attribution changed.')
         return values
     values = _bind_arguments(registry, interaction.utterance,
-        _with_retained(registry, received, admitted.get('retained_parameters', ())), declarations, historical=True)
+        _with_retained(registry, received, admitted.get('retained_parameters', ())), declarations)
     choice = any(isinstance(d, ScalarChoiceArgument) for d in declarations)
     needs_resource = (choice and original.get('tool_name') == 'inspect_scATAC'
         and original.get('composition') in (None, 'h5ad-science.v1'))
@@ -631,14 +620,12 @@ def _validate_argument_record(interaction):
         if admitted.get('kind') != 'execute' or admitted.get('operation') != 'plan':
             raise ValueError('Scientific declarations require an admitted execution.')
         declarations = _scientific_arguments(_serialize(admitted.get('arguments', ())))
-        if 'argument' in admitted:
-            declarations += (LeidenResolution(**_serialize(admitted['argument'])),)
         from .turn_decisions import _validate_arguments
         _validate_arguments(declarations)
         values = _serialize(admitted['inputs'])
         expected = _bind_arguments(registry, interaction.utterance,
             _with_retained(registry, values, admitted.get('retained_parameters', ())), declarations,
-            field_choices=_argument_fields(registry, interaction, declarations=declarations), historical=True)
+            field_choices=_argument_fields(registry, interaction, declarations=declarations))
         if expected != values:
             raise ValueError('Arguments differ from admitted values.')
         if 'continuation' not in admitted and 'parameter_continuation' not in admitted:
@@ -670,7 +657,7 @@ def _validate_argument_record(interaction):
         raise SessionError('Invalid persisted scientific arguments.') from exc
 
 
-def _missing_parameters(error, admitted, registry, *, historical=False):
+def _missing_parameters(error, admitted, registry):
     if error is None or error.code not in {'MISSING_REQUIRED_SOURCE', 'MISSING_REQUIRED_BINDING'}:
         return None
     tool_name = error.details.get('tool_name')
@@ -678,13 +665,7 @@ def _missing_parameters(error, admitted, registry, *, historical=False):
     if tool_name not in registry.names() or not isinstance(names, (list, tuple)) or not 1 <= len(names) <= 8:
         return None
     tool = registry.get(tool_name)
-    # Bounded reader for pre-default selection clarifications. New planning
-    # errors still use only the current Registry's required arguments.
-    required = dict(tool.required_arguments)
-    if historical and tool_name == 'select_scATAC_cells':
-        from agent.tools.data.scatac_selection_profile import DEFAULTS
-        required.update({name: tool.optional_arguments[name] for name in DEFAULTS
-                         if name in tool.optional_arguments})
+    required = tool.required_arguments
     try:
         for name in names:
             if name not in required:
@@ -722,8 +703,6 @@ def _validate_input_role_record(interaction):
         if not grouped or not _input_roles(_serialize(admitted.get('roles', []))):
             raise ValueError('Missing captured scientific input roles.')
         declarations = _scientific_arguments(_serialize(admitted.get('arguments', [])))
-        if 'argument' in admitted:
-            declarations += (LeidenResolution(**_serialize(admitted['argument'])),)
         expected = _replay_initial_inputs(build_default_tool_registry(), interaction, declarations)
         if expected != _serialize(admitted['inputs']):
             raise ValueError('Scientific role inputs differ from captured source identities.')
@@ -736,50 +715,6 @@ def _parameter_source(reference, preceding):
     origin = next(i for i in preceding if i.turn_id == reference['origin_turn_id'])
     source = next(i for i in preceding if i.turn_id == reference['binding_turn_id'])
     return origin, source, _serialize(source.admitted['inputs'])
-
-
-def _read_legacy_rejection(raw, utterance, registry, *, historical_missing=()):
-    """Read saved pre-consolidation rejections; never create a new question."""
-    import json
-    from .turn_decisions import (parse_decision, _ground_declaration,
-        DeclarationGroundingError, Execute)
-    try:
-        parse_decision(raw, utterance=utterance)
-    except DeclarationGroundingError:
-        pass  # The parser has checked the complete decision shape.
-    value = json.loads(raw)['decision']
-    if value['kind'] not in {'execute_plan', 'request_resources'}:
-        raise IntentError('invalid_prerequisite')
-    good, rejected = [], []
-    declarations = ([value['argument']] if value.get('argument') is not None else []) + value.get('arguments', [])
-    for item in declarations:
-        # Registry identity is checked even when the literal cannot be located.
-        _parameter_input(registry, item['tool'], item['argument'])
-        try:
-            grounded = _ground_declaration(item, utterance,
-                _legacy_numeric_grounding=(item['tool'], item['argument']) in historical_missing)
-            if (item['tool'], item['argument']) in historical_missing:
-                # Saved rejections used the original numeric boundary. Keep
-                # their meaning without imposing it on newly admitted values.
-                from .turn_decisions import admit_scientific_argument
-                admit_scientific_argument(_scientific_arguments([grounded])[0], utterance,
-                    _parameter_input(registry, item['tool'], item['argument'])[1],
-                    _legacy_numeric_boundary=True)
-            _bind_arguments(registry, utterance, {}, _scientific_arguments([grounded]))
-            good.append(grounded)
-        except IntentError as exc:
-            if exc.reason not in {'ungrounded_operand', 'ambiguous_parameter', 'invalid_parameter_value'}:
-                raise
-            rejected.append((item['tool'], item['argument']))
-    if not rejected or len({tool for tool, _ in rejected}) != 1:
-        raise IntentError('invalid_prerequisite')
-    clean = dict(value, arguments=good)
-    clean.pop('argument', None)
-    clean['kind'] = 'execute_plan'
-    safe = parse_decision(json.dumps(dict(turn_schema_version=1, decision=clean)))
-    if not isinstance(safe, Execute):
-        raise IntentError('invalid_prerequisite')
-    return safe, rejected
 
 
 def request_parameter_repair(sessions, interaction, raw, inputs, resources):
@@ -921,16 +856,6 @@ def _validate_parameter_prerequisite(interaction, preceding):
                             _scientific_arguments(_serialize(admitted.get('arguments', [])))) != _serialize(values)):
                     raise ValueError('Requested parameter scope changed.')
                 return
-            if 'parameter_rejection' in admitted:
-                safe, rejected = _read_legacy_rejection(admitted['parameter_rejection'], interaction.utterance, registry,
-                    historical_missing={(pending['tool'], name) for name in pending['missing']})
-                if (safe.target != admitted['tool'] or any(t != tool.name for t, _ in rejected)
-                        or sorted(n for _, n in rejected) != list(pending['missing'])
-                        or any(_parameter_input(registry, t, n)[0] in values for t, n in rejected)
-                        or _serialize([asdict(d) for d in safe.arguments]) != _serialize(admitted.get('arguments', []))
-                        or _replay_initial_inputs(registry, interaction, safe.arguments) != _serialize(values)):
-                    raise ValueError('Rejected declaration capture changed.')
-                return
             required = {item['argument'] for item in scientific_parameters(registry)
                         if item['tool'] == tool.name and item['required'] and 'choices' not in item}
             if tool.name == 'select_scATAC_cells':
@@ -977,13 +902,6 @@ def _validate_parameter_prerequisite(interaction, preceding):
         missing = (missing_slots(registry, slots, expected) if slots else
                    _missing_parameter_inputs(registry, reference['tool'], origin.prerequisite['missing'], expected))
         if admitted.get('kind') == 'clarify':
-            # Saved partial questions predate function-qualified prerequisite
-            # projection. Preserve that exact nonexecution history; it grants
-            # no execution authority and new continuations use the shared scope.
-            legacy_missing = ([] if slots else [name for name in origin.prerequisite['missing']
-                              if _parameter_input(registry, reference['tool'], name)[0] not in expected])
-            if list(admitted['choices']) == legacy_missing:
-                missing = legacy_missing
             wanted = {k: _serialize(v) for k, v in reference.items() if k != 'predecessor_turn_id'}
             wanted.update(binding_turn_id=interaction.turn_id, missing=missing)
             if not missing or _serialize(pending) != wanted or list(admitted['choices']) != missing:
@@ -1014,10 +932,10 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
         raise IntentError('ambiguous_parameter')
     if resource_context_digest(resources) != reference['resource_context_sha256']:
         raise IntentError('invalid_prerequisite')
-    if not {'parameter_rejection', 'parameter_request', 'parameter_slots'}.intersection(origin.admitted):
+    if not {'parameter_request', 'parameter_slots'}.intersection(origin.admitted):
         stored = sessions._application.run_store.load(origin.admitted['request_id'] + ':run')
         original_error = next((e for e in stored.errors
-            if _missing_parameters(e, origin.admitted, sessions._application.registry, historical=True) ==
+            if _missing_parameters(e, origin.admitted, sessions._application.registry) ==
                (reference['tool'], list(origin.prerequisite['missing']))), None)
         if (stored.steps or stored.request.prompt != _execution_objective(origin, state.interactions) or original_error is None
                 or any(stored.request.inputs.get(k) != v for k, v in origin.admitted['inputs'].items())):
@@ -1379,8 +1297,6 @@ def _validate_role_prerequisite(interaction, preceding):
                 raise ValueError('Role continuation changed scope.')
             additions = _input_roles(_serialize(admitted['roles']))
         declarations = _scientific_arguments(_serialize(admitted.get('arguments', [])))
-        if 'argument' in admitted:
-            declarations += (LeidenResolution(**_serialize(admitted['argument'])),)
         from .turn_decisions import _validate_arguments
         _validate_arguments(declarations)
         values, roles, missing, metadata = _role_completion(registry, origin, source,
@@ -1714,25 +1630,6 @@ def validate_prerequisite(interaction, preceding):
         expected_choice = received_choice if received_choice is not None else original_choice
         if metadata.get('resource_choice') != expected_choice:
             raise SessionError('Continuation changed its captured resource choice.')
-        if ('resolution' in admitted.get('inputs', {}) and 'argument' not in admitted and 'arguments' not in admitted
-                and 'resolution' not in original['execution_inputs']):
-            from agent.orchestration.registry import build_default_tool_registry
-            name, specification = _resolution_input(build_default_tool_registry())
-            received = (interaction.submission or {}).get('execution_inputs', {})
-            try:
-                specification.validate(name, received.get(name))
-                specification.validate(name, admitted['inputs'][name])
-                if received[name] != admitted['inputs'][name]:
-                    raise ValueError('Continuation changed received resolution.')
-            except (ValueError, TypeError) as exc:
-                raise SessionError('Missing or invalid continuation resolution declaration.') from exc
-        if 'argument' in origin.admitted:
-            from agent.orchestration.registry import build_default_tool_registry
-            name, specification = _resolution_input(build_default_tool_registry())
-            try:
-                specification.validate(name, admitted.get('inputs', {}).get(name))
-            except (ValueError, TypeError) as exc:
-                raise SessionError('Invalid retained Leiden resolution.') from exc
         from agent.orchestration.registry import build_default_tool_registry
         registry = build_default_tool_registry()
         changed = {_parameter_input(registry, d['tool'], d['argument'])[0] for d in admitted.get('arguments', ())}

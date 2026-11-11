@@ -12,6 +12,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 import pytest
 
+pytestmark = pytest.mark.usefixtures("native_research_subprocess")
+
 from agent.application import InteractiveAgentApplication
 from agent.application.uploads import H5ADUploadAdmission
 from agent.orchestration import ToolRegistry, build_default_tool_registry
@@ -122,20 +124,20 @@ def test_uploaded_role_answer_executes_real_science_and_preserves_exact_history(
         assert run.lifecycle_status is RunLifecycleStatus.SUCCEEDED
         assert run.request.prompt == OBJECTIVE
         cluster, evaluation = run.steps
-        assert [item.tool_name for item in run.steps] == ['cluster_cells', 'evaluate_cell_clustering']
+        assert [item.tool_name for item in run.steps] == ['run_snapatac2', 'evaluate_cell_clustering']
         pins = [harness.service.resources.load(identifier) for identifier in selected]
-        assert cluster.resolved_arguments['analysis_path'] == pins[0].source_path
+        assert cluster.resolved_arguments['input_path'] == pins[0].source_path
         assert 'reference_h5ad_path' not in cluster.resolved_arguments
         assert evaluation.resolved_arguments['reference_h5ad_path'] == pins[1].source_path
         assert evaluation.resolved_arguments['label_key'] == LABEL
-        assert run.plan.steps[1].arguments['analysis_path'] == StepOutputRef('clustering', 'analysis_path')
+        assert run.plan.steps[1].arguments['analysis_path'] == StepOutputRef('clustering', 'matrix_path')
         assert all(item.verification.passed for item in run.steps)
         assert all(evaluation.result[key] == pytest.approx(1.)
                    for key in ('nmi', 'ari', 'ami', 'homogeneity'))
         state = harness.service._application.sessions.load('session')
         assert state.interactions[0] == origin and state.generation == 1 and len(state.revisions) == 1
         resumed_record = state.interactions[-1]
-        assert _serialize(resumed_record.admitted['roles']) == ROLES
+        assert sorted(_serialize(resumed_record.admitted['roles']), key=lambda r:r['tool']) == sorted(ROLES, key=lambda r:r['tool'])
         attribution = _serialize(resumed_record.admitted['registered_input'])
         assert attribution['members'] == _serialize(origin.submission['registered_input']['members'])
         assert attribution['resource_choice'] == choice.resource_choice()
@@ -224,7 +226,8 @@ def test_role_completion_does_not_replace_scientific_owner_eligibility(tmp_path,
             assert calls['production.leiden'] == calls['production.evaluation'] == 1
             assert calls['verification.evaluation'] == 0
         else:
-            assert calls['owner.clustering'] == 1 and calls['production.leiden'] == calls['production.evaluation'] == 0
+            assert calls['owner.clustering'] == calls['production.leiden'] == 1
+            assert calls['production.evaluation'] == 0
 
 
 def test_ambiguous_role_subject_without_captured_target_remains_plain_clarification(tmp_path):
@@ -280,7 +283,7 @@ def test_role_then_exact_string_clarification_uses_original_objective_and_same_s
         assert unresolved['response']['clarification']['choices'] == ['label_key']
         middle = harness.service._application.sessions.load('session').interactions[-1]
         assert middle.prerequisite['field'] == 'parameters'
-        assert _serialize(middle.admitted['roles']) == ROLES
+        assert sorted(_serialize(middle.admitted['roles']), key=lambda r:r['tool']) == sorted(ROLES, key=lambda r:r['tool'])
         with multi_input_work() as completed:
             result = execute(client, multi_body(turn='label', utterance=LABEL_ANSWER))
         assert result['status'] == 'succeeded' and result['revision_id'], result
@@ -290,7 +293,7 @@ def test_role_then_exact_string_clarification_uses_original_objective_and_same_s
         assert state.interactions[0] == origin and state.interactions[1] == middle
         assert state.generation == 1 and len(state.revisions) == 1
         final = state.interactions[-1]
-        assert _serialize(final.admitted['roles']) == ROLES
+        assert sorted(_serialize(final.admitted['roles']), key=lambda r:r['tool']) == sorted(ROLES, key=lambda r:r['tool'])
         assert _serialize(final.admitted['registered_input']['members']) == _serialize(origin.submission['registered_input']['members'])
         run = harness.service._application.run_store.load(result['run_id'])
         assert run.request.prompt == objective

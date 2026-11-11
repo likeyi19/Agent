@@ -312,7 +312,7 @@ def _response_schema(
     registry: ToolRegistry,
     request: AgentRequest,
 ) -> Mapping[str, JsonValue]:
-    tool_names = registry.names()
+    tool_names = tuple(name for name in registry.names() if registry.get(name).planning is not None)
     if not tool_names:
         raise PlannerError(
             "PLANNER_CATALOG_INVALID",
@@ -475,17 +475,13 @@ def _sanitized_catalog(registry: ToolRegistry) -> tuple[Mapping[str, JsonValue],
     for tool_name in registry.names():
         spec = registry.get(tool_name)
         planning = spec.planning
+        if planning is None:
+            continue
         tools.append(
             {
                 "name": spec.name,
-                "planning_role": (
-                    planning.role.value if planning is not None else "operation"
-                ),
-                "description": (
-                    planning.description
-                    if planning is not None
-                    else "Registered scientific tool."
-                ),
+                "planning_role": planning.role.value,
+                "description": planning.description,
                 "required_arguments": {
                     name: _argument_catalog(argument_spec)
                     for name, argument_spec in sorted(spec.required_arguments.items())
@@ -503,9 +499,7 @@ def _sanitized_catalog(registry: ToolRegistry) -> tuple[Mapping[str, JsonValue],
                         spec.result_contract.required_fields.items()
                     )
                 },
-                "conditional_notes": (
-                    planning.conditional_notes if planning is not None else ()
-                ),
+                "conditional_notes": planning.conditional_notes,
             }
         )
     return tuple(tools)
@@ -992,7 +986,7 @@ def _parse_plan_steps(
         tool_name = _bounded_string(
             raw_step["tool_name"], field_name=f"{context}.tool_name"
         )
-        if not registry.contains(tool_name):
+        if not registry.contains(tool_name) or registry.get(tool_name).planning is None:
             raise PlannerError(
                 "UNKNOWN_TOOL",
                 "Planning response selected a tool outside the executable allowlist.",
@@ -1412,7 +1406,7 @@ class LLMPlanner:
                 model_identity.encode("utf-8")
             ).hexdigest(),
             catalog_fingerprint=_catalog_fingerprint(registry),
-            offered_tool_names=registry.names() if scope is None else scope.visible_tool_names,
+            offered_tool_names=tuple(n for n in registry.names() if registry.get(n).planning is not None) if scope is None else scope.visible_tool_names,
             planning_wire_schema_version=self._wire_mode.schema_version,
             phase=None if scope is None else "detailed_planning",
             scope_fingerprint=None if scope is None else scope.scope_fingerprint,
@@ -1776,7 +1770,7 @@ class LLMPlanner:
                         secondary_profile.model_id.encode("utf-8")
                     ).hexdigest(),
                     catalog_fingerprint=_catalog_fingerprint(registry),
-                    offered_tool_names=registry.names() if scope is None else scope.visible_tool_names,
+                    offered_tool_names=tuple(n for n in registry.names() if registry.get(n).planning is not None) if scope is None else scope.visible_tool_names,
                     phase=None if scope is None else "detailed_planning",
                     scope_fingerprint=None if scope is None else scope.scope_fingerprint,
                     offered_capability_ids=() if scope is None else scope.capability_ids,

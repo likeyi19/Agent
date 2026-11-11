@@ -1,3 +1,31 @@
+# Scientific Execution Path Consolidation (2026-11-11)
+
+The current architectural correction retains distinct mature native package APIs
+without package priority. AI Research uses LLM interpretation/planning and exact
+deterministic binding; Native Functions uses direct structured zero-provider calls.
+Scanpy and epiScanpy neighbors/Leiden/UMAP and epiScanpy PCA, DPT, t-SNE, log1p
+and normalize_total remain AI-plannable. Compose each method's actual scientific
+prerequisites; never substitute incompatible package graphs or invent a DPT root.
+The dedicated Agent build_cell_neighbors, cluster_cells, compute_cell_umap and PCA
+execution/publication owners remain deleted. The historical DeterministicPlanner,
+CLI option and runtime fallback are retired; preserve Planner and PlannerError.
+EpiZoo retains its exact compact X_epizoo H5AD handoff to native consumers.
+All development Sessions, Runs, Revisions and outputs are disposable, with no
+compatibility requirement. Preserve fresh execution mechanisms, original datasets,
+references, checkpoints, shared resources and independent acceptance evidence.
+Identify actual storage boundaries before deleting disposable data.
+Future ASW selection must evaluate the selected native function, compatible graph
+and representation without package priority; explicit parameters take precedence.
+No optimizer, generic Native Functions expansion, iterative annotation or Stage 3
+is authorized. The [guide](docs/guides/native-scatac-analysis.md) and
+[report](../agent-data/acceptance/scientific-execution-consolidation-2026-11-11/REPORT.md)
+own current scope and bounded verification. The final minimal cleanup and Git
+closeout authorizes one reviewed consolidation commit and normal push to
+`origin/main` after focused verification. Earlier no-commit statements describe
+the implementation stages. No automatic resolution selection, generic Native
+Functions output changes or iterative annotation is authorized.
+This direction supersedes older package-priority, planner and compatibility wording.
+
 # Agent
 
 The Final Dual-Mode and Scientific Binding Closeout authorizes one reviewed
@@ -36,13 +64,13 @@ records current verification and limitations. Old chat-direct examples below are
 historical; AI scientific method constraints and typed parameter owners remain.
 No staging, commit or push is authorized. Stage 3 remains outside scope.
 
-Stage 1 native scATAC consolidation supersedes current dedicated-PCA and fixed
-ordinary raw-QC recommendations below. Ordinary compatible scATAC uses native
-SnapATAC2 matrix preparation, `pp.select_features`, `tl.spectral`, KNN, Leiden
-and UMAP; EpiZoo remains separate. Uncalled single-sample fragments use documented
+Stage 1 records the native SnapATAC2 matrix/Spectral workflow and supersedes
+older fixed raw-QC recommendations. Current downstream method selection uses
+the supported native APIs and their actual prerequisites without package priority;
+EpiZoo remains a separate model capability. Uncalled single-sample fragments use documented
 Otsu selection with all observed barcodes initially retained and explicit thresholds
-respected. OrdMag is explicit only. Dedicated PCA is read-only accepted history;
-explicit native PCA remains. The [native scATAC guide](docs/guides/native-scatac-analysis.md)
+respected. OrdMag is explicit only. Dedicated PCA execution and compatibility
+readers are retired; native PCA remains available. The [native scATAC guide](docs/guides/native-scatac-analysis.md)
 owns these methods. Stage 1 did not authorize Stage 2 work. The separate Stage 2
 request authorizes deterministic interaction and structured parameter implementation
 through the existing owners.
@@ -1728,72 +1756,45 @@ source/test Python files unchanged. Preserved tiny acceptance passes two checks;
 fresh-process public matrix recovery executes zero science and preserves the
 RunStore. This qualifies software/synthetic behavior, not real-BAM biology.
 
-## UA3.6.5-R2A — Generic cell embedding analysis
+## UA3.6.5-R2A — Historical generic cell embedding acceptance
 
-The [R2A record](docs/history/ua3.6.5-r2a-generic-cell-embedding.md) documents the new
-`pca_embed_cells` owner and shared downstream contracts. PCA uses centered
-Scanpy ARPACK with default min(50, min(shape)-1) components, supplied X values,
-no normalization/scaling/filtering, and explicit method/parameter/axis provenance.
-Qualified PCA publications use existing operation proofs and schema-2 authority.
-Neighbors, Leiden, UMAP, evaluation and delivery consume the actual verified
-representation; 512 dimensions and `X_epizoo` remain specific to EpiZoo.
-All new graphs use publication v2; a minimal version-aware reader preserves real
-historical v1 profile/receipt identities. Feature-vocabulary observations share
-a bounded feature-axis reader instead of an unrelated whole-file annotation gate.
-EpiZoo native validation and accepted artifact identities are unchanged. The LLM
-uses existing typed planning and scientific-owner suitability observations; no
-runtime-error fallback replaces explicit EpiZoo with PCA. R1 is committed and
-pushed at `d46e132b27fa0ad80c5859bedcf67fd6639dd47d`. R2A and its selective
-architecture cleanup pass bounded scientific/product acceptance; the linked
-record owns final validation, Git closeout and provider-quality limitations.
+The [R2A record](docs/history/ua3.6.5-r2a-generic-cell-embedding.md) preserves the
+acceptance of the now-retired dedicated `pca_embed_cells` execution/publication
+owner and its downstream contracts. Its historical defaults and version readers
+are not current execution instructions. Current PCA and downstream work use the
+registered native package functions described in the [PCA guide](docs/guides/pca-analysis.md)
+and [scATAC guide](docs/guides/native-scatac-analysis.md).
+Exact representation, parameter and ordered-axis provenance remain required.
+EpiZoo retains its own model/resource requirements; a failure never authorizes
+an automatic switch to another scientific method. The linked record retains
+its original validation, Git closeout and provider-quality limitations.
 
 ## Current scientific tool inventory
 
-The following inventory is derived from `build_default_tool_registry()` in
-`src/agent/orchestration/registry.py`. All thirty-one currently registered tools
-are planner-visible and have authoritative semantic metadata. This is a
-snapshot, not a permanent tool-count constraint: future coverage must be
-derived from the registry.
+`build_default_tool_registry()` in `src/agent/orchestration/registry.py` owns the
+current inventory: 34 entries, of which 33 are AI-plannable. The independent
+`invoke_native_function` entry serves Native Functions with zero provider calls.
+Derive future inventories and function/parameter offers from the Registry rather
+than treating this snapshot as a permanent count constraint.
 
-| Registered tool | Scientific purpose / artifact |
+| Current interfaces | Scientific purpose |
 | --- | --- |
-| `generate_regulatory_sequences` | Native pretrained DNA-Diffusion; exact count of synthetic 200-base candidates, GC/entropy/homopolymers/diversity, reusable FASTA and distinct generation provenance |
-| `predict_regulatory_sequences` | Native DHS64 sequence DNase prediction with exact biosamples and 500-position encoding |
-| `evaluate_regulatory_predictions` | Independent compatible observed DNase evaluation, without inference replay |
-| `optimize_regulatory_sequences` | Native constrained DeepPBMC editing of existing 2,114-base human DNA |
-| `inspect_scATAC_fragments` | Bounded native fragment structure inspection, without reference qualification |
-| `corroborate_cell_type_annotation` | Separate signature-bound CellMarker evidence, preserving native labels |
-| `posttrain_epizoo_model` | Independent native training from an exact accepted initialized model |
-| `inspect_scATAC` | Safe scATAC H5AD inspection and lightweight metadata |
-| `epizoo_embed_cells` | Sparse preprocessing, cached EpiZoo inference, `.npy` embeddings and ordered cell IDs |
-| `pca_embed_cells` | Centered sparse-safe Scanpy PCA of supplied X; exact ordered cells, fit provenance and independently verified publication |
-| `build_cell_neighbors` | Compact neighbor-graph H5AD from the verified upstream representation and actual dimensions; legacy EpiZoo and PCA |
-| `cluster_cells` | Fixed-seed weighted Leiden clustering in a new compact H5AD |
-| `compute_cell_umap` | Deterministic 2D UMAP in a new compact H5AD |
-| `evaluate_cell_clustering` | Fixed clustering versus evaluation-only labels; NMI, ARI, AMI, Homogeneity JSON |
-| `transfer_cell_labels` | Exact within-species reference-to-query kNN annotation H5AD |
-| `evaluate_cell_annotation` | Fixed annotation metrics, confusion counts, and confidence diagnostics JSON |
-| `validate_scATAC_feature_space` | Explicit raw sparse regulatory-count provenance manifest |
-| `build_replicate_pseudobulk` | Exact sparse SUM by `(group, replicate, condition)` |
-| `run_replicate_differential_accessibility` | Replicate-aware, independently verified pinned edgeR v4 quasi-likelihood DA |
-| `inspect_raw_scATAC` | Bounded FASTQ/BAM intake, authoritative manifest, and independent source-aware verification |
-| `prepare_scATAC_fragments` | Verified FASTQ to canonical per-library v2 BGZF/tabix fragments with exact support, rich Chromap provenance and durable publication recovery |
-| `import_scATAC_fragments` | Explicit external 10x fragment adoption to v2, complete source/conservation verification and durable publication recovery |
-| `prepare_scATAC_bam_fragments` | Qualified corrected-CB BAM to strand-absent v2, independently verified exact-key read-pair support and durable publication recovery |
-| `compute_scATAC_qc` | Complete observed-barcode QC v1: canonical-record depth, fixed TSS incidence/enrichment, length bins/ratios, independently verified without production intersection |
-| `select_scATAC_cells` | Explicit exact QC thresholds, every-barcode decisions, ordered QC-selected candidate identities; statistical calling not assessed |
-| `build_scATAC_cell_by_ccre` | Full ordered canonical fragment-record counts from exact verified fragments/selection/reference; int64 CSR, independent reconstruction, durable publication |
-| `adopt_scATAC_cell_by_ccre` | Exact external canonical int64 CSR H5AD adoption; declared value semantics, source/output conservation, matrix-owner authority, truthful external provenance |
-| `annotate_scATAC_cell_types` | Primary MAESTRO annotation of canonical or declared peak counts and exact groups; pinned resources/context, completion authority and immutable-source annotated H5AD |
-| `adopt_scATAC_cell_by_features` | Exact neutral external regulatory-feature matrix adoption with declared species/assembly/reference and value semantics |
-| `adapt_epizoo_species` | Qualified EpiZoo species post-training with explicit strategy and pinned resource/profile specification |
-| `build_scATAC_cell_by_features` | Exact QC-selected or explicitly caller-ordered neutral fragment-derived regulatory-feature counts with independent reconstruction and authority |
+| `run_scanpy`, `run_episcanpy`, `run_snapatac2` | Native preprocessing, reductions, neighbors, clustering and visualization with each selected API's actual prerequisites and parameters; no package priority |
+| `run_signac`, `run_chromap`, `run_macs3`, `run_chromvar`, `run_motifmatchr`, `run_cicero`, `run_cicero_cds`, `run_archr`, `run_monalisa` | Existing package-level native scientific APIs and their distinct input/resource contracts |
+| `epizoo_embed_cells`, `adapt_epizoo_species`, `posttrain_epizoo_model` | EpiZoo inference with compact H5AD/NPY/ordered IDs, qualified species adaptation and explicit native model training |
+| `inspect_scATAC`, `inspect_raw_scATAC`, `inspect_scATAC_fragments` | Bounded inspection of supplied processed or raw inputs |
+| `annotate_scATAC_cell_types`, `transfer_cell_labels`, `evaluate_cell_clustering` | Native annotation, reference-to-query transfer and clustering evaluation |
+| `call_scATAC_peaks`, `compute_motif_accessibility` | Existing task-level peak calling and motif accessibility with exact scientific source/resource binding |
+| `adopt_scATAC_cell_by_ccre`, `adopt_scATAC_cell_by_features` | Exact external matrix adoption under the existing measurement/reference contracts |
+| `validate_scATAC_feature_space`, `build_replicate_pseudobulk`, `run_replicate_differential_accessibility` | Declared feature-space validation, replicate aggregation and differential accessibility |
+| `generate_regulatory_sequences`, `predict_regulatory_sequences`, `evaluate_regulatory_predictions`, `optimize_regulatory_sequences`, `prepare_scatac_regulatory_sequences` | Existing native regulatory-sequence capabilities and exact scientific input preparation |
+| `invoke_native_function` | Direct structured native calls, independent of AI planning |
 
-Detailed scientific contracts, recovery identities, artifact formats, public
-APIs, and accepted scientific results remain in the milestone references below.
-Evidence/report projections support the existing processed-H5AD workflows.
-Raw intake, FASTQ fragments, external adoption, qualified BAM preparation, barcode QC, explicit selection, cell-by-cCRE construction and primary cell-type annotation have verified figureless reporting. Unsupported projections fail
-closed; arbitrary new result fields never become report facts.
+Current execution uses the shared Executor, native process owner, NativePublication,
+RunStore, SessionTurn and Revision. Evidence, figures and downloads project actual
+accepted results; unsupported projections fail closed and arbitrary result fields
+never become report facts. Historical milestone references preserve their accepted
+results and limitations without re-registering retired execution tools.
 
 M11.1 is complete at the data-domain/artifact layer: immutable reference identity
 and library/barcode processing contracts are available through their modules.
@@ -2582,23 +2583,20 @@ and benchmarks—not provider-specific rendering, workflow templates, or changes
 to the generic compiler, executor, runtime, persistence, or recovery. Missing
 reviewed metadata for required scientific/request parameters fails closed;
 never infer, ignore, or silently default such parameters. Production must not
-import the benchmark-only semantic oracle or use `DeterministicPlanner` as an
-oracle for LLM output. Keyword/regex routing, workflow classifiers/tables,
-string-similarity guesses, and reference/query positional guesses are prohibited
-in LLM planning, semantic lowering/compiler behavior, planning recovery/fallback,
-and automatic workflow inference. The existing regex/intent routing in the
-offline `DeterministicPlanner` remains supported when that planner is selected,
-including the low-level `AgentRuntime()` compatibility default; it must not
-become an automatic fallback or semantic oracle for LLM output.
+import the benchmark-only semantic oracle. Keyword/regex routing, workflow
+classifiers/tables, string-similarity guesses and reference/query positional guesses
+are prohibited in LLM planning, semantic lowering, recovery and workflow inference.
+AI Research uses LLM planning with deterministic binding of explicit choices and
+parameters. The retired rule-based scientific planner is not a supported mode or
+fallback. Native Functions invokes explicit structured calls without a model.
 
 ### Planning modes, v3/v4, and compatibility
 
-Application/CLI new runs are LLM-first with an explicit primary
-`PlanningModelProfile`; missing configuration fails before durable state
-creation. An explicitly injected Planner is authoritative. Select
-`DeterministicPlanner` explicitly for application offline workflows; low-level
-`AgentRuntime()` retains its deterministic default for compatibility. Resume
-and cancel require no planner, provider, model, SDK, or credential configuration.
+Application/CLI AI runs require an explicit primary `PlanningModelProfile`;
+missing configuration fails before durable state creation. Explicit Planner
+injection remains available for tests and integrations through the shared protocol.
+A bare `AgentRuntime()` has no planner: new planning requires one, while prepared
+execution, resume and cancel require no provider, model, SDK or credential.
 
 Wire v4 is the default in `LLMPlanner` and application-owned LLM construction.
 Wire v3 remains available as an explicit compatibility mode.
@@ -2614,9 +2612,6 @@ Omitting `wire_mode` in `LLMPlanner(model)`, `planning_wire_mode` in
 one shared default. Explicit `PlanningWireMode.V3` / `--wire-mode v3` selects
 compatibility mode; explicit v4 remains supported. The application's `None`
 sentinel distinguishes omission from conflicting explicit configuration.
-Deterministic CLI mode rejects this LLM-specific option. Low-level
-`AgentRuntime()` still defaults to `DeterministicPlanner`; this separate offline
-construction behavior does not change normal application LLM planning.
 There is no schema auto-detection, combined schema, automatic version switching,
 v4-to-v3 hidden fallback, or cross-version recovery fallback. Failover retains
 the selected wire mode. Explicit v3 prompt/parser/planner and plan identity
@@ -3068,8 +3063,8 @@ retrieval, RAG, and multi-agent orchestration remain outside current scope.
 
 ### Milestone 3 — Agent orchestration core
 
-Milestone 3 is complete. The Agent now supports natural request
-representation, deterministic bootstrap planning, typed executable plans, an
+Milestone 3 introduced natural request representation, initial bootstrap
+planning (now retired), typed executable plans, an
 explicit immutable tool registry, safe sequential execution, dependency/output
 references, orchestration verification, structured errors, bounded
 same-argument retry, execution traces, and PLAN_ONLY mode.
@@ -3584,7 +3579,7 @@ atomically installed, and fsynced. The final annotation-file SHA-256 is stored
 in the lightweight tool/durable step result, not inside the same H5AD artifact,
 where it would be self-referential.
 
-The deterministic planner generates:
+LLM planning can compose the existing native transfer dependencies:
 
 ```text
 inspect_reference → embed_reference ┐
@@ -3730,19 +3725,10 @@ Milestone 6.4 intentionally does not rehash reference/query EpiZoo embeddings or
 checkpoint contents, which remain M6.3 responsibilities, and it does not hash
 the complete ground-truth H5AD.
 
-The deterministic planner supports standalone fixed-annotation evaluation and:
-
-```text
-inspect_reference → embed_reference ┐
-                                      ├→ transfer → evaluate_annotation
-inspect_query     → embed_query     ┘
-```
-
-The chained evaluation receives `transfer.annotation_path` through
-`StepOutputRef`. Ground-truth path and key occur only in the evaluation step and
-never reach inspection, embedding, or transfer. PLAN_ONLY executes zero
-scientific tools, and the LLM receives
-only sanitized metadata and cannot invent executable metric settings.
+The M6.4 acceptance recorded standalone and chained fixed-annotation evaluation.
+That evaluation capability and its rule-based planning recipe are retired; the
+historical record retains their original source/verification boundaries. Current
+native annotation, transfer and clustering evaluation retain their separate owners.
 
 For a direct transfer dependency, the verifier requires both annotation path
 and annotation SHA-256 to equal the verified transfer result. Standalone
@@ -4224,10 +4210,10 @@ workspace. Scientific execution remains exclusively in the existing
 second planner, executor, verifier, scientific pipeline, or cancellation state
 system.
 
-Application-owned new runs require an explicit primary LLM profile unless an
-explicit Planner, including `DeterministicPlanner`, is injected. Missing LLM
-configuration is rejected before durable run-state creation. Resume and cancel
-do not require planning configuration.
+Application-owned AI runs require an explicit primary LLM profile. Explicit
+Planner injection supports tests and integrations, without a built-in scientific
+rule planner or fallback. Missing LLM configuration is rejected before durable
+run-state creation. Prepared execution, resume and cancel need no model configuration.
 
 The immutable JSON-safe application schemas are:
 
@@ -4366,8 +4352,8 @@ It emits compact deterministic JSON. Exit code 0 means success or planned; 2
 means invalid CLI/application/provider configuration; 3 means runtime or
 durable-state failure; 4 means a cancelled application result; and 5 means
 postprocessing failure. Since M9.4.5, new runs default to LLM planning with
-explicit provider/model configuration; deterministic/offline planning requires
-explicit selection. OpenAI, Gemini, and Groq adapters are supported, but
+explicit provider/model configuration. Prepared execution, resume and cancel
+need no provider setup. OpenAI, Gemini and Groq adapters are supported, but
 provider secrets remain environment-only and never become CLI arguments,
 request inputs, durable state, application results, or output. M9 subsequently
 added profile/factory-based application construction while keeping provider
@@ -4389,21 +4375,12 @@ change, runtime semantic change, provider semantic change, EpiZoo change,
 dependency, ReportModel, or LLM-generated scientific narrative. At M7.4 the
 registry had eight tools and planning wire was v2; RunStore remains v3.
 
-The canonical first demo is:
-
-```text
-inspect_scATAC
-→ epizoo_embed_cells
-→ build_cell_neighbors
-→ cluster_cells
-→ compute_cell_umap
-→ verified evidence
-→ Leiden UMAP
-→ deterministic report
-```
-
-The richer reference/query annotation workflow remains available through the
-scientific-tool layer but is not required for this primary application demo.
+The historical M7.4 demo exercised the dedicated embedding/graph/clustering
+pipeline that has since been retired. Its acceptance totals below record that
+checkpoint, not an executable current example. Current demonstrations use the
+[native scATAC guide](docs/guides/native-scatac-analysis.md) or
+[Native Functions guide](docs/guides/native-functions.md), retaining the selected
+native function's graph/representation and shared evidence/result owners.
 
 Accepted validation:
 
@@ -4550,7 +4527,7 @@ multiplication, and compared exactly row by row as canonical CSR. Source and
 artifact files are checked for mutation across verification. No complete
 matrix densification is permitted.
 
-The deterministic planner produces:
+LLM planning can compose:
 
 ```text
 validate_feature_space
@@ -4658,9 +4635,9 @@ script. Exact structural/discrete/digest comparisons, tolerance-bounded edgeR
 numeric comparisons, independent Python BH recomputation, exact package-stack
 compatibility, and before/after source/artifact hashes are required.
 
-Deterministic planning supports both a fixed verified pseudobulk → DA plan and
-raw scATAC → feature validation → pseudobulk → DA. The chained DA path uses a
-`StepOutputRef`; mixed raw and fixed-pseudobulk sources are rejected. At M8.2
+LLM planning can compose supplied pseudobulk → DA or raw scATAC → feature
+validation → pseudobulk → DA. Each step consumes its exact selected source;
+`StepOutputRef` carries a generated pseudobulk into DA. At M8.2
 the LLM planner used wire v2; current v3/v4 planning preserves the request/ref
 executable-value boundary. PLAN_ONLY
 starts neither Python science nor R.

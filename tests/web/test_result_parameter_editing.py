@@ -1,107 +1,94 @@
-"""Accepted-plan edits use real execution owners; provider and EpiZoo are scripted."""
-from copy import deepcopy
+"""HTTP result editing uses the canonical native plan; numerical work is simulated."""
+import json
+import sys
+from pathlib import Path
+
+import anndata as ad
+import numpy as np
+import pandas as pd
+import pytest
+from scipy import sparse
 from fastapi.testclient import TestClient
+
+from agent.application import InteractiveAgentApplication
+from agent.orchestration import PlanningModelProfile
+from agent.providers import PlanningModelFactoryRegistry
 from agent.schemas import PriorOutputRef
-from agent.application.structured_parameters import result_parameters
+from agent.web.app import create_app
 from helpers import wait_turn
-from test_leiden_resolution import resolution_harness, start
-from test_species_handoff import web
+
+sys.path.insert(0, str(Path(__file__).parents[1]/'native_raw'))
+from test_execution_consolidation import Model
 
 
-def test_edit_composed_result_reuses_upstream_and_reopens(tmp_path, monkeypatch):
-    harness, inputs = resolution_harness(tmp_path, monkeypatch)
-    with TestClient(web(harness, inputs)) as client:
-        client.post('/api/v1/sessions', json={'session_id': 'session'})
-        first, _, _ = start(client, harness)
-        assert first['status'] == 'succeeded', first
-        sessions = harness.service._application.sessions
-        original = sessions.load('session')
-        revision = original.revisions[-1]
-        before_run = harness.service._application.run_store.load(revision.run_id).to_dict()
-        calls = sum(len(m.calls) for m in harness.models)
+@pytest.mark.parametrize('repeated', [False, True])
+def test_native_result_edit_reuses_exact_upstream_and_reopens(tmp_path, monkeypatch, repeated):
+    from agent.tools import _native_process
+    from agent.tools.analysis import native_matrix
+    monkeypatch.setattr(_native_process, 'call', lambda operation, arguments, local: local())
+    calls = []
+    def simulated(self, args, stage, matrix):
+        fn = args['function_name']; calls.append(fn)
+        slots = []
+        if fn == 'tl.spectral':
+            matrix.obsm['X_spectral'] = np.ones((matrix.n_obs, 2)); slots = ['obsm.X_spectral']
+        elif fn == 'pp.knn':
+            matrix.obsp['distances'] = sparse.eye(matrix.n_obs, format='csr'); slots = ['obsp.distances']
+        elif fn == 'tl.leiden':
+            matrix.obs['leiden'] = pd.Categorical(['0'] * matrix.n_obs); slots = ['obs.leiden']
+        matrix.write_h5ad(stage/'result.h5ad')
+        return dict(completion='succeeded', versions={'snapatac2':'SIMULATED'}, implementation=[],
+            native_output_type='NoneType', result_slots=slots,
+            effective_parameters={'resolution':1.,'random_state':0, **args.get('kwargs', {})})
+    monkeypatch.setattr(native_matrix.SNAPATAC2, 'native', simulated.__get__(native_matrix.SNAPATAC2))
+    model = Model(umap=False); complete = model.complete
+    def respond(**kw):
+        value = json.loads(complete(**kw))
+        if repeated and value.get('schema_version') == 4:
+            steps = value['decision']['steps']
+            from copy import deepcopy
+            other = deepcopy(steps[-1]); other['step_id'] = 'other'
+            steps.append(other)
+        if repeated and 'outputs' in value:
+            value['outputs'].append(dict(name='other', step_id='other', output_key='matrix_path'))
+        return json.dumps(value)
+    model.complete = respond
+    profile = PlanningModelProfile('native-edit','scripted',model.model_id)
+    app = InteractiveAgentApplication(tmp_path/'app',model_profiles=(profile,),default_profile_id=profile.profile_id,
+        planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted':lambda _:model}))
+    path = tmp_path/'counts.h5ad';ad.AnnData(sparse.eye(8, format='csr')).write_h5ad(path)
+    app.create_session('session')
+    result = app.submit_turn('session','first','Cluster these counts.',expected_generation=0,execution_inputs={'input_path':str(path)})
+    assert result.status == 'succeeded', result.to_dict()
+    sessions = app._application.sessions; before = sessions.load('session'); revision = before.revisions[-1]
+    original = app._application.run_store.load(revision.run_id).to_dict()
+    step = 'other' if repeated else 'clusters'
+    model.complete = lambda **kw: pytest.fail('Result-scoped edit called the model')
+    with TestClient(create_app(app)) as client:
         metadata = client.get(f'/api/v1/sessions/session/revisions/{revision.revision_id}/parameters')
         assert metadata.status_code == 200, metadata.text
-        cluster = next(s for s in metadata.json()['steps'] if s['tool'] == 'cluster_cells')
-        assert next(p for p in cluster['parameters'] if p['argument'] == 'resolution')['value'] == .7
-        assert next(p for p in cluster['parameters'] if p['argument'] == 'random_seed')['value'] == 0
-        assert sum(len(m.calls) for m in harness.models) == calls
-        overrides = [dict(tool=cluster['tool'], step_id=cluster['step_id'], argument='resolution', value=.9)]
-        body = dict(turn_id='edited', utterance='', expected_generation=original.generation,
-            rerun_revision_id=revision.revision_id, parameter_overrides=overrides)
-        response = client.post('/api/v1/sessions/session/turns', json=body)
+        target = next(s for s in metadata.json()['steps'] if s['step_id'] == step)
+        assert next(p for p in target['parameters'] if p['argument']=='resolution')['value'] == 1.
+        calls.clear()
+        response = client.post('/api/v1/sessions/session/turns',json=dict(turn_id='edit',utterance='',
+            expected_generation=before.generation,rerun_revision_id=revision.revision_id,
+            parameter_overrides=[dict(tool='run_snapatac2',native_function='tl.leiden',step_id=step,
+                argument='kwargs',value={'resolution':.7,'random_state':17})]))
         assert response.status_code == 202, response.text
-        result = wait_turn(client, 'edited')
-        assert result['status'] == 'succeeded', result
-        assert result['utterance'] == '' and result['rerun_revision_id'] == revision.revision_id
-        assert sum(len(m.calls) for m in harness.models) == calls
-        state = sessions.load('session')
-        assert len(state.revisions) == 2 and state.revisions[0] == revision
-        assert harness.service._application.run_store.load(revision.run_id).to_dict() == before_run
-        rerun = harness.service._application.run_store.load(state.revisions[-1].run_id)
-        assert {s.tool_name for s in rerun.steps} == {'cluster_cells', 'compute_cell_umap'}
-        edited = next(s for s in rerun.plan.steps if s.tool_name == 'cluster_cells')
-        assert edited.arguments['resolution'] == .9
-        assert any(isinstance(v, PriorOutputRef) for v in edited.arguments.values())
-        assert state.revisions[-1].parent_revision_id == revision.revision_id
+        done = wait_turn(client,'edit'); assert done['status']=='succeeded',done
+        assert calls == ['tl.leiden']
+        state = sessions.load('session'); new = state.revisions[-1]
+        run = app._application.run_store.load(new.run_id)
+        assert [s.step_id for s in run.steps] == [step]
+        assert isinstance(run.plan.steps[0].arguments['input_path'], PriorOutputRef)
+        assert run.steps[0].resolved_arguments['kwargs'] == {'resolution':.7,'random_state':17}
+        assert new.parent_revision_id == revision.revision_id
+        assert app._application.run_store.load(revision.run_id).to_dict() == original
         reopened = client.get('/api/v1/sessions/session').json()
-        assert reopened['active_revision_id'] == state.revisions[-1].revision_id
-        assert client.post('/api/v1/sessions/session/activate', json=dict(turn_id='back',
-            expected_generation=state.generation, revision_id=revision.revision_id)).status_code == 200
+        assert reopened['active_revision_id'] == new.revision_id
+        activated = client.post('/api/v1/sessions/session/activate', json=dict(turn_id='back',
+            revision_id=revision.revision_id, expected_generation=state.generation))
+        assert activated.status_code == 200, activated.text
         assert sessions.load('session').active_revision_id == revision.revision_id
-        assert sum(len(m.calls) for m in harness.models) == calls
-        from test_leiden_resolution import QUESTION
-        active = sessions.load('session')
-        assert client.post('/api/v1/sessions/session/turns', json=dict(turn_id='question',
-            utterance=QUESTION, expected_generation=active.generation)).status_code == 202
-        answer = wait_turn(client, 'question')
-        assert answer['response']['scientific']['availability'] == 'generated', answer
-        assert '0.7' in answer['response']['text']
-        after_question = sessions.load('session')
-        assert after_question.active_revision_id == revision.revision_id
-        assert after_question.interactions[-1].base_revision_id == revision.revision_id
-        assert len(after_question.revisions) == 2
-
-
-def test_repeated_operations_edit_only_the_selected_step(tmp_path, monkeypatch):
-    from test_leiden_resolution import OMITTED
-    harness, inputs = resolution_harness(tmp_path, monkeypatch, plan_variant='repeated-cluster')
-    # Both clustering operations consume the accepted neighbor graph. A cluster
-    # result is not itself a neighbor-graph producer.
-    import test_h5ad_analysis as analysis
-    import json
-    original_complete = analysis.ScientificPlanModel.complete
-    def independent_clusters(self, **kwargs):
-        raw = original_complete(self, **kwargs)
-        value = json.loads(raw)
-        if value.get('schema_version') == 4:
-            steps = value['decision']['steps']
-            first = next(s for s in steps if s['step_id'] == 'cluster')
-            next(s for s in steps if s['step_id'] == 'another-cluster')['sources'] = deepcopy(first['sources'])
-            return json.dumps(value)
-        return raw
-    monkeypatch.setattr(analysis.ScientificPlanModel, 'complete', independent_clusters)
-    with TestClient(web(harness, inputs)) as client:
-        client.post('/api/v1/sessions', json={'session_id': 'session'})
-        first, _, _ = start(client, harness, utterance=OMITTED)
-        assert first['status'] == 'succeeded', first
-        sessions = harness.service._application.sessions
-        before = sessions.load('session')
-        revision = before.revisions[-1]
-        meta = result_parameters(sessions, 'session', revision.revision_id)
-        assert {s['step_id'] for s in meta['steps'] if s['tool'] == 'cluster_cells'} == {'cluster', 'another-cluster'}
-        calls = sum(len(m.calls) for m in harness.models)
-        response = client.post('/api/v1/sessions/session/turns', json=dict(turn_id='second-edit',
-            utterance='', expected_generation=before.generation, rerun_revision_id=revision.revision_id,
-            parameter_overrides=[dict(tool='cluster_cells',step_id='another-cluster',argument='resolution',value=.4),
-                                 dict(tool='cluster_cells',step_id='another-cluster',argument='random_seed',value=17)]))
-        assert response.status_code == 202, response.text
-        result = wait_turn(client, 'second-edit')
-        assert result['status'] == 'succeeded', result
-        assert sum(len(m.calls) for m in harness.models) == calls
-        state = sessions.load('session')
-        run = harness.service._application.run_store.load(state.revisions[-1].run_id)
-        assert [s.step_id for s in run.steps] == ['another-cluster', 'umap']
-        edited = run.steps[0]
-        assert edited.resolved_arguments['resolution'] == .4
-        assert edited.resolved_arguments['random_seed'] == 17
-        assert state.revisions[0] == revision
+        assert calls == ['tl.leiden']
+        assert sessions.load('session').revisions[0] == revision

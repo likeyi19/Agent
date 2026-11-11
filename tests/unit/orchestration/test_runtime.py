@@ -13,7 +13,6 @@ from agent.orchestration import (
     AgentRequest,
     AgentRuntime,
     ArgumentSpec,
-    DeterministicPlanner,
     ErrorCategory,
     ErrorClassification,
     PlanExecutor,
@@ -169,96 +168,12 @@ def test_invalid_plan_only_plan_fails_preflight_without_execution() -> None:
     safe_tool.assert_not_called()
 
 
-def _inspection_result(path: str) -> dict[str, object]:
-    return {
-        "input_path": path,
-        "n_cells": 2,
-        "n_features": 4,
-        "x_storage_type": "fake.CSRDataset",
-        "x_is_sparse": True,
-        "x_dtype": "float32",
-        "nnz": 4,
-        "density": 0.5,
-        "obs_columns": [],
-        "var_columns": [],
-        "obs_names_sample": ["cell-1", "cell-2"],
-        "var_names_sample": ["feature-1", "feature-2"],
-    }
 
 
-def test_deterministic_planner_runs_through_runtime_with_fake_registry() -> None:
-    tool = Mock(side_effect=lambda path: _inspection_result(path))
-    registry = ToolRegistry(
-        (
-            _spec(
-                "inspect_scATAC",
-                tool,
-                arguments={"path": ArgumentSpec((str,))},
-                result_fields={
-                    "input_path": (str,),
-                    "n_cells": (int,),
-                    "n_features": (int,),
-                    "x_storage_type": (str,),
-                    "x_is_sparse": (bool,),
-                    "x_dtype": (str,),
-                    "nnz": (int, type(None)),
-                    "density": (float, type(None)),
-                    "obs_columns": (list,),
-                    "var_columns": (list,),
-                    "obs_names_sample": (list,),
-                    "var_names_sample": (list,),
-                },
-            ),
-        )
-    )
-    request = AgentRequest(
-        "request-1",
-        "Inspect this scATAC dataset",
-        {"input_path": "/data/input.h5ad"},
-    )
-
-    result = AgentRuntime(
-        planner=DeterministicPlanner(), registry=registry
-    ).run(request)
-
-    assert result.status is RunStatus.SUCCEEDED
-    tool.assert_called_once_with(path="/data/input.h5ad")
 
 
-@pytest.mark.parametrize(
-    ("prompt", "inputs", "expected_code"),
-    [
-        ("cluster cells", {}, "MISSING_REQUIRED_INPUT"),
-        ("inspect dataset", {}, "MISSING_REQUIRED_INPUT"),
-    ],
-)
-def test_expected_planner_failures_become_user_input_errors(
-    prompt, inputs, expected_code
-) -> None:
-    registry = ToolRegistry(())
-    request = AgentRequest("request-1", prompt, inputs)
-
-    result = AgentRuntime(
-        planner=DeterministicPlanner(), registry=registry
-    ).run(request)
-
-    assert result.status is RunStatus.FAILED
-    assert result.errors[0].category is ErrorCategory.USER_INPUT_ERROR
-    assert result.errors[0].code == expected_code
 
 
-def test_planner_registry_mismatch_becomes_internal_error() -> None:
-    result = AgentRuntime(
-        planner=DeterministicPlanner(), registry=ToolRegistry(())
-    ).run(
-        AgentRequest(
-            "request-1", "inspect", {"input_path": "/data/input.h5ad"}
-        )
-    )
-
-    assert result.status is RunStatus.FAILED
-    assert result.errors[0].category is ErrorCategory.INTERNAL_AGENT_ERROR
-    assert result.errors[0].code == "PLANNER_REGISTRY_CONTRACT_MISMATCH"
 
 
 class RaisingPlanner:

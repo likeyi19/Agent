@@ -74,7 +74,6 @@ _GROUP_PORTS = (
     ('inspect_scATAC', 'dataset'),
     ('epizoo_embed_cells', 'dataset'),
     ('adopt_scATAC_cell_by_features', 'source'),
-    ('cluster_cells', 'analysis'),
     ('evaluate_cell_clustering', 'analysis'),
     ('evaluate_cell_clustering', 'ground_truth_dataset'),
     ('validate_scATAC_feature_space', 'input_path'),
@@ -102,11 +101,9 @@ _BAM_COMPOSITION = 'bam-science.v1'
 _FASTQ_COMPOSITION = 'fastq-science.v1'
 _NATIVE_COMPOSITION = 'native-science.v1'
 # These consumers may receive user parameters; only the planner binds matrix outputs.
-_RAW_ANALYSIS_TOOLS = ('build_cell_neighbors', 'cluster_cells', 'compute_cell_umap')
 _FASTQ_SELECTION_ERRORS = ('FASTQ_RESOURCE_AMBIGUOUS',)
 _BAM_SELECTION_ERRORS = ('BAM_RESOURCE_AMBIGUOUS',)
-_H5AD_COMPANION_TOOLS = ('epizoo_embed_cells', 'build_cell_neighbors',
-                         'cluster_cells', 'compute_cell_umap', 'adopt_scATAC_cell_by_features', 'adapt_epizoo_species','posttrain_epizoo_model')
+_H5AD_COMPANION_TOOLS = ('epizoo_embed_cells', 'run_snapatac2', 'adopt_scATAC_cell_by_features', 'adapt_epizoo_species','posttrain_epizoo_model')
 _H5AD_SOURCE_ARGUMENTS = {'input_path', 'path', 'output_dir', 'embedding_path',
                           'cell_ids_path', 'analysis_path', 'source_path', 'source_sha256',
                           'matrix_manifest_path', 'matrix_manifest_sha256'}
@@ -1562,7 +1559,7 @@ class LocalResourceAdmission:
         if set(values).intersection(source):
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         allowed = {}
-        for name in (tool_name, *(('run_snapatac2',) if tool_name == 'run_chromap' else ()), *_RAW_ANALYSIS_TOOLS):
+        for name in (tool_name, *(('run_snapatac2',) if tool_name == 'run_chromap' else ())):
             spec = registry.get(name)
             for key, argument in (dict(spec.required_arguments) | dict(spec.optional_arguments)).items():
                 if key not in source and key != 'output_dir' and (name == tool_name or argument.planning.scientific_parameter):

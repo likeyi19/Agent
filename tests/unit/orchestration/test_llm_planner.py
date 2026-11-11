@@ -11,7 +11,6 @@ import pytest
 from agent.orchestration import (
     AgentRequest,
     AgentRuntime,
-    DeterministicPlanner,
     ErrorCategory,
     LLMPlanner,
     PlanningWireMode,
@@ -131,71 +130,12 @@ def _embed_step(**changes) -> dict[str, object]:
     return step
 
 
-def _neighbors_step(**changes) -> dict[str, object]:
-    step: dict[str, object] = {
-        "step_id": "neighbors",
-        "tool_name": "build_cell_neighbors",
-        "arguments": _arguments(
-            "build_cell_neighbors",
-            embedding_path=_ref_binding("embed", "embedding_path"),
-            cell_ids_path=_ref_binding("embed", "cell_ids_path"),
-            output_dir=_input_binding("output_dir"),
-        ),
-        "depends_on": ["embed"],
-        "description": "Build a sparse neighbor graph.",
-    }
-    step.update(changes)
-    return step
 
 
-def _cluster_step(**changes) -> dict[str, object]:
-    step: dict[str, object] = {
-        "step_id": "cluster",
-        "tool_name": "cluster_cells",
-        "arguments": _arguments(
-            "cluster_cells",
-            analysis_path=_ref_binding("neighbors", "analysis_path"),
-            output_dir=_input_binding("output_dir"),
-        ),
-        "depends_on": ["neighbors"],
-        "description": "Cluster cells with Leiden.",
-    }
-    step.update(changes)
-    return step
 
 
-def _umap_step(**changes) -> dict[str, object]:
-    step: dict[str, object] = {
-        "step_id": "umap",
-        "tool_name": "compute_cell_umap",
-        "arguments": _arguments(
-            "compute_cell_umap",
-            analysis_path=_ref_binding("cluster", "analysis_path"),
-            output_dir=_input_binding("output_dir"),
-        ),
-        "depends_on": ["cluster"],
-        "description": "Compute a two-dimensional UMAP.",
-    }
-    step.update(changes)
-    return step
 
 
-def _evaluation_step(**changes) -> dict[str, object]:
-    step: dict[str, object] = {
-        "step_id": "evaluate",
-        "tool_name": "evaluate_cell_clustering",
-        "arguments": _arguments(
-            "evaluate_cell_clustering",
-            analysis_path=_ref_binding("cluster", "analysis_path"),
-            reference_h5ad_path=_ref_binding("inspect", "input_path"),
-            label_key=_input_binding("label_key"),
-            output_dir=_input_binding("output_dir"),
-        ),
-        "depends_on": ["cluster", "inspect"],
-        "description": "Evaluate fixed clustering labels.",
-    }
-    step.update(changes)
-    return step
 
 
 def _transfer_step(**changes) -> dict[str, object]:
@@ -431,75 +371,8 @@ def test_llm_label_transfer_plan_uses_only_inputs_and_upstream_references(
     assert "metric" not in transfer.arguments
     assert "min_confidence" not in transfer.arguments
 
-def test_five_step_plan_uses_only_input_and_reference_bindings(registry) -> None:
-    planner, _ = _planner(
-        _plan_response(
-            _inspect_step(),
-            _embed_step(),
-            _neighbors_step(),
-            _cluster_step(),
-            _umap_step(),
-        )
-    )
-    request = _request(
-        {
-            "input_path": "/data/input.h5ad",
-            "output_dir": "/output",
-            "species": "mouse",
-        }
-    )
-    plan = planner.plan(request, registry)
-    assert tuple(step.tool_name for step in plan.steps) == (
-        "inspect_scATAC", "epizoo_embed_cells", "build_cell_neighbors",
-        "cluster_cells", "compute_cell_umap",
-    )
-    assert plan.steps[2].arguments["embedding_path"] == StepOutputRef(
-        "embed", "embedding_path"
-    )
-    assert plan.steps[2].arguments["cell_ids_path"] == StepOutputRef(
-        "embed", "cell_ids_path"
-    )
-    assert plan.steps[3].arguments["analysis_path"] == StepOutputRef(
-        "neighbors", "analysis_path"
-    )
-    assert plan.steps[4].arguments["analysis_path"] == StepOutputRef(
-        "cluster", "analysis_path"
-    )
-    assert "n_neighbors" not in plan.steps[2].arguments
-    assert "resolution" not in plan.steps[3].arguments
-    assert "min_dist" not in plan.steps[4].arguments
 
 
-def test_llm_evaluation_plan_uses_only_inputs_and_references(registry) -> None:
-    planner, _ = _planner(
-        _plan_response(
-            _inspect_step(),
-            _embed_step(),
-            _neighbors_step(),
-            _cluster_step(),
-            _evaluation_step(),
-        )
-    )
-    plan = planner.plan(
-        _request(
-            {
-                "input_path": "/data/input.h5ad",
-                "output_dir": "/output",
-                "species": "mouse",
-                "label_key": "celltype",
-            }
-        ),
-        registry,
-    )
-    evaluation = plan.steps[-1]
-    assert evaluation.arguments["analysis_path"] == StepOutputRef(
-        "cluster", "analysis_path"
-    )
-    assert evaluation.arguments["reference_h5ad_path"] == StepOutputRef(
-        "inspect", "input_path"
-    )
-    assert evaluation.arguments["label_key"] == "celltype"
-    assert "cluster_key" not in evaluation.arguments
 
 
 def test_request_input_values_are_preserved_exactly(registry) -> None:
@@ -621,14 +494,15 @@ def test_response_schema_is_strict_v3_tool_discriminated_and_registry_derived(
     step_union = schema["properties"]["steps"]["items"]
     assert set(step_union) == {"anyOf"}
     branches = step_union["anyOf"]
-    assert len(branches) == len(registry.names())
+    visible = tuple(n for n in registry.names() if registry.get(n).planning is not None)
+    assert len(branches) == len(visible)
     by_tool = {
         branch["properties"]["tool_name"]["enum"][0]: branch
         for branch in branches
     }
-    assert tuple(by_tool) == registry.names()
+    assert tuple(by_tool) == visible
 
-    for tool_name in registry.names():
+    for tool_name in visible:
         specialized = by_tool[tool_name]
         assert specialized["$ref"] == "#/$defs/s"
         envelope = schema["$defs"]["s"]
@@ -813,14 +687,13 @@ def test_full_catalog_schema_and_prompt_have_deterministic_size_headroom() -> No
 
     assert schema == repeated_schema
     assert _catalog_fingerprint(registry) == catalog_fingerprint
-    # R2A: 24 registered tools, including existing qualified target-model fields.
-    # Full v3 measures 16,769 schema + 27,607 prompt bytes; keep bounded headroom
-    # separately from the scoped v4 payload contract.
-    assert len(serialized_schema.encode("utf-8")) <= 17_000
-    assert len(prompt.encode("utf-8")) <= 28_000
+    # Current native catalogs include function-scoped parameters for all packages.
+    # Bound the complete v3 transport without truncating scientific metadata.
+    assert len(serialized_schema.encode("utf-8")) <= 32_000
+    assert len(prompt.encode("utf-8")) <= 100_000
     assert len(serialized_schema.encode("utf-8")) + len(
         prompt.encode("utf-8")
-    ) <= 45_000
+    ) <= 132_000
     assert count_key(schema, "anyOf") <= 5
     assert count_objects(schema) <= 2 * len(registry.names()) + 3
     assert count_key(schema, "$ref") >= 80
@@ -855,8 +728,8 @@ def test_every_request_exposes_the_same_complete_tool_catalog(
     )
 
     from catalog_expansion import expand_catalog
-    assert set(expand_catalog(prompt_payload)) == set(registry.names())
-    assert schema_tools == registry.names()
+    assert set(expand_catalog(prompt_payload)) == set(registry.names()) - {"invoke_native_function"}
+    assert schema_tools == tuple(n for n in registry.names() if n != "invoke_native_function")
 
 
 def test_prompt_catalog_is_sanitized_and_input_values_are_not_disclosed(
@@ -874,7 +747,7 @@ def test_prompt_catalog_is_sanitized_and_input_values_are_not_disclosed(
         "species",
     ]
     from catalog_expansion import expand_catalog
-    assert set(expand_catalog(payload)) == set(registry.names())
+    assert set(expand_catalog(payload)) == set(registry.names()) - {"invoke_native_function"}
     from catalog_expansion import expand_catalog
     payload["tools"] = expand_catalog(payload)
     species = payload["tools"]["epizoo_embed_cells"][2]["species"]
@@ -883,9 +756,9 @@ def test_prompt_catalog_is_sanitized_and_input_values_are_not_disclosed(
         "mouse",
     ]
     serialized_catalog = json.dumps(payload["tools"])
-    assert "function" not in serialized_catalog
+    assert "<function " not in serialized_catalog
     assert "exception_classifier" not in serialized_catalog
-    assert "module" not in serialized_catalog
+    assert "<module " not in serialized_catalog
     assert "EpiZooConfig" not in serialized_catalog
 
 
@@ -1341,20 +1214,13 @@ def test_run_mode_does_not_change_llm_plan(registry) -> None:
     assert execute == plan_only
 
 
-def test_existing_deterministic_planner_behavior_is_unchanged(registry) -> None:
-    plan = DeterministicPlanner().plan(
-        AgentRequest(
-            "request-1",
-            "Inspect this scATAC dataset",
-            {"input_path": "/data/input.h5ad"},
-        ),
-        registry,
-    )
-
-    assert plan.plan_id == "request-1:inspection"
-    assert plan.planner_name == "deterministic"
-    assert plan.steps[0].arguments["path"] == "/data/input.h5ad"
+def test_default_runtime_has_no_implicit_scientific_planner() -> None:
+    assert AgentRuntime().planner is None
 
 
-def test_default_runtime_remains_deterministic_offline() -> None:
-    assert isinstance(AgentRuntime().planner, DeterministicPlanner)
+def test_v3_cannot_select_independent_native_invocation_owner(registry):
+    planner, _ = _planner(_plan_response(dict(step_id='direct', tool_name='invoke_native_function',
+        arguments={}, depends_on=[], description=None)))
+    with pytest.raises(PlannerError) as error:
+        planner.plan(_request({'input_path': '/data/source.h5ad'}), registry)
+    assert error.value.code == 'UNKNOWN_TOOL'

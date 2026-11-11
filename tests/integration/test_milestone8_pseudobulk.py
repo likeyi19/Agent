@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 from dataclasses import replace
 from unittest.mock import Mock
 
@@ -13,7 +14,8 @@ from agent.application import ApplicationStatus, ResearchAgentApplication
 from agent.orchestration import (
     AgentRequest,
     AgentRuntime,
-    DeterministicPlanner,
+    LLMPlanner,
+    PlanningWireMode,
     PlanStep,
     RunStatus,
     StepOutputRef,
@@ -70,7 +72,7 @@ def _inputs(source: Path, *, include_output: Path | None = None) -> dict[str, ob
 def test_runtime_evidence_and_figureless_report_complete_for_m81(tmp_path: Path) -> None:
     source = _raw(tmp_path / "raw.h5ad")
     registry = build_default_tool_registry()
-    run = AgentRuntime(registry=registry).run(
+    run = AgentRuntime(planner=_pseudobulk_planner(), registry=registry).run(
         AgentRequest(
             "m81-runtime",
             "Build replicate-aware pseudobulk accessibility",
@@ -98,7 +100,7 @@ def test_runtime_evidence_and_figureless_report_complete_for_m81(tmp_path: Path)
 def test_application_completes_and_terminal_resume_reuses_m81_outputs(tmp_path: Path) -> None:
     source = _raw(tmp_path / "raw.h5ad")
     application = ResearchAgentApplication(
-        tmp_path / "workspace", planner=DeterministicPlanner()
+        tmp_path / "workspace", planner=_pseudobulk_planner()
     )
     result = application.run(
         AgentRequest(
@@ -224,3 +226,23 @@ def test_realistic_backed_sparse_acceptance_without_matrix_densification(
         assert pseudobulk["all_cells_accounted_for"] is True
     finally:
         artifact.file.close()
+
+
+def _pseudobulk_planner():
+    def inputs(*names):
+        return {name: {'binding_type': 'input', 'input_name': name} for name in names}
+    steps = [dict(step_id='features', tool_name='validate_scATAC_feature_space',
+        arguments=inputs('input_path', 'output_dir', 'matrix_source', 'matrix_semantics', 'species',
+            'genome_assembly', 'coordinate_source'), depends_on=[], description=None),
+        dict(step_id='bulk', tool_name='build_replicate_pseudobulk', arguments={
+            **inputs('output_dir', 'replicate_key', 'group_key', 'condition_key', 'group_source'),
+            'feature_space_path': {'binding_type': 'ref', 'ref_step_id': 'features', 'ref_output_key': 'feature_space_path'}},
+            depends_on=['features'], description=None)]
+    for step in steps:
+        spec = build_default_tool_registry().get(step['tool_name'])
+        step['arguments'] = {**dict.fromkeys(spec.optional_arguments), **step['arguments']}
+    class Model:
+        model_id = 'scripted-pseudobulk'
+        def complete(self, **kwargs):
+            return json.dumps(dict(schema_version=3, status='plan', steps=steps, reason=None))
+    return LLMPlanner(Model(), wire_mode=PlanningWireMode.V3)

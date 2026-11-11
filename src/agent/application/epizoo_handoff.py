@@ -10,7 +10,7 @@ from agent.schemas.orchestration import _serialize
 from .session_state import digest
 
 TOOLS = ('adopt_scATAC_cell_by_features', 'adapt_epizoo_species', 'posttrain_epizoo_model', 'epizoo_embed_cells',
-         'build_cell_neighbors', 'cluster_cells', 'compute_cell_umap')
+         'run_scanpy', 'run_episcanpy', 'run_snapatac2')
 
 
 class EpiZooResourcePrerequisite(ValueError):

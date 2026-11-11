@@ -79,7 +79,7 @@ _METRIC_ORDER = ("NMI", "ARI", "AMI", "Homogeneity")
 _METRIC_FACT_KEYS = ("nmi", "ari", "ami", "homogeneity")
 _METRIC_COLORS = ("#4c78a8", "#f58518", "#54a24b", "#b279a2")
 _FIGURE_KIND_BY_TOOL: Mapping[str, str] = {
-    "compute_cell_umap": "umap_leiden",
+
     "evaluate_cell_clustering": "clustering_metrics",
     "annotate_scATAC_cell_types": "annotation_composition",
 }
@@ -516,58 +516,6 @@ def _source_artifact(
     return copied
 
 
-def _read_umap_presentation(path: Path, *, expected_n_cells: object,
-                            clustered: bool = True) -> _UmapData:
-    try:
-        artifact = ad.read_h5ad(path, backed="r")
-    except Exception as exc:
-        raise AnalysisVisualizationError(
-            "VISUALIZATION_SOURCE_INVALID",
-            "The verified UMAP artifact could not be presentation-read.",
-        ) from exc
-    try:
-        cell_ids = tuple(str(value) for value in artifact.obs_names)
-        if (
-            not cell_ids
-            or len(set(cell_ids)) != len(cell_ids)
-            or any(not value for value in cell_ids)
-            or expected_n_cells != len(cell_ids)
-        ):
-            raise ValueError("Invalid UMAP cell identifiers.")
-        coordinates = np.asarray(artifact.obsm["X_umap"])
-        if coordinates.shape != (len(cell_ids), 2) or not np.isfinite(coordinates).all():
-            raise ValueError("Invalid UMAP coordinates.")
-        coordinates = np.array(coordinates, copy=True, order="C")
-        labels = ()
-        if clustered:
-            label_series = artifact.obs["leiden"]
-            if len(label_series) != len(cell_ids) or label_series.isna().any():
-                raise ValueError("Invalid Leiden labels.")
-            labels = tuple(str(value) for value in label_series.tolist())
-            if any(not value for value in labels):
-                raise ValueError("Invalid Leiden labels.")
-        else:
-            from agent.tools.analysis.embedding_analysis import _validate_umap_labels
-            if _validate_umap_labels(artifact):
-                raise ValueError("UMAP presentation variant disagrees with its artifact.")
-    except Exception as exc:
-        raise AnalysisVisualizationError(
-            "VISUALIZATION_SOURCE_INVALID",
-            "The verified UMAP artifact lacks valid presentation data.",
-        ) from exc
-    finally:
-        file_manager = getattr(artifact, "file", None)
-        if file_manager is not None:
-            file_manager.close()
-    categories = _first_occurrence(labels)
-    return _UmapData(
-        cell_ids=cell_ids,
-        coordinates=coordinates,
-        labels=labels,
-        categories=categories,
-        palette=_categorical_palette(len(categories)) if categories else (),
-        point_size=_umap_point_size(len(cell_ids)),
-    )
 
 
 def _metric_data(facts: Mapping[str, object]) -> _MetricData:
@@ -643,7 +591,7 @@ def _supported_figure_sources(
             )
         kind = _FIGURE_KIND_BY_TOOL.get(tool_name)
         capability = snapshot.cell_results.get(step_id)
-        if tool_name != 'compute_cell_umap' and capability is not None and capability['coordinates']:
+        if capability is not None and capability['coordinates']:
             kind = 'umap_leiden' if capability['groups'] else 'umap_coordinates'
         if kind is None:
             continue
@@ -659,8 +607,6 @@ def _supported_figure_sources(
                 "VISUALIZATION_EVIDENCE_INVALID",
                 "Verified evidence lacks supported step facts.",
             )
-        if tool_name == "compute_cell_umap" and facts.get("clustering_present") is False:
-            kind = "umap_coordinates"
         supported.append((step_id, tool_name, kind, step))
     return tuple(supported)
 
@@ -682,17 +628,16 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot, *, annotation_figure
         ordinal = len(projections) + 1
         additional_sources = ()
         capability = snapshot.cell_results.get(step_id)
-        if tool_name == "compute_cell_umap" or capability is not None and capability['coordinates']:
-            native = tool_name != 'compute_cell_umap'
+        if capability is not None and capability['coordinates']:
             source = _source_artifact(
                 artifacts,
                 step_id=step_id,
-                kind="native_matrix_h5ad" if native else "cell_umap_h5ad",
+                kind="native_matrix_h5ad",
                 tool_name=tool_name,
             )
             path = Path(str(source["artifact_path"])).expanduser().resolve()
-            if native:
-                from agent.tools.analysis.categorical import coordinates, observations, require_same_cells
+            from agent.tools.analysis.categorical import coordinates, observations, require_same_cells
+            try:
                 ids, xy = coordinates(path, capability['file']['sha256'], capability['coordinates'])
                 grouping, labels = capability['groups'], ()
                 if grouping is not None:
@@ -703,11 +648,13 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot, *, annotation_figure
                     labels = tuple(map(str, values))
                     additional_sources = (_source_artifact(artifacts, step_id=grouping['step_id'],
                         kind='native_matrix_h5ad', tool_name=grouping['tool_name']),)
-                categories = _first_occurrence(labels)
-                data = _UmapData(ids, xy, labels, categories, _categorical_palette(len(categories)) if categories else (), _umap_point_size(len(ids)))
-            else:
-                data = _read_umap_presentation(path, expected_n_cells=facts.get("n_cells"),
-                                               clustered=facts.get("clustering_present", True))
+            except AnalysisVisualizationError:
+                raise
+            except (ValueError, OSError, TypeError) as exc:
+                raise AnalysisVisualizationError('VISUALIZATION_SOURCE_INVALID',
+                    'Pinned native coordinates or categories are unavailable or invalid.') from exc
+            categories = _first_occurrence(labels)
+            data = _UmapData(ids, xy, labels, categories, _categorical_palette(len(categories)) if categories else (), _umap_point_size(len(ids)))
             digest = _umap_plot_digest(data.cell_ids, data.coordinates, data.labels)
             legend_columns = max(1, math.ceil(len(data.categories) / 20))
             width_px = int((8.0 + 1.5 * (legend_columns - 1)) * _DPI)
@@ -742,10 +689,9 @@ def _derive_figure_projections(snapshot: _EvidenceSnapshot, *, annotation_figure
                 for name in ("leiden_labels_sha256", "category_order", "palette", "palette_version"):
                     presentation.pop(name)
                 presentation.update(clustering_present=False, point_color="#4477AA")
-            if native:
-                presentation = dict(presentation, coordinate_slot=capability['coordinates'],
-                    grouping_slot=None if grouping is None else grouping['field'],
-                    source_sha256=capability['source_sha256'], projection_version=3)
+            presentation = dict(presentation, coordinate_slot=capability['coordinates'],
+                grouping_slot=None if grouping is None else grouping['field'],
+                source_sha256=capability['source_sha256'], projection_version=3)
         elif tool_name == "evaluate_cell_clustering":
             source = _source_artifact(
                 artifacts,
@@ -1223,7 +1169,7 @@ def _bundle_payload(
 
 
 def _manifest_payload(snapshot, projections, png_digests, renderer):
-    """Keep native and historical Run-owned manifest meaning unchanged."""
+    """Describe the current Run-owned figure bundle."""
     overlay = any(value.figure_kind == 'umap_categorical' for value in projections)
     return dict(_bundle_payload(projections, png_digests, renderer),
         schema_version=ANALYSIS_VISUALIZATION_SCHEMA_VERSION,
@@ -1688,12 +1634,6 @@ def verify_analysis_visualizations(
         version = figure_set.get("annotation_projection_version", 1)
         if type(version) is not int or version not in (1, 2):
             raise AnalysisVisualizationError("VISUALIZATION_SOURCE_INVALID", "Unsupported annotation projection version.")
-        # Projection 3 introduced native written-slot coordinates. Preserve
-        # figureless/native and dedicated-only historical bundle meanings.
-        if not any(isinstance(row, Mapping) and isinstance(row.get('presentation'), Mapping)
-                   and row['presentation'].get('projection_version') == 3
-                   for row in source_manifest.get('figures', ())) and figure_set.get('marker_activity_projection_version') != 1:
-            snapshot = replace(snapshot, cell_results={})
         projections = _derive_figure_projections(snapshot, annotation_figures=version == 2,
             qc_figures=figure_set.get('numeric_qc_projection_version') == 1,
             marker_activity_figures=figure_set.get('marker_activity_projection_version') == 1) if cell_overlay is None else _cell_overlay_projection(cell_overlay)

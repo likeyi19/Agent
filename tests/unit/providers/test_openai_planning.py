@@ -12,7 +12,6 @@ import pytest
 from agent.orchestration import (
     AgentRequest,
     AgentRuntime,
-    DeterministicPlanner,
     LLMPlanner,
     PlanningModel,
     PlanningWireMode,
@@ -220,7 +219,7 @@ def test_semantic_v4_round_trip_uses_generic_responses_transport() -> None:
     assert [
         step["properties"]["tool"]["enum"][0]
         for step in schema["$defs"]["step"]["anyOf"]
-    ] == sorted(registry.names())
+    ] == sorted(name for name in registry.names() if name != "invoke_native_function")
     from tests.application.test_composed_scientific_declarations import expand
     expanded = expand(schema)
     def input_domains(node):
@@ -386,7 +385,7 @@ def test_provider_neutral_orchestration_import_does_not_import_openai(
     importlib.reload(orchestration)
 
     assert "openai" not in sys.modules
-    assert isinstance(AgentRuntime().planner, DeterministicPlanner)
+    assert AgentRuntime().planner is None
 
 
 def test_default_client_disables_sdk_retries(monkeypatch) -> None:

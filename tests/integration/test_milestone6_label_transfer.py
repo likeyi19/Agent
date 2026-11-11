@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import json
 from pathlib import Path
-from unittest.mock import Mock
 
 import anndata as ad
 import numpy as np
@@ -15,12 +13,9 @@ from agent.orchestration import (
     AgentPlan,
     AgentRequest,
     AgentRuntime,
-    DeterministicPlanner,
     FileRunStore,
     PlanStep,
-    RunMode,
     RunStatus,
-    ToolRegistry,
     build_default_tool_registry,
 )
 
@@ -121,41 +116,3 @@ def test_real_transfer_through_registry_verifier_and_durable_runtime(
 
     persisted = runtime.resume(result.run_id)
     assert persisted == result
-
-
-def test_label_transfer_plan_only_invokes_zero_scientific_tools(tmp_path: Path) -> None:
-    default = build_default_tool_registry()
-    guarded = {
-        name: Mock(side_effect=AssertionError(f"PLAN_ONLY invoked {name}"))
-        for name in default.names()
-    }
-    registry = ToolRegistry(
-        tuple(replace(default.get(name), function=guarded[name]) for name in default.names())
-    )
-    result = AgentRuntime(planner=DeterministicPlanner(), registry=registry).run(
-        AgentRequest(
-            "request-plan-only",
-            "Use the annotated reference to annotate the query cells",
-            {
-                "reference_input_path": str(tmp_path / "reference.h5ad"),
-                "query_input_path": str(tmp_path / "query.h5ad"),
-                "output_dir": str(tmp_path / "not-created"),
-                "species": "mouse",
-                "reference_label_key": "celltype",
-                "checkpoint_path": str(tmp_path / "checkpoint.pth"),
-                "device": "cuda:0",
-            },
-            RunMode.PLAN_ONLY,
-        )
-    )
-    assert result.status is RunStatus.PLANNED
-    assert tuple(step.step_id for step in result.plan.steps) == (  # type: ignore[union-attr]
-        "inspect_reference",
-        "embed_reference",
-        "inspect_query",
-        "embed_query",
-        "transfer",
-    )
-    assert not (tmp_path / "not-created").exists()
-    for function in guarded.values():
-        function.assert_not_called()

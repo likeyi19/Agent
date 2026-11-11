@@ -90,26 +90,6 @@ def test_declared_new_assembly_and_repeated_single_base_coordinates(tmp_path, sp
         pb.validate_scATAC_feature_space(**arguments)
 
 
-def test_native_embedding_and_label_transfer_files_without_suffixes(tmp_path):
-    from test_label_transfer import _sources
-    from agent.tools.analysis.label_transfer import transfer_cell_labels
-    from agent.tools.analysis.embedding_analysis import build_cell_neighbors
-    from agent.tools.analysis.neighbors_publication import verify_result
-    arguments = _sources(tmp_path)
-    for name in ("reference_embedding_path", "query_embedding_path",
-                 "reference_cell_ids_path", "query_cell_ids_path",
-                 "reference_h5ad_path", "query_h5ad_path"):
-        original = arguments[name]
-        destination = tmp_path/name
-        original.rename(destination)
-        arguments[name] = destination
-    result = transfer_cell_labels(**arguments)
-    assert result["assigned_count"] == 2
-    graph_args = dict(embedding_path=str(arguments["reference_embedding_path"]),
-        cell_ids_path=str(arguments["reference_cell_ids_path"]),
-        output_dir=str(tmp_path/"graph"), n_neighbors=2)
-    graph = build_cell_neighbors(**graph_args)
-    assert verify_result(graph_args, graph) == graph
 
 
 @pytest.mark.skipif(os.environ.get("RUN_EDGER_INTEGRATION") != "1",

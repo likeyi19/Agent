@@ -763,9 +763,12 @@ def compile_semantic_plan(
                     state=state,
                     rules=tuple(rules),
                 )
-                if all(
-                    rule.argument_name in tool.optional_arguments for rule in rules
-                ):
+                if all(rule.argument_name in tool.optional_arguments or (
+                        tool.required_arguments[rule.argument_name].planning is not None
+                        and tool.required_arguments[rule.argument_name].planning.scientific_parameter)
+                        for rule in rules):
+                    # Explicitly scoped required scientific declarations (e.g.
+                    # EpiZoo species) also disambiguate optional consumers.
                     explicit_optional_inputs.add(source.input_name)
                 continue
 

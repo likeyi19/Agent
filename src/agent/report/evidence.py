@@ -121,6 +121,8 @@ _INSPECTION_FIELDS = frozenset(
 )
 _EMBEDDING_FIELDS = frozenset(
     {
+        "analysis_path",
+        "analysis_sha256",
         "status",
         "input_path",
         "embedding_path",
@@ -134,62 +136,6 @@ _EMBEDDING_FIELDS = frozenset(
         "species",
         "checkpoint_path",
         "device",
-    }
-)
-_NEIGHBORS_FIELDS = frozenset(
-    {
-        "status",
-        "embedding_path",
-        "cell_ids_path",
-        "analysis_path",
-        "n_cells",
-        "embedding_dim",
-        "n_neighbors",
-        "metric",
-        "neighbors_method",
-        "transformer",
-        "random_seed",
-        "connectivities_nnz",
-        "distances_nnz",
-        "finite",
-        "cell_order_preserved",
-        "backend",
-        "software_versions",
-    }
-)
-_CLUSTERING_FIELDS = frozenset(
-    {
-        "analysis_sha256",
-        "status",
-        "input_analysis_path",
-        "analysis_path",
-        "n_cells",
-        "n_clusters",
-        "cluster_key",
-        "algorithm",
-        "resolution",
-        "random_seed",
-        "cell_order_preserved",
-        "backend",
-        "software_versions",
-    }
-)
-_UMAP_FIELDS = frozenset(
-    {
-        "status",
-        "input_analysis_path",
-        "analysis_path",
-        "n_cells",
-        "n_components",
-        "umap_key",
-        "coordinate_dtype",
-        "finite",
-        "min_dist",
-        "spread",
-        "random_seed",
-        "cell_order_preserved",
-        "backend",
-        "software_versions",
     }
 )
 _CLUSTERING_EVALUATION_FIELDS = frozenset(
@@ -371,10 +317,7 @@ _RAW_INTAKE_FIELDS = frozenset(
 
 from agent.tools.models.species_adaptation import RESULT_FIELDS as _ADAPT_FIELDS, FACT_FIELDS as _ADAPT_FACTS
 
-_PCA_FACTS = ('n_cells','n_features','embedding_dim','embedding_dtype','method','representation',
-    'parameters','software_versions','finite','cell_order_preserved','backend')
-_PCA_FIELDS = frozenset(('status','input_path','embedding_path','cell_ids_path','analysis_path',
-    'analysis_sha256','source_sha256', *_PCA_FACTS))
+
 
 _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
     _CHROMAP_NATIVE.TOOL: _ToolProjection(frozenset(_CHROMAP_NATIVE.RESULT_FIELDS), _CHROMAP_NATIVE.FACT_FIELDS, _CHROMAP_NATIVE.POLICY, (
@@ -413,9 +356,7 @@ _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
     'inspect_scATAC_fragments': _ToolProjection(
         frozenset(_FRAGMENT_INSPECTION_FIELDS), _FRAGMENT_INSPECTION_FIELDS,
         'inspect-fragment-structure-v1'),
-    'pca_embed_cells': _ToolProjection(_PCA_FIELDS, _PCA_FACTS, 'pca-embed-cells-v1',
-        (_ArtifactProjection('analysis_path','cell_pca_embedding_h5ad',
-            ('centered_source_projection','eigenpair_residual','exact_source_identity'), digest_field='analysis_sha256'),)),
+
     "build_scATAC_cell_by_features": _ToolProjection(
         _MATRIX_FIELDS, _MATRIX_FACT_FIELDS, "build-scatac-cell-by-features-v1",
         (_ArtifactProjection("manifest_path", "fragment_feature_matrix_manifest_json",
@@ -558,6 +499,8 @@ _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
         ),
         "epizoo-embed-cells-v2",
         (
+            _ArtifactProjection('analysis_path', 'epizoo_embedding_h5ad',
+                ('exact_embedding_conservation', 'ordered_cell_identity'), digest_field='analysis_sha256'),
             _ArtifactProjection(
                 "embedding_path",
                 "epizoo_embedding_npy",
@@ -570,93 +513,9 @@ _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
             ),
         ),
     ),
-    "build_cell_neighbors": _ToolProjection(
-        _NEIGHBORS_FIELDS,
-        (
-            "n_cells",
-            "embedding_dim",
-            "n_neighbors",
-            "metric",
-            "neighbors_method",
-            "transformer",
-            "random_seed",
-            "connectivities_nnz",
-            "distances_nnz",
-            "finite",
-            "cell_order_preserved",
-            "backend",
-            "software_versions",
-        ),
-        "build-cell-neighbors-v1",
-        (
-            _ArtifactProjection(
-                "analysis_path",
-                "cell_neighbors_h5ad",
-                (
-                    "fresh_existing_verifier",
-                    "compact_h5ad_structure",
-                    "cell_order_validation",
-                    "stage_and_source_provenance",
-                ),
-            ),
-        ),
-    ),
-    "cluster_cells": _ToolProjection(
-        _CLUSTERING_FIELDS,
-        (
-            "n_cells",
-            "n_clusters",
-            "cluster_key",
-            "algorithm",
-            "resolution",
-            "random_seed",
-            "cell_order_preserved",
-            "backend",
-            "software_versions",
-        ),
-        "cluster-cells-v1",
-        (
-            _ArtifactProjection(
-                "analysis_path",
-                "clustered_cells_h5ad",
-                (
-                    "fresh_existing_verifier",
-                    "compact_h5ad_structure",
-                    "cell_order_validation",
-                    "stage_and_source_provenance",
-                ),
-            ),
-        ),
-    ),
-    "compute_cell_umap": _ToolProjection(
-        _UMAP_FIELDS,
-        (
-            "n_cells",
-            "n_components",
-            "umap_key",
-            "coordinate_dtype",
-            "finite",
-            "min_dist",
-            "spread",
-            "random_seed",
-            "cell_order_preserved",
-            "backend",
-            "software_versions",
-        ),
-        "compute-cell-umap-v1",
-        (
-            _ArtifactProjection(
-                "analysis_path",
-                "cell_umap_h5ad",
-                (
-                    "fresh_existing_verifier",
-                    "compact_h5ad_structure",
-                    "cell_order_validation",
-                    "stage_and_source_provenance",
-                ),
-            ),
-        ),
-    ),
+
+
+
     "evaluate_cell_clustering": _ToolProjection(
         _CLUSTERING_EVALUATION_FIELDS,
         (
@@ -1309,13 +1168,6 @@ def _prepare_evidence(
             facts['result_files'] = _plain_json(step_result.result['result_files'], f'{step.step_id}.result_files')
         if step.tool_name == 'run_motifmatchr' and 'n_positions' in step_result.result:
             facts['n_positions'] = step_result.result['n_positions']
-        if (step.tool_name in ('build_cell_neighbors','cluster_cells','compute_cell_umap')
-                and ('analysis_sha256' in step_result.result
-                     or step_result.result.get('contract_version') == 'cell-neighbors-publication.v2')):
-            from agent.tools.analysis.embedding_analysis import method_facts
-            facts.update(_plain_json(method_facts(step_result.result['analysis_path']), 'embedding_method'))
-        if step.tool_name == "compute_cell_umap" and "clustering_present" in step_result.result:
-            facts["clustering_present"] = step_result.result["clustering_present"]
         if step.tool_name in ('adapt_epizoo_species','posttrain_epizoo_model') and step_result.result['purpose'] in ('native','initialization','posttraining'):
             from agent.tools.models.epizoo_adaptation.publication import load_manifest
             model = load_manifest(step_result.result['manifest_path'], step_result.result['manifest_sha256'])

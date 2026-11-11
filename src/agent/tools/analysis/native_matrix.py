@@ -69,12 +69,6 @@ LIMITATIONS = ('Independent native invocation, not a completed analysis workflow
     'Source annotations are supplied metadata. Matrix transformations, feature masks and embeddings have distinct meanings. '
     'Native feature names such as genes do not establish biological feature identity. No inferred filtering, genome conversion or upstream rerun. Omitted native arguments retain installed defaults; '
     'stochastic results are qualified only for the recorded runtime and seed. Native nonfinite values are retained, not repaired or claimed usable.')
-# Exact pre-finalization adapter profiles remain readable, never writable.
-HISTORICAL_PROFILES = {
-    'episcanpy': '58c0e8efe169db823aec036d9ba6659a1b4ff86e49ed4f1c03d8145a03c1c281',
-    'snapatac2': '08d654538cbe449abb3fc4b99ed9b9aa86b855d4852e2a76252eb54d0bc106c0',
-    'Signac': 'be212d279ad3840fbadaaf59901b17de595465a0575dd2ed07da5c182cad78ef',
-}
 
 
 class NativeInvocationError(ValueError):
@@ -145,7 +139,9 @@ class MatrixPackage:
                 n_cells=(int, type(None)), n_features=(int, type(None)),
                 fragments_path=(str, type(None)), fragments_sha256=(str, type(None)))
             self.DELIVERY_FILES = {**DELIVERY_FILES, **raw.RAW_FILES}
-        self.FUNCTIONS, self.NATIVE_ARGUMENTS, self.guidance = functions, native_arguments, guidance
+        self.FUNCTIONS, self.guidance = functions, guidance
+        members = set().union(*map(set, functions.values()))
+        self.NATIVE_ARGUMENTS = tuple((key, text) for key, text in native_arguments if key in members)
         self.TOOL = 'run_' + package.lower()
         self.KIND = 'native_' + package.lower() + '_matrix'
         self.CONTRACT = self.KIND.replace('_', '-') + '.v1'
@@ -156,30 +152,25 @@ class MatrixPackage:
         self.PROFILE = digest(dict(contract=self.CONTRACT, version=version,
             adaptation='ordinary AnnData; native returns and exact subset positions.v4'))
         self.VERIFIER = dict(id='agent.' + self.KIND, compatibility_version='1')
-        historical = []
-        if package in ('episcanpy', 'snapatac2', 'Signac', 'scanpy'):
-            historical.append(digest(dict(contract=self.CONTRACT, version=version,
-                adaptation='ordinary AnnData preservation; optional measurements; native numerical validation.v3')))
-        if package in HISTORICAL_PROFILES:
-            historical.extend((HISTORICAL_PROFILES[package], digest(dict(contract=self.CONTRACT, version=version,
-                adaptation='ordinary AnnData preservation; selected X; exact axes; bounded JSON kwargs.v2'))))
         if package == 'Signac':
-            historical.append(self.PROFILE)
             self.PROFILE = digest(dict(contract=self.CONTRACT, version=version, adaptation='ordered independent pairwise native matrices.v5'))
         if package == 'snapatac2':
-            historical.append(self.PROFILE)
             self.PROFILE = digest(dict(contract=self.CONTRACT, version=version,
-                adaptation='native fragment BAM QC filtering and feature matrices; exact bound file ports.v5'))
+                adaptation='native raw and matrix functions; lossless KD-tree f32 execution view; retained representation.v6'))
         self.publication = NativePublication(tool=self.TOOL, kind=self.KIND, contract=self.CONTRACT,
             profile=self.PROFILE, verifier=self.VERIFIER, files=raw.files if package == 'snapatac2' else tuple(DELIVERY_FILES),
-            arguments=arguments, outputs=(lambda value: raw.outputs(value) if value['profile'] == self.PROFILE else {'matrix': 'result.h5ad'})
-                if package == 'snapatac2' else {'matrix': 'result.h5ad'}, historical_profiles=historical)
+            arguments=arguments, outputs=raw.outputs if package == 'snapatac2' else {'matrix': 'result.h5ad'})
         for name in ('load', 'result', 'verify_publication', 'verify_result', 'recover'):
             setattr(self, name, getattr(self.publication, name))
 
     def native_arguments(self, args):
         function = args.get('function_name')
         kwargs = native_kwargs(self.FUNCTIONS, args)
+        if args.get('use_rep') is not None:
+            if 'use_rep' not in self.FUNCTIONS[function]:
+                raise ValueError('Representation selection requires a native use_rep parameter')
+            kwargs = dict(kwargs)
+            kwargs.setdefault('use_rep', args['use_rep'])
         if self.package == 'snapatac2':
             from . import snapatac_raw as raw
             if args.get('qc_thresholds') is not None:
@@ -410,6 +401,8 @@ class MatrixPackage:
             if 'effective_parameters' in receipt:
                 summary['parameters']['effective_native_parameters'] = receipt['effective_parameters']
                 summary['parameters']['result_shapes'] = receipt.get('result_shapes', {})
+            if 'input_adaptation' in receipt:
+                summary['parameters']['input_adaptation'] = receipt['input_adaptation']
             if second_source:
                 summary['source_identity']['second'] = dict(sha256=second_source['sha256'], size_bytes=second_source['size_bytes'],
                     count_slot=other_effective['count_slot'], measurement=other_effective['matrix_semantics'], n_cells=other.n_obs)
@@ -433,13 +426,13 @@ class MatrixPackage:
             current().register_execution(self.KIND, root, execution_identity)
         return self.verify_publication(path, expected_sha256=sha)
 
-    def invoke(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None):
+    def invoke(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, use_rep=None):
         return self.execute({k: v for k, v in locals().items() if k != "self" and v is not None})
 
     def invoke_signac(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, second_path=None, second_sha256=None, second_count_slot=None):
         return self.execute({k: v for k, v in locals().items() if k != 'self' and v is not None})
 
-    def invoke_snapatac2(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None,
+    def invoke_snapatac2(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, use_rep=None,
                         matrix_semantics=None, chrom_sizes_path=None, chrom_sizes_sha256=None, gene_anno_path=None,
                         gene_anno_sha256=None, peaks_path=None, peaks_sha256=None, whitelist_path=None,
                         whitelist_sha256=None, species=None, assembly=None, fragment_order=None, counting_strategy=None,
@@ -530,7 +523,7 @@ EPISCANPY = MatrixPackage('episcanpy', '0.4.0', 'episcanpy-0.4.0', {
     ('n_features', 'rank_features number of ranked features per group; no matrix subsetting.'),
     ('rankby_abs', 'Native rankby_abs; omitted retains the installed function default.'),
     ('corr_method', 'Native corr_method; omitted retains the installed function default.'),
-), 'Native AnnData transforms, PCA/graphs/embeddings, clustering and feature ranking. kmeans/hc consume X_pca; leiden/louvain consume graphs. rank_features retains upstream method overrides/errors. tfidf adds a layer; lsi uses that supplied layer. normalize_total(inplace=False) is a native no-op returning None. No Agent-added preprocessing.')
+), 'Native preprocessing, PCA/TF-IDF/LSI, neighbors, Leiden/Louvain, UMAP/t-SNE, DPT, kmeans/hierarchical clustering and feature ranking. kmeans/hc consume X_pca; graph methods need compatible Scanpy neighbors. DPT also needs diffusion maps and supplied uns.iroot. tfidf adds a layer; lsi consumes it. normalize_total(inplace=False) is a native no-op returning None. rank_features retains native method overrides/errors. No Agent-added preprocessing.')
 
 
 SNAPATAC2 = MatrixPackage('snapatac2', '2.9.0', 'native-matrix-1', {
@@ -723,6 +716,6 @@ SCANPY = MatrixPackage('scanpy', '1.9.8', 'episcanpy-0.4.0', {
     ('n_branchings', 'dpt native branching count.'),
     ('min_group_size', 'dpt minimum group fraction or size.'),
     ('allow_kendall_tau_shift', 'dpt native branching behavior.'),
-), 'Native AnnData QC, normalization/log/scale, variable features, PCA/graphs, clustering/embeddings, PAGA, feature ranking/scoring and DPT. Non-inplace returns are separate in uns.agent_native_return; subset records exact source positions. Names such as genes retain supplied feature meaning. Native defaults and internal representation selection apply; no Agent-added preprocessing.')
+), 'Native AnnData QC, normalization/log/scale, variable features, PCA, neighbors, Leiden/UMAP, diffusion maps/t-SNE, PAGA, feature ranking/scoring and DPT. Non-inplace returns are separate in uns.agent_native_return; subset records exact source positions. Names such as genes retain supplied feature meaning. Native defaults and internal representation selection apply; no Agent-added preprocessing.')
 
 PACKAGES = (EPISCANPY, SNAPATAC2, SIGNAC, SCANPY)

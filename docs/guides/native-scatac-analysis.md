@@ -1,19 +1,24 @@
 # Native scATAC QC and dimensionality reduction
 
-Ordinary compatible scATAC analysis uses the existing `run_snapatac2` interface:
+For a SnapATAC2 workflow, use the existing `run_snapatac2` interface:
 prepare a native tile or region matrix when needed, `pp.select_features`,
-`tl.spectral`, `pp.knn`, `tl.leiden`, and `tl.umap`. Processed peak-count H5AD
+`tl.spectral`, `pp.knn`, and `tl.leiden`. `tl.umap` is a separate downstream
+operation when requested; clustering does not require UMAP. Processed peak-count H5AD
 starts with feature selection; it does not require raw import, cell calling,
 a genome declaration, or a model resource. Native functions own numerical input
 legality and adaptive behavior. Omitted parameters retain the installed native
 defaults, including feature selection, Spectral's requested 30 components and
 its native small-matrix adjustment, cosine similarity and eigenvalue weighting.
 
-KNN and UMAP use `X_spectral`; Leiden consumes the native graph. The same accepted
+In this spectral workflow, KNN and UMAP use `X_spectral`; Leiden consumes the native graph. The same accepted
 representation and count-preserving outputs can supply later clustering, figures,
 downloads and native annotation groups through existing result handoffs. Exact
-source identities and ordered cells establish correspondence. EpiZoo remains a
-separate model-based capability. Native annotation methods and reference
+source identities and ordered cells establish correspondence. EpiZoo retains its separate model inference and exact resource requirements.
+Its published compact H5AD supplies `obsm.X_epizoo` to compatible native
+representation consumers. For SnapATAC2, bind `use_rep=X_epizoo` on KNN/UMAP;
+for Scanpy/epiScanpy, bind it on neighbors and reuse that graph downstream. This H5AD has no count matrix. The native KD-tree
+requires float64: a float32 representation is widened losslessly during that
+call and restored unchanged before publication; the adaptation is recorded. Native annotation methods and reference
 requirements are unchanged.
 
 ## Raw barcode QC
@@ -70,15 +75,42 @@ An explicit native-function invocation that omits `qc_thresholds` retains native
 import/filter defaults. This distinction preserves the native interface while
 making the ordinary uncalled workflow's method visible.
 
-## PCA history and optional methods
+## Native method selection and scientific prerequisites
 
-The dedicated `pca_embed_cells` execution and TF-IDF/PCA planning path are retired.
-Accepted historical PCA v1/v2 results retain their original descriptors, evidence,
-reports, exact downloads and source lineage through read-only readers. A loose
-historical receipt cannot create scientific authority; fitting and independent
-PCA reconstruction are removed. Explicit PCA remains `run_scanpy` / `pp.pca`
-or `run_episcanpy` / `tl.pca` through the existing native-function interface.
-No implicit PCA preprocessing or automatic fallback from EpiZoo is introduced.
+AI Research uses LLM planning with deterministic binding of explicit values.
+Scanpy, epiScanpy and SnapATAC2 native functions remain selectable by their actual
+capabilities and researcher intent, without package priority. Scanpy `pp.pca` and
+epiScanpy `tl.pca` are available alongside other supported reductions. The dedicated
+Agent PCA, `build_cell_neighbors`, `cluster_cells` and `compute_cell_umap`
+implementations, obsolete publications and historical parameter readers are removed.
+Disposable development records impose no backward compatibility requirement.
 
-The Stage 1 report records bounded technical qualification and Stage 2 readiness;
-biological validity and unrestricted provider behavior require separate evidence.
+Scanpy and epiScanpy `pp.neighbors` produce compatible Scanpy neighbors consumed
+by their Leiden and UMAP calls. Scanpy PAGA additionally needs existing groups;
+plan the selected native neighbors and clustering prerequisites when absent.
+DPT needs neighbors, diffusion maps (`run_scanpy` / `tl.diffmap` when absent), and
+supplied root-cell information in `uns.iroot`. The planner must not invent a root.
+SnapATAC2 Leiden consumes the graph from `pp.knn`; its UMAP consumes a selected
+representation independently. Package graphs are not interchangeable.
+
+EpiZoo's compact H5AD keeps `X=None`, ordered cells and `obsm.X_epizoo`.
+Representation consumers select this exact field through their existing native
+parameters: the shared structured `use_rep` binding applies only where the selected
+native function exposes `use_rep`, including Scanpy/epiScanpy neighbors and SnapATAC2 KNN/UMAP. Native kwargs take precedence.
+Scanpy UMAP uses the selected neighbors graph and has no `use_rep` argument.
+No count matrix is reconstructed and no implicit reduction is added to embeddings.
+
+Result parameter edits bind the exact Revision, function and step. Changing Leiden
+resolution reruns that step and affected descendants, reusing unaffected accepted
+upstream outputs. Explicit researcher values prevail; native packages own omitted
+defaults and numerical legality. Publications record the actual function, parameters,
+source identity and completion; current native readers serve evidence and downloads.
+
+Native Functions remains independent and zero-provider. No automatic resolution
+selection is implemented. A future shared silhouette/ASW criterion must evaluate
+labels from the LLM-selected native method with its compatible graph and selected
+representation. Not every clustering method has a resolution parameter. This is
+not a claim of a universal biological optimum or implicit Native Functions optimization.
+
+The [consolidation report](../../../agent-data/acceptance/scientific-execution-consolidation-2026-11-11/REPORT.md)
+records the audit, bounded native evidence and remaining limitations.

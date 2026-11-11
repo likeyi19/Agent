@@ -8,6 +8,8 @@ import json
 from fastapi.testclient import TestClient
 import pytest
 
+pytestmark = pytest.mark.usefixtures("native_research_subprocess")
+
 from agent.application import InteractiveAgentApplication
 from agent.application.uploads import H5ADUploadAdmission
 from agent.providers import PlanningModelFactoryRegistry
@@ -28,14 +30,14 @@ class SourceModel(MultiInputModel):
         if 'turn_schema_version' in value:
             self.calls.append(dict(value=value, prompt=prompt, schema=response_schema))
             decision = dict(kind='execute_plan', target='evaluate_cell_clustering',
-                roles=[dict(tool='cluster_cells', port='analysis', source='source.0')],
-                arguments=[dict(tool='cluster_cells', argument='resolution',literal='0.7',evidence='resolution 0.7'),
+                roles=[dict(tool='run_snapatac2', port='dataset', source='source.0')],
+                arguments=[dict(tool='run_snapatac2', argument='kwargs',native_function='tl.leiden',members=[dict(name='resolution',kind='number',literal='0.7',evidence='resolution 0.7')]),
                     dict(tool='evaluate_cell_clustering', argument='label_key',
                     source='source.1', mode='offered', value=LABEL,
                     literal=PHRASE, evidence=PHRASE)])
             return json.dumps(dict(turn_schema_version=1, decision=decision), ensure_ascii=False)
         if 'output_selection_schema_version' in value:
-            return json.dumps(dict(outputs=[dict(name='communities',step_id='clustering',output_key='analysis_path'),
+            return json.dumps(dict(outputs=[dict(name='communities',step_id='clustering',output_key='matrix_path'),
                 dict(name='evaluation',step_id='evaluation',output_key='report_path')]))
         return super().complete(prompt=prompt, response_schema=response_schema)
 
@@ -57,7 +59,7 @@ def test_source_field_role_assertion_preserves_native_cell_axis_qualification(tm
         state = harness.service._application.sessions.load('session')
         interaction, = state.interactions
         roles = {(row['tool'],row['port']):row['source'] for row in interaction.admitted['roles']}
-        assert roles == {('cluster_cells','analysis'):'source.0',
+        assert roles == {('run_snapatac2','dataset'):'source.0',
                          ('evaluate_cell_clustering','ground_truth_dataset'):'source.1'}
         field, = [row for row in interaction.admitted['arguments'] if row['argument'] == 'label_key']
         assert field['mode'] == 'offered'
@@ -76,7 +78,7 @@ def test_source_field_role_assertion_preserves_native_cell_axis_qualification(tm
             assert result['status'] == 'succeeded' and len(state.revisions) == 1, result
             assert calls['production.evaluation'] == 1
             assert all(step.verification.passed for step in run.steps)
-            for name, parameter in (('communities','resolution'),('evaluation','label_key')):
+            for name, parameter in (('communities','kwargs'),('evaluation','label_key')):
                 summary = harness.service.evidence('session',result['revision_id'],name)
                 assert summary.status == 'available', summary
                 provenance, = [fact for fact in summary.facts if fact.field == 'explicit_user_parameters']

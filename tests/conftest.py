@@ -56,3 +56,14 @@ def isolated_binding_catalog(monkeypatch):
         yield
     finally:
         active = False
+
+
+@pytest.fixture
+def native_research_subprocess(monkeypatch):
+    """Real package subprocess; bypass only outer isolation in HTTP regressions."""
+    from agent.tools import _native_process
+    runtime = Path('/home/likeyi/program/agent-data/resources/runtimes/native-matrix-1/env/bin/python')
+    if not runtime.is_file():
+        pytest.skip('Optional SnapATAC2 runtime unavailable')
+    monkeypatch.setenv('AGENT_SNAPATAC2_PYTHON', str(runtime))
+    monkeypatch.setattr(_native_process, 'call', lambda operation, arguments, local: local())

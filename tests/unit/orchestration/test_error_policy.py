@@ -76,13 +76,13 @@ def test_user_input_failure_requires_user_action_without_auto_retry() -> None:
     assert error.recovery_disposition is RecoveryDisposition.USER_ACTION_REQUIRED
 
 
-def test_runtime_user_input_failure_is_terminal_and_user_action_required() -> None:
+def test_runtime_missing_planner_is_terminal_and_user_action_required() -> None:
     result = AgentRuntime().run(
         AgentRequest("request-1", "inspect this dataset", {}, RunMode.EXECUTE)
     )
 
     assert result.status.value == "FAILED"
-    assert result.errors[0].code == "MISSING_REQUIRED_INPUT"
+    assert result.errors[0].code == "PLANNING_PROFILE_REQUIRED"
     assert result.errors[0].recoverable is False
     assert (
         result.errors[0].recovery_disposition

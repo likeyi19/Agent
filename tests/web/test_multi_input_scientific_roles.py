@@ -21,6 +21,8 @@ from fastapi.testclient import TestClient
 import numpy as np
 import pandas as pd
 import pytest
+
+pytestmark = pytest.mark.usefixtures("native_research_subprocess")
 from scipy import sparse
 
 from agent.application import InteractiveAgentApplication
@@ -29,7 +31,7 @@ from agent.orchestration import PlanningModelProfile, ToolRegistry, build_defaul
 from agent.providers import PlanningModelFactoryRegistry
 from agent.schemas import RunLifecycleStatus, StepOutputRef
 from agent.schemas.orchestration import _serialize
-from agent.tools.analysis.embedding_analysis import PROVENANCE_KEY, build_cell_neighbors
+from agent.tools.analysis.native_matrix import SNAPATAC2
 from agent.web.app import create_app
 from helpers import wait_turn
 
@@ -40,7 +42,7 @@ OBJECTIVE = ('Cluster the first selected dataset, then evaluate its fixed cluste
 REQUEST = OBJECTIVE + f' Use ground-truth column "{LABEL}".'
 ANSWER = f'Use ground-truth column "{LABEL}".'
 PROFILE = PlanningModelProfile('multi-source', 'scripted', 'scripted/multi-source')
-ROLES = [dict(tool='cluster_cells', port='analysis', source='source.0'),
+ROLES = [dict(tool='run_snapatac2', port='dataset', source='source.0'),
          dict(tool='evaluate_cell_clustering', port='ground_truth_dataset', source='source.1')]
 _active_observation = None
 
@@ -89,17 +91,18 @@ class MultiInputModel:
             self.before_plan()
         sources = [dict(target='analysis', source=dict(kind='step', step='clustering')),
                    dict(target='ground_truth_dataset', source=dict(kind='input', input='reference_h5ad_path'))]
-        clustering = dict(step_id='clustering', tool='cluster_cells', sources=[
-            dict(target='analysis', source=dict(kind='input', input='analysis_path'))], control_dependencies=[])
+        clustering = dict(step_id='clustering', tool='run_snapatac2', sources=[
+            dict(target='dataset', source=dict(kind='input', input='input_path')),
+            dict(target='function_name', source=dict(kind='registered_choice', choice='tl.leiden'))], control_dependencies=[])
         evaluation = dict(step_id='evaluation', tool='evaluate_cell_clustering', sources=sources,
                           control_dependencies=[])
         if self.variant == 'swap_plan':
             clustering['sources'][0]['source']['input'] = 'reference_h5ad_path'
-            sources[-1]['source']['input'] = 'analysis_path'
+            sources[-1]['source']['input'] = 'input_path'
         elif self.variant == 'wrong_ground_truth':
-            sources[-1]['source']['input'] = 'analysis_path'
+            sources[-1]['source']['input'] = 'input_path'
         elif self.variant == 'wrong_consumer':
-            clustering['tool'] = 'compute_cell_umap'
+            clustering['tool'] = 'run_scanpy'
         steps = [clustering, evaluation]
         if self.variant == 'repeat_consumer':
             steps.insert(1, deepcopy(clustering) | dict(step_id='other_clustering'))
@@ -118,12 +121,12 @@ def multi_input_work():
     from agent.tools.analysis import clustering_evaluation, embedding_analysis, epizoo_embedding
     functions = {
         'production.neighbors': inspect.unwrap(sc.pp.neighbors),
-        'production.leiden': inspect.unwrap(sc.tl.leiden),
+        'production.leiden': SNAPATAC2.native.__func__,
         'production.evaluation': clustering_evaluation.evaluate_cell_clustering,
-        'owner.clustering': embedding_analysis.cluster_cells,
+        'owner.clustering': SNAPATAC2._execute.__func__,
         'source.evaluation': clustering_evaluation._evaluate_sources,
         'production.epizoo': epizoo_embedding.epizoo_backend.embed_cells,
-        'verification.clustering': verifier._verify_clustering,
+        'verification.clustering': SNAPATAC2.publication.verify_result.__func__,
         'verification.evaluation': verifier._verify_clustering_evaluation,
         'compiler': semantic_compiler.compile_semantic_plan,
         'preflight': PlanExecutor.preflight,
@@ -178,11 +181,13 @@ def multi_input_harness(tmp_path, *, variant=None, roles=None, content=None,
     embedding, ordered_ids = seed / 'embedding.npy', seed / 'cell-ids.txt'
     np.save(embedding, values, allow_pickle=False)
     ordered_ids.write_text(''.join(value + '\n' for value in ids), encoding='utf-8')
-    graph = build_cell_neighbors(embedding, ordered_ids, seed / 'graph')
-    source = Path(graph['analysis_path'])
+    data = ad.AnnData(obs=pd.DataFrame(index=ids), obsm={'X_epizoo': values})
+    data.write_h5ad(seed/'embedding.h5ad')
+    graph = SNAPATAC2.invoke(str(seed/'embedding.h5ad'), str(seed/'graph'), 'pp.knn', kwargs={'use_rep':'X_epizoo', 'n_neighbors': 15})
+    source = Path(graph['matrix_path'])
     if content == 'missing_provenance':
         original = ad.read_h5ad(source)
-        del original.uns[PROVENANCE_KEY]
+        del original.obsp['distances']
         original.write_h5ad(source)
     truth_ids = tuple(reversed(ids)) if content == 'wrong_cell_order' else ids
     ground_truth = seed / 'ground-truth.h5ad'
@@ -261,23 +266,23 @@ def test_multiple_uploads_roles_compile_real_leiden_evaluation_and_restore_exact
         assert counts['verification.clustering'] > 0 and counts['verification.evaluation'] > 0
         run = harness.service._application.run_store.load(result['run_id'])
         assert run.lifecycle_status is RunLifecycleStatus.SUCCEEDED
-        assert [step.tool_name for step in run.steps] == ['cluster_cells', 'evaluate_cell_clustering']
+        assert [step.tool_name for step in run.steps] == ['run_snapatac2', 'evaluate_cell_clustering']
         cluster, evaluation = run.steps
         assert all(step.verification.passed for step in run.steps)
-        assert cluster.resolved_arguments['analysis_path'] == pinned[0].source_path
+        assert cluster.resolved_arguments['input_path'] == pinned[0].source_path
         assert 'reference_h5ad_path' not in cluster.resolved_arguments
         assert evaluation.resolved_arguments['reference_h5ad_path'] == pinned[1].source_path
         assert evaluation.resolved_arguments['label_key'] == LABEL
-        assert run.plan.steps[1].arguments['analysis_path'] == StepOutputRef('clustering', 'analysis_path')
+        assert run.plan.steps[1].arguments['analysis_path'] == StepOutputRef('clustering', 'matrix_path')
         assert run.plan.steps[1].depends_on == ('clustering',)
         assert evaluation.result['n_cells'] == 32 and evaluation.result['n_reference_classes'] == 2
         assert evaluation.result['n_predicted_clusters'] == 2
         assert all(evaluation.result[key] == pytest.approx(1.) for key in ('nmi', 'ari', 'ami', 'homogeneity'))
-        clustered = ad.read_h5ad(cluster.result['analysis_path'])
+        clustered = ad.read_h5ad(cluster.result['matrix_path'])
         assert tuple(clustered.obs_names) == harness.ids
         np.testing.assert_array_equal(clustered.obsm['X_epizoo'], harness.values)
         original_graph = ad.read_h5ad(harness.source)
-        for key in ('distances', 'connectivities'):
+        for key in ('distances',):
             assert (clustered.obsp[key] != original_graph.obsp[key]).nnz == 0
         state = harness.service._application.sessions.load('session')
         assert len(state.revisions) == 1 and state.generation == 1
@@ -363,7 +368,7 @@ def test_compiled_consumers_cannot_substitute_or_repeat_selected_roles(tmp_path,
     [ROLES[0], ROLES[1] | dict(source='source.0')],
     [ROLES[0], ROLES[1] | dict(source='source.2')],
     [ROLES[0], ROLES[1] | dict(port='query_dataset')],
-    [ROLES[0], ROLES[1] | dict(tool='cluster_cells')],
+    [ROLES[0], ROLES[1] | dict(tool='run_snapatac2')],
 ])
 def test_duplicate_conflicting_absent_and_unsupported_role_associations_fail_closed(tmp_path, roles):
     harness = multi_input_harness(tmp_path, roles=roles)
@@ -387,12 +392,13 @@ def test_scientific_content_rejection_stays_with_existing_owner(tmp_path, conten
         assert result['revision_id'] is None and result['response']['status'] == 'failed', result
         run = harness.service._application.run_store.load(result['run_id'])
         assert run.lifecycle_status is RunLifecycleStatus.FAILED
-        assert any(error.code == 'INVALID_ARGUMENT' for error in run.errors)
+        assert any(error.code == ('NATIVE_FUNCTION_REJECTED' if content == 'missing_provenance' else 'INVALID_ARGUMENT') for error in run.errors)
         assert not harness.service._application.sessions.load('session').revisions
         if content == 'missing_provenance':
             assert counts['owner.clustering'] == 1
-            assert counts['production.leiden'] == counts['production.evaluation'] == 0
-            assert run.errors[0].tool_name == 'cluster_cells'
+            assert counts['production.leiden'] == 1
+            assert counts['production.evaluation'] == 0
+            assert run.errors[0].tool_name == 'run_snapatac2'
         else:
             assert counts['production.leiden'] == counts['production.evaluation'] == 1
             assert counts['source.evaluation'] == 1 and counts['verification.evaluation'] == 0
@@ -421,16 +427,16 @@ def test_pending_consumer_rejects_source_replacement_after_upstream_science(tmp_
     """A plan guard must not authorize later consumption of different bytes."""
     replacement = []
     default = build_default_tool_registry()
-    original = default.get('cluster_cells').function
-    def cluster_then_replace(**arguments):
-        result = original(**arguments)
+    original = default.get('run_snapatac2').durable_hooks.execute
+    def cluster_then_replace(arguments, identity):
+        result = original(arguments, identity)
         path = Path(replacement[0])
         truth = ad.read_h5ad(path)
         truth.obs[LABEL] = ['changed α' if index % 2 else 'changed β' for index in range(32)]
         truth.write_h5ad(path)
         return result
-    registry = ToolRegistry(tuple(replace(default.get(name), function=cluster_then_replace)
-        if name == 'cluster_cells' else default.get(name) for name in default.names()))
+    registry = ToolRegistry(tuple(replace(default.get(name), durable_hooks=replace(default.get(name).durable_hooks, execute=cluster_then_replace))
+        if name == 'run_snapatac2' else default.get(name) for name in default.names()))
     harness = multi_input_harness(tmp_path, registry=registry)
     with TestClient(create_app(harness.service, uploads=harness.uploads)) as client:
         records = upload_sources(client, harness)
@@ -481,7 +487,7 @@ def test_missing_label_continuation_preserves_original_selected_roles(tmp_path, 
         assert state.interactions[0] == original
         run = harness.service._application.run_store.load(result['run_id'])
         assert run.request.prompt == OBJECTIVE
-        assert run.steps[0].resolved_arguments['analysis_path'] == harness.service.resources.load(selected[0]).source_path
+        assert run.steps[0].resolved_arguments['input_path'] == harness.service.resources.load(selected[0]).source_path
         assert run.steps[1].resolved_arguments['reference_h5ad_path'] == harness.service.resources.load(selected[1]).source_path
         assert run.steps[1].resolved_arguments['label_key'] == LABEL
         assert _serialize(state.interactions[-1].admitted['registered_input'])['members'] == _serialize(original.submission['registered_input'])['members']

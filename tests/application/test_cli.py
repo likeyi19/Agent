@@ -28,7 +28,7 @@ def _run_args(
     tmp_path: Path,
     *,
     request_id: str = "cli-run",
-    planner: str | None = "deterministic",
+    planner: str | None = "llm",
 ) -> list[str]:
     source = _tiny_h5ad(tmp_path / f"{request_id}.h5ad")
     arguments = [
@@ -229,65 +229,12 @@ def test_cli_wire_v4_routes_through_application_owned_semantic_planner(
     assert profiles[0].model_id == "configured-model"
 
 
-def test_cli_deterministic_provider_alias_remains_explicit(
-    tmp_path: Path, capsys
-) -> None:
-    arguments = _run_args(
-        tmp_path, request_id="deterministic-alias", planner=None
-    ) + ["--provider", "deterministic", "--plan-only"]
-
-    code = main(arguments)
-
-    payload = json.loads(capsys.readouterr().out)
-    assert code == 0
-    assert payload["status"] == "PLANNED"
-    assert payload["tool_names"] == ["inspect_scATAC"]
 
 
-def test_cli_rejects_deterministic_and_llm_configuration_conflicts(
-    tmp_path: Path, capsys
-) -> None:
-    arguments = _run_args(
-        tmp_path, request_id="planner-conflict", planner="deterministic"
-    ) + ["--provider", "openai", "--model", "configured-model"]
-
-    code = main(arguments)
-
-    captured = capsys.readouterr()
-    assert code == 2
-    assert captured.out == ""
-    assert json.loads(captured.err)["error"]["code"] == "CLI_INPUT_INVALID"
 
 
-@pytest.mark.parametrize("wire_mode", ("v3", "v4"))
-def test_cli_rejects_wire_mode_for_deterministic_planning(
-    tmp_path: Path, capsys, wire_mode: str
-) -> None:
-    arguments = _run_args(
-        tmp_path, request_id=f"deterministic-{wire_mode}"
-    ) + ["--wire-mode", wire_mode]
-
-    code = main(arguments)
-
-    captured = capsys.readouterr()
-    assert code == 2
-    assert captured.out == ""
-    assert json.loads(captured.err)["error"]["code"] == "CLI_INPUT_INVALID"
 
 
-def test_cli_rejects_wire_mode_for_deterministic_provider_alias(
-    tmp_path: Path, capsys
-) -> None:
-    arguments = _run_args(
-        tmp_path, request_id="deterministic-alias-wire", planner=None
-    ) + ["--provider", "deterministic", "--wire-mode", "v4"]
-
-    code = main(arguments)
-
-    captured = capsys.readouterr()
-    assert code == 2
-    assert captured.out == ""
-    assert json.loads(captured.err)["error"]["code"] == "CLI_INPUT_INVALID"
 
 
 def test_cli_rejects_invalid_wire_mode_through_argparse(
@@ -390,6 +337,7 @@ def test_cli_optional_secondary_profile_uses_existing_final_failover(
     assert secondary.calls == 1
 
 
+@pytest.mark.usefixtures("scripted_cli")
 def test_cli_run_prints_compact_success_json(tmp_path: Path, capsys) -> None:
     code = main(_run_args(tmp_path))
 
@@ -404,6 +352,7 @@ def test_cli_run_prints_compact_success_json(tmp_path: Path, capsys) -> None:
     assert "run_result" not in payload
 
 
+@pytest.mark.usefixtures("scripted_cli")
 def test_cli_plan_only_prints_plan_without_report(tmp_path: Path, capsys) -> None:
     arguments = _run_args(tmp_path, request_id="cli-plan") + ["--plan-only"]
 
@@ -416,6 +365,7 @@ def test_cli_plan_only_prints_plan_without_report(tmp_path: Path, capsys) -> Non
     assert payload["report_path"] is None
 
 
+@pytest.mark.usefixtures("scripted_cli")
 def test_cli_resume_and_cancel_terminal_run(tmp_path: Path, capsys) -> None:
     assert main(_run_args(tmp_path, request_id="cli-lifecycle")) == 0
     first = json.loads(capsys.readouterr().out)
@@ -461,6 +411,7 @@ def test_cli_rejects_invalid_json_file(tmp_path: Path, capsys) -> None:
     assert json.loads(captured.err)["error"]["code"] == "CLI_INPUT_INVALID"
 
 
+@pytest.mark.usefixtures("scripted_cli")
 def test_cli_rejects_reserved_output_root_from_json(tmp_path: Path, capsys) -> None:
     source = _tiny_h5ad(tmp_path / "reserved.h5ad")
     inputs = tmp_path / "inputs.json"
@@ -479,7 +430,7 @@ def test_cli_rejects_reserved_output_root_from_json(tmp_path: Path, capsys) -> N
                 "--workspace",
                 str(tmp_path / "workspace"),
                 "--planner",
-                "deterministic",
+                "llm",
                 "--inputs-json",
                 str(inputs),
         ]
@@ -526,26 +477,20 @@ def test_cli_provider_initialization_failure_is_sanitized(
     )
 
 
-def test_cli_runtime_failure_has_nonzero_exit_and_safe_compact_error(
-    tmp_path: Path, capsys
-) -> None:
-    code = main(
-        [
-            "run",
-            "--request-id",
-            "unsupported",
-            "--request",
-            "Write a poem.",
-            "--workspace",
-            str(tmp_path / "workspace"),
-            "--planner",
-            "deterministic",
-        ]
-    )
 
-    captured = capsys.readouterr()
-    payload = json.loads(captured.out)
-    assert code == 3
-    assert captured.err == ""
-    assert payload["status"] == "FAILED"
-    assert payload["error"]["code"] == "UNSUPPORTED_REQUEST"
+@pytest.fixture
+def scripted_cli(monkeypatch):
+    from agent.providers import build_planning_model_profile
+    real_application = cli_module.ResearchAgentApplication
+    def application(*args, **kwargs):
+        kwargs.setdefault('primary_planning_profile', build_planning_model_profile('openai', 'test-model'))
+        kwargs.setdefault('planning_model_factory_registry', PlanningModelFactoryRegistry(
+            {'openai': lambda _: _FixedPlanningModel(_semantic_planning_response())}))
+        return real_application(*args, **kwargs)
+    monkeypatch.setattr(cli_module, 'ResearchAgentApplication', application)
+
+@pytest.mark.parametrize('flag', ['--planner', '--provider'])
+def test_retired_deterministic_cli_option_is_rejected(tmp_path, flag):
+    with pytest.raises(SystemExit) as exc:
+        main(_run_args(tmp_path, planner=None) + [flag, 'deterministic'])
+    assert exc.value.code == 2

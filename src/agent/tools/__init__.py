@@ -2,17 +2,11 @@
 
 from .analysis import (
     CellClusteringEvaluationToolResult,
-    CellClusteringToolResult,
-    CellNeighborsToolResult,
     CellLabelTransferToolResult,
-    CellUMAPToolResult,
     EpiZooEmbeddingToolResult,
     ReplicatePseudobulkToolResult,
     ReplicateDifferentialAccessibilityToolResult,
     ScATACFeatureSpaceToolResult,
-    build_cell_neighbors,
-    cluster_cells,
-    compute_cell_umap,
     epizoo_embed_cells,
     evaluate_cell_clustering,
     transfer_cell_labels,
@@ -24,10 +18,7 @@ from .data import RawScATACInspection, ScATACInspection, inspect_raw_scATAC, ins
 
 __all__ = [
     "CellClusteringEvaluationToolResult",
-    "CellClusteringToolResult",
-    "CellNeighborsToolResult",
     "CellLabelTransferToolResult",
-    "CellUMAPToolResult",
     "EpiZooEmbeddingToolResult",
     "ReplicatePseudobulkToolResult",
     "ReplicateDifferentialAccessibilityToolResult",
@@ -35,9 +26,6 @@ __all__ = [
     "ScATACInspection",
     "RawScATACInspection",
     "inspect_raw_scATAC",
-    "build_cell_neighbors",
-    "cluster_cells",
-    "compute_cell_umap",
     "epizoo_embed_cells",
     "evaluate_cell_clustering",
     "inspect_scATAC",

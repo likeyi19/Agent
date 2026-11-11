@@ -79,35 +79,6 @@ def test_annotation_rationale_context_keeps_exact_markers_and_consistent_computa
     assert files(app) == before
 
 
-@pytest.mark.parametrize('field, expected_role', [
-    ('result:leiden', 'computational_assignment'),
-    ('source:cohort', 'supplied_source_observation; biological validity not assessed'),
-])
-def test_selected_figure_labels_keep_owner_roles_through_r5_projection(app, monkeypatch, field, expected_role):
-    from test_composed_export_interaction import case
-    current = case(app, monkeypatch)
-    guarded = current.facade._application
-    state = guarded.sessions.load('session')
-    coordinate_revision, label_revision = state.revisions[0], state.revisions[-1]
-    coordinate = dict(asdict(coordinate_revision.outputs[0]), revision_id=coordinate_revision.revision_id)
-    categories = dict(asdict(label_revision.outputs[0]), revision_id=label_revision.revision_id)
-    before = files(guarded)
-    overlay = result_reading.cell_overlay(guarded.sessions, coordinate, categories, field)
-    category_source = next(row for row in overlay['sources'] if row['role'] == 'categories')
-    assert category_source['observation_role'] == expected_role
-    metadata = evidence.figure_metadata(dict(figure_kind='umap_categorical', figure_id='overlay',
-        source_step_ids=[coordinate['step_id'], categories['step_id']], source_artifacts=overlay['sources'],
-        presentation=dict(delivery='accepted_cell_overlay', correspondence=overlay['correspondence'])),
-        manifest_sha256='a' * 64, revision=label_revision)
-    figure = dict(metadata=metadata)
-    relationship, = dialogue._figure_relationships(state, (figure,), (figure,))
-    projected = next(row for row in relationship['sources'] if row['role'] == 'categories')
-    assert projected['observation_role'] == expected_role
-    assert projected['version'] == 2 and projected['field'] == field
-    assert relationship['satisfies_request'] and relationship['coordinate_reused']
-    assert relationship['correspondence'] == dict(basis='exact_original_source', n_cells=4)
-    assert str(app.workspace_root) not in json.dumps(relationship)
-    assert not current.models and files(guarded) == before
 
 
 def test_figure_relationships_keep_registered_roles_and_do_not_infer_legacy_roles():

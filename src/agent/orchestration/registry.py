@@ -16,9 +16,6 @@ from typing import Callable, Mapping
 from agent.schemas import AgentError, ErrorCategory, StepOutputRef
 from agent.tools import (
     build_replicate_pseudobulk,
-    build_cell_neighbors,
-    cluster_cells,
-    compute_cell_umap,
     epizoo_embed_cells,
     evaluate_cell_clustering,
     inspect_scATAC,
@@ -28,7 +25,6 @@ from agent.tools import (
     validate_scATAC_feature_space,
 )
 from agent.tools.analysis.replicate_pseudobulk import M81ScientificError
-from agent.tools.analysis.embedding_analysis import validate_clustering_resolution
 from agent.tools.analysis.epizoo_embedding import (
     EpiZooResourceIdentityError,
     validate_expected_resource_identity,
@@ -125,9 +121,6 @@ class ArtifactSemanticKind(str, Enum):
     EPIZOO_EMBEDDING = "epizoo_embedding"
     CELL_EMBEDDING = "cell_embedding"
     ORDERED_CELL_IDS = "ordered_cell_ids"
-    NEIGHBORS_ANALYSIS = "neighbors_analysis"
-    CLUSTERED_ANALYSIS = "clustered_analysis"
-    UMAP_ANALYSIS = "umap_analysis"
     CLUSTERING_EVALUATION_REPORT = "clustering_evaluation_report"
     CELL_ANNOTATION = "cell_annotation"
     FEATURE_SPACE_MANIFEST = "feature_space_manifest"
@@ -556,18 +549,6 @@ class _EpiZooResourceIdentityArgument(ArgumentSpec):
                 raise ToolArgumentError("EpiZoo resource identity pins are invalid.") from exc
 
 
-class _ClusteringResolutionArgument(ArgumentSpec):
-    """Delegate the existing scalar constraints to the Leiden scientific owner."""
-
-    def validate(self, name: str, value: object) -> None:
-        super().validate(name, value)
-        from agent.schemas.prior_output import PriorOutputRef
-        if isinstance(value, (StepOutputRef, PriorOutputRef)):
-            return
-        try:
-            validate_clustering_resolution(value)
-        except (ValueError, TypeError, OverflowError) as exc:
-            raise ToolArgumentError(str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -1159,13 +1140,6 @@ class ToolRegistry:
                 f"Tool {name!r} is not in the executable allowlist."
             ) from exc
 
-    def accepted(self, name):
-        """Metadata lookup for reading accepted history; never executable admission."""
-        if self.contains(name):
-            return self.get(name)
-        from .raw_history import tool
-        return tool(name)
-
     def validate_arguments(
         self, name: str, arguments: Mapping[str, object]
     ) -> Mapping[str, object]:
@@ -1415,52 +1389,10 @@ def _validate_embedding_result(result: Mapping[str, object]) -> None:
             raise ToolResultContractError("EpiZoo resource provenance is invalid.") from exc
 
 
-def _validate_neighbors_result(result: Mapping[str, object]) -> None:
-    if result["status"] != "success":
-        raise ToolResultContractError(
-            "build_cell_neighbors field 'status' must equal 'success'."
-        )
-    if result["finite"] is not True or result["cell_order_preserved"] is not True:
-        raise ToolResultContractError(
-            "build_cell_neighbors must report finite output and preserved cell order."
-        )
-    forbidden = {"embeddings", "cell_ids", "distances", "connectivities"}
-    if forbidden.intersection(result):
-        raise ToolResultContractError(
-            "build_cell_neighbors must not return large scientific arrays."
-        )
 
 
-def _validate_clustering_result(result: Mapping[str, object]) -> None:
-    if result["status"] != "success":
-        raise ToolResultContractError(
-            "cluster_cells field 'status' must equal 'success'."
-        )
-    if result["cell_order_preserved"] is not True:
-        raise ToolResultContractError(
-            "cluster_cells must report preserved cell order."
-        )
-    if "labels" in result:
-        raise ToolResultContractError(
-            "cluster_cells must not return the full Leiden label vector."
-        )
 
 
-def _validate_umap_result(result: Mapping[str, object]) -> None:
-    if "clustering_present" in result and result["clustering_present"] is not False:
-        raise ToolResultContractError("Only the explicit unclustered UMAP variant sets clustering_present=False.")
-    if result["status"] != "success":
-        raise ToolResultContractError(
-            "compute_cell_umap field 'status' must equal 'success'."
-        )
-    if result["finite"] is not True or result["cell_order_preserved"] is not True:
-        raise ToolResultContractError(
-            "compute_cell_umap must report finite output and preserved cell order."
-        )
-    if "coordinates" in result:
-        raise ToolResultContractError(
-            "compute_cell_umap must not return the full coordinate array."
-        )
 
 
 def _validate_evaluation_result(result: Mapping[str, object]) -> None:
@@ -1867,7 +1799,6 @@ def _semantic_argument_port(
 def build_default_tool_registry() -> ToolRegistry:
     """Build the fixed Milestone 3 allowlist from public scientific APIs."""
 
-    from agent.tools.analysis import neighbors_publication
 
     path_types = (str, Path)
     direct = PlanningSourceEligibility.REQUEST_INPUT_ONLY
@@ -2031,6 +1962,7 @@ def build_default_tool_registry() -> ToolRegistry:
         result_contract=ResultContract(
             name="EpiZooEmbeddingToolResult",
             required_fields={
+                "analysis_path": (str,), "analysis_sha256": (str,),
                 "status": (str,),
                 "input_path": (str,),
                 "embedding_path": (str,),
@@ -2047,6 +1979,9 @@ def build_default_tool_registry() -> ToolRegistry:
             },
             validator=_validate_embedding_result,
             planning_fields={
+                'analysis_path': _planning_result('Embedding-only AnnData with ordered cells and X_epizoo; no counts.',
+                    bindable=True, artifact=ArtifactSemanticKind.EPIZOO_EMBEDDING, provenance=branch),
+                'analysis_sha256': _planning_result('Exact compact embedding file identity.', bindable=True),
                 "input_path": _planning_result(
                     "Raw scATAC source used for this embedding.",
                     bindable=True,
@@ -2142,6 +2077,9 @@ def build_default_tool_registry() -> ToolRegistry:
                 ),
             ),
             producer_ports=(
+                SemanticProducerPortSpec('dataset', 'cell_embedding_h5ad.v1',
+                    (_semantic_member('dataset', 'analysis_path'),), lineage_from_port='dataset',
+                    accepted_file_sha256_field='analysis_sha256'),
                 SemanticProducerPortSpec(
                     "embedding",
                     "epizoo_embedding_bundle.v1",
@@ -2156,383 +2094,6 @@ def build_default_tool_registry() -> ToolRegistry:
             ),
         ),
     )
-    neighbors_spec = ToolSpec(
-        name="build_cell_neighbors",
-        function=build_cell_neighbors,
-        scientific_authority=ScientificAuthorityHooks(
-            kind=neighbors_publication.KIND,
-            producer_ports=('neighbors',),
-            describe=neighbors_publication.describe,
-            publication_record=neighbors_publication.publication_record,
-            reuse_result=neighbors_publication.reuse_result,
-            proof_metadata=neighbors_publication.proof_metadata,
-        ),
-        required_arguments={
-            "embedding_path": _planning_argument(
-                path_types,
-                "Accepted embedding publication for the cells being analyzed.",
-                source=composable,
-                artifacts=(ArtifactSemanticKind.EPIZOO_EMBEDDING, ArtifactSemanticKind.CELL_EMBEDDING),
-                provenance=branch,
-            ),
-            "cell_ids_path": _planning_argument(
-                path_types,
-                "Ordered cell IDs aligned with the selected embedding.",
-                source=composable,
-                artifacts=(ArtifactSemanticKind.ORDERED_CELL_IDS,),
-                provenance=branch,
-            ),
-            "output_dir": _planning_argument(
-                path_types,
-                "Destination directory for the neighbors artifact.",
-                source=direct,
-            ),
-        },
-        optional_arguments={
-            "n_neighbors": _planning_argument(
-                (int,),
-                "Explicit nearest-neighbor count.",
-                source=direct,
-                scientific_parameter=True,
-            ),
-            "metric": _planning_argument(
-                (str,),
-                "Explicit neighbor distance metric.",
-                choices=("euclidean", "cosine"),
-                source=direct,
-                scientific_parameter=True,
-            ),
-            "random_seed": _planning_argument(
-                (int,),
-                "Explicit random seed for reproducible neighbor construction.",
-                source=direct,
-                scientific_parameter=True,
-            ),
-            "overwrite": _planning_argument(
-                (bool,),
-                "Whether an existing identical output may be replaced.",
-                source=direct,
-            ),
-        },
-        result_contract=ResultContract(
-            name="CellNeighborsToolResult",
-            required_fields={
-                "status": (str,),
-                "embedding_path": (str,),
-                "cell_ids_path": (str,),
-                "analysis_path": (str,),
-                "n_cells": (int,),
-                "embedding_dim": (int,),
-                "n_neighbors": (int,),
-                "metric": (str,),
-                "neighbors_method": (str,),
-                "transformer": (str,),
-                "random_seed": (int,),
-                "connectivities_nnz": (int,),
-                "distances_nnz": (int,),
-                "finite": (bool,),
-                "cell_order_preserved": (bool,),
-                "backend": (str,),
-                "software_versions": (dict,),
-            },
-            validator=_validate_neighbors_result,
-            planning_fields={
-                "analysis_path": _planning_result(
-                    "Compact analysis artifact containing the neighbor graph.",
-                    bindable=True,
-                    artifact=ArtifactSemanticKind.NEIGHBORS_ANALYSIS,
-                    provenance=branch,
-                )
-            },
-        ),
-        exception_classifier=_classify_analysis_exception,
-        recovery_policy_version="build-cell-neighbors-v1",
-        planning=_tool_planning(
-            PlanningToolRole.OPERATION,
-            "Build a neighbors-analysis artifact from an aligned embedding and cell IDs.",
-            capability_ids=('embedding_analysis',),
-        ),
-        semantic_planning=SemanticToolSpec(
-            consumer_ports=(
-                SemanticConsumerPortSpec(
-                    "embedding",
-                    (
-                        _semantic_member("embedding", "embedding_path"),
-                        _semantic_member("cell_ids", "cell_ids_path"),
-                    ),
-                    True,
-                    request_sources=(
-                        _semantic_request(
-                            "embedding_path",
-                            _semantic_request_member(
-                                "embedding", "embedding_path"
-                            ),
-                            _semantic_request_member("cell_ids", "cell_ids_path"),
-                        ),
-                    ),
-                    accepted_upstream_types=("epizoo_embedding_bundle.v1", "cell_embedding_bundle.v1"),
-                ),
-                _semantic_argument_port("output_dir", required=True),
-                _semantic_argument_port("n_neighbors", required=False),
-                _semantic_argument_port("metric", required=False),
-                _semantic_argument_port(
-                    "random_seed",
-                    required=False,
-                    input_name="neighbors_random_seed",
-                ),
-                _semantic_argument_port(
-                    "overwrite",
-                    required=False,
-                    input_name="neighbors_overwrite",
-                ),
-            ),
-            producer_ports=(
-                SemanticProducerPortSpec(
-                    "neighbors",
-                    "cell_neighbors.v1",
-                    (_semantic_member("analysis", "analysis_path"),),
-                    lineage_from_port="embedding",
-                ),
-            ),
-        ),
-    )
-    clustering_spec = ToolSpec(
-        name="cluster_cells",
-        function=cluster_cells,
-        required_arguments={
-            "analysis_path": _planning_argument(
-                path_types,
-                "Neighbors-analysis artifact to cluster.",
-                source=composable,
-                artifacts=(ArtifactSemanticKind.NEIGHBORS_ANALYSIS,),
-                provenance=branch,
-            ),
-            "output_dir": _planning_argument(
-                path_types,
-                "Destination directory for the clustered artifact.",
-                source=direct,
-            ),
-        },
-        optional_arguments={
-            "resolution": _ClusteringResolutionArgument(
-                (int, float),
-                planning=ArgumentPlanningSemantics(
-                    description="Explicit Leiden clustering resolution.",
-                    source_eligibility=direct,
-                    scientific_parameter=True,
-                ),
-            ),
-            "random_seed": _planning_argument(
-                (int,),
-                "Explicit random seed for reproducible clustering.",
-                source=direct,
-                scientific_parameter=True,
-            ),
-            "overwrite": _planning_argument(
-                (bool,),
-                "Whether an existing identical output may be replaced.",
-                source=direct,
-            ),
-        },
-        result_contract=ResultContract(
-            name="CellClusteringToolResult",
-            required_fields={
-                "analysis_sha256": (str,),
-                "status": (str,),
-                "input_analysis_path": (str,),
-                "analysis_path": (str,),
-                "n_cells": (int,),
-                "n_clusters": (int,),
-                "cluster_key": (str,),
-                "algorithm": (str,),
-                "resolution": (float,),
-                "random_seed": (int,),
-                "cell_order_preserved": (bool,),
-                "backend": (str,),
-                "software_versions": (dict,),
-            },
-            validator=_validate_clustering_result,
-            planning_fields={
-                "analysis_path": _planning_result(
-                    "Compact analysis artifact containing fixed Leiden clusters.",
-                    bindable=True,
-                    artifact=ArtifactSemanticKind.CLUSTERED_ANALYSIS,
-                    provenance=branch,
-                ),
-                "cluster_key": _planning_result(
-                    "Observation key containing the fixed cluster labels.",
-                    bindable=True,
-                    provenance=branch,
-                ),
-                "analysis_sha256": _planning_result('Exact clustered analysis checksum.', bindable=True,
-                    artifact=ArtifactSemanticKind.CLUSTERED_ANALYSIS, provenance=branch),
-            },
-        ),
-        exception_classifier=_classify_analysis_exception,
-        recovery_policy_version="cluster-cells-v1",
-        planning=_tool_planning(
-            PlanningToolRole.OPERATION,
-            "Produce fixed Leiden clusters from a neighbors-analysis artifact.",
-            capability_ids=('embedding_analysis',),
-        ),
-        semantic_planning=SemanticToolSpec(
-            consumer_ports=(
-                SemanticConsumerPortSpec(
-                    "analysis",
-                    (_semantic_member("analysis", "analysis_path"),),
-                    True,
-                    request_sources=(
-                        _semantic_request(
-                            "analysis_path",
-                            _semantic_request_member("analysis", "analysis_path"),
-                        ),
-                    ),
-                    accepted_upstream_types=("cell_neighbors.v1",),
-                ),
-                _semantic_argument_port("output_dir", required=True),
-                _semantic_argument_port("resolution", required=False),
-                _semantic_argument_port(
-                    "random_seed",
-                    required=False,
-                    input_name="cluster_random_seed",
-                ),
-                _semantic_argument_port(
-                    "overwrite",
-                    required=False,
-                    input_name="cluster_overwrite",
-                ),
-            ),
-            producer_ports=(
-                SemanticProducerPortSpec(
-                    "clustered_analysis",
-                    "clustered_analysis.v1",
-                    (_semantic_member("analysis", "analysis_path"), _semantic_member('sha256','analysis_sha256')),
-                    lineage_from_port="analysis",
-                ),
-                SemanticProducerPortSpec(
-                    "cluster_key",
-                    "cluster_key.v1",
-                    (_semantic_member("value", "cluster_key"),),
-                    lineage_from_port="analysis",
-                ),
-            ),
-        ),
-    )
-    umap_spec = ToolSpec(
-        name="compute_cell_umap",
-        function=compute_cell_umap,
-        required_arguments={
-            "analysis_path": _planning_argument(
-                path_types,
-                "Neighbor graph, optionally carrying Leiden labels, for UMAP coordinates; clustering is not required.",
-                source=composable,
-                artifacts=(ArtifactSemanticKind.NEIGHBORS_ANALYSIS, ArtifactSemanticKind.CLUSTERED_ANALYSIS),
-                provenance=branch,
-            ),
-            "output_dir": _planning_argument(
-                path_types,
-                "Destination directory for the UMAP artifact.",
-                source=direct,
-            ),
-        },
-        optional_arguments={
-            "min_dist": _planning_argument(
-                (int, float),
-                "Explicit UMAP minimum distance.",
-                source=direct,
-                scientific_parameter=True,
-            ),
-            "spread": _planning_argument(
-                (int, float),
-                "Explicit UMAP spread.",
-                source=direct,
-                scientific_parameter=True,
-            ),
-            "random_seed": _planning_argument(
-                (int,),
-                "Explicit random seed for reproducible UMAP coordinates.",
-                source=direct,
-                scientific_parameter=True,
-            ),
-            "overwrite": _planning_argument(
-                (bool,),
-                "Whether an existing identical output may be replaced.",
-                source=direct,
-            ),
-        },
-        result_contract=ResultContract(
-            name="CellUMAPToolResult",
-            required_fields={
-                "status": (str,),
-                "input_analysis_path": (str,),
-                "analysis_path": (str,),
-                "n_cells": (int,),
-                "n_components": (int,),
-                "umap_key": (str,),
-                "coordinate_dtype": (str,),
-                "finite": (bool,),
-                "min_dist": (float,),
-                "spread": (float,),
-                "random_seed": (int,),
-                "cell_order_preserved": (bool,),
-                "backend": (str,),
-                "software_versions": (dict,),
-            },
-            validator=_validate_umap_result,
-            planning_fields={
-                "analysis_path": _planning_result(
-                    "Compact neighbor-graph artifact with UMAP coordinates and optional existing Leiden labels.",
-                    bindable=True,
-                    artifact=ArtifactSemanticKind.UMAP_ANALYSIS,
-                    provenance=branch,
-                )
-            },
-        ),
-        exception_classifier=_classify_analysis_exception,
-        recovery_policy_version="compute-cell-umap-v1",
-        planning=_tool_planning(
-            PlanningToolRole.OPERATION,
-            "Compute fixed two-dimensional UMAP from neighbors; Leiden is optional and is not a prerequisite.",
-            capability_ids=('embedding_analysis',),
-        ),
-        semantic_planning=SemanticToolSpec(
-            consumer_ports=(
-                SemanticConsumerPortSpec(
-                    "analysis",
-                    (_semantic_member("analysis", "analysis_path"),),
-                    True,
-                    request_sources=(
-                        _semantic_request(
-                            "analysis_path",
-                            _semantic_request_member("analysis", "analysis_path"),
-                        ),
-                    ),
-                    accepted_upstream_types=("cell_neighbors.v1", "clustered_analysis.v1"),
-                ),
-                _semantic_argument_port("output_dir", required=True),
-                _semantic_argument_port("min_dist", required=False),
-                _semantic_argument_port("spread", required=False),
-                _semantic_argument_port(
-                    "random_seed",
-                    required=False,
-                    input_name="umap_random_seed",
-                ),
-                _semantic_argument_port(
-                    "overwrite",
-                    required=False,
-                    input_name="umap_overwrite",
-                ),
-            ),
-            producer_ports=(
-                SemanticProducerPortSpec(
-                    "umap_analysis",
-                    "umap_analysis.v1",
-                    (_semantic_member("analysis", "analysis_path"),),
-                    lineage_from_port="analysis",
-                ),
-            ),
-        ),
-    )
     evaluation_spec = ToolSpec(
         name="evaluate_cell_clustering",
         function=evaluate_cell_clustering,
@@ -2542,8 +2103,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Fixed clustered or UMAP analysis whose clusters will be evaluated.",
                 source=composable,
                 artifacts=(
-                    ArtifactSemanticKind.CLUSTERED_ANALYSIS,
-                    ArtifactSemanticKind.UMAP_ANALYSIS,
+                    ArtifactSemanticKind.RAW_SCATAC,
                 ),
                 provenance=branch,
             ),
@@ -2634,9 +2194,9 @@ def build_default_tool_registry() -> ToolRegistry:
                         ),
                     ),
                     accepted_upstream_types=(
-                        "clustered_analysis.v1",
-                        "umap_analysis.v1",
+                        "native_matrix_h5ad.v1",
                     ),
+                    upstream_member_names=(("native_matrix_h5ad.v1", "analysis", "dataset"),),
                 ),
                 SemanticConsumerPortSpec(
                     "ground_truth_dataset",
@@ -3583,9 +3143,6 @@ def build_default_tool_registry() -> ToolRegistry:
         archr_tool_spec(),
         macs3_tool_spec(),
         embedding_spec,
-        neighbors_spec,
-        clustering_spec,
-        umap_spec,
         evaluation_spec,
         label_transfer_spec,
         feature_space_spec,

@@ -128,7 +128,7 @@ def accepted_models(service, session_id, revision, origin, output, *, step_id=No
             or record['artifact_type'] != c.ARTIFACT
             or record['verifier'] != dict(id='epizoo.species-adaptation-structural', compatibility_version='1')):
         raise ValueError('No exact accepted target model.')
-    service._application.registry.accepted(step.tool_name).result_contract.validate(result)
+    service._application.registry.get(step.tool_name).result_contract.validate(result)
     workspace = service._application._workspace
     root = workspace.runs / workspace.run_digest(run_id) / 'scientific'
     path = Path(result['manifest_path'])

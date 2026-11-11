@@ -39,8 +39,6 @@ from agent.schemas import (
     VerificationResult,
 )
 from agent.tools import (
-    build_cell_neighbors,
-    cluster_cells,
     evaluate_cell_clustering,
     transfer_cell_labels,
 )
@@ -133,6 +131,8 @@ def _all_tool_run(*, extra_embedding_field: bool = False) -> AgentRunResult:
                 "species": "mouse",
             },
             {
+                "analysis_path": "/output/embedding.h5ad",
+                "analysis_sha256": "a" * 64,
                 "status": "success",
                 "input_path": "/data/input.h5ad",
                 "embedding_path": "/output/embedding.npy",
@@ -146,74 +146,6 @@ def _all_tool_run(*, extra_embedding_field: bool = False) -> AgentRunResult:
                 "species": "mouse",
                 "checkpoint_path": "/models/epizoo.pth",
                 "device": "cuda:0",
-            },
-        ),
-        (
-            "neighbors",
-            "build_cell_neighbors",
-            {
-                "embedding_path": "/output/embedding.npy",
-                "cell_ids_path": "/output/cells.txt",
-                "output_dir": "/output",
-            },
-            {
-                "status": "success",
-                "embedding_path": "/output/embedding.npy",
-                "cell_ids_path": "/output/cells.txt",
-                "analysis_path": "/output/neighbors.h5ad",
-                "n_cells": 2,
-                "embedding_dim": 512,
-                "n_neighbors": 15,
-                "metric": "euclidean",
-                "neighbors_method": "umap",
-                "transformer": "none",
-                "random_seed": 0,
-                "connectivities_nnz": 2,
-                "distances_nnz": 2,
-                "finite": True,
-                "cell_order_preserved": True,
-                "backend": "Scanpy",
-                "software_versions": versions,
-            },
-        ),
-        (
-            "cluster",
-            "cluster_cells",
-            {"analysis_path": "/output/neighbors.h5ad", "output_dir": "/output"},
-            {
-                "status": "success",
-                "input_analysis_path": "/output/neighbors.h5ad",
-                "analysis_path": "/output/clustered.h5ad",
-                "n_cells": 2,
-                "n_clusters": 2,
-                "cluster_key": "leiden",
-                "algorithm": "leiden",
-                "resolution": 1.0,
-                "random_seed": 0,
-                "cell_order_preserved": True,
-                "backend": "Scanpy",
-                "software_versions": versions,
-            },
-        ),
-        (
-            "umap",
-            "compute_cell_umap",
-            {"analysis_path": "/output/clustered.h5ad", "output_dir": "/output"},
-            {
-                "status": "success",
-                "input_analysis_path": "/output/clustered.h5ad",
-                "analysis_path": "/output/umap.h5ad",
-                "n_cells": 2,
-                "n_components": 2,
-                "umap_key": "X_umap",
-                "coordinate_dtype": "float32",
-                "finite": True,
-                "min_dist": 0.5,
-                "spread": 1.0,
-                "random_seed": 0,
-                "cell_order_preserved": True,
-                "backend": "Scanpy",
-                "software_versions": versions,
             },
         ),
         (
@@ -416,27 +348,24 @@ def test_projection_covers_surviving_tools_and_artifact_integrity_modes(
     )
     payload = json.loads(Path(result["evidence_path"]).read_text())
 
-    assert result["n_steps"] == 7
-    assert len(payload["steps"]) == 7
+    assert result["n_steps"] == 4
+    assert len(payload["steps"]) == 4
     assert {step["tool_name"] for step in payload["steps"]} == {
         "inspect_scATAC",
         "epizoo_embed_cells",
-        "build_cell_neighbors",
-        "cluster_cells",
-        "compute_cell_umap",
         "evaluate_cell_clustering",
         "transfer_cell_labels",
 
     }
     artifacts = {value["artifact_kind"]: value for value in payload["artifacts"]}
-    assert len(artifacts) == 7
+    assert len(artifacts) == 5
     assert artifacts["cell_label_transfer_h5ad"]["integrity"][
         "authoritative_digest"
     ]["value"] == "a" * 64
     assert artifacts["epizoo_embedding_npy"]["integrity"][
         "authoritative_digest"
     ] is None
-    assert "fresh_existing_verifier" in artifacts["cell_umap_h5ad"][
+    assert "exact_embedding_conservation" in artifacts["epizoo_embedding_h5ad"][
         "integrity"
     ]["verification_basis"]
 
@@ -470,7 +399,7 @@ def test_contract_drift_fails_closed(
         ),
     )
     registry = ToolRegistry(
-        (changed,) + tuple(base.get(name) for name in base.names()[1:])
+        (changed,) + tuple(base.get(name) for name in base.names() if name != "inspect_scATAC")
     )
     with pytest.raises(AnalysisEvidenceError, match="incompatible") as caught:
         build_analysis_evidence(_inspection_run(), tmp_path, registry=registry)
@@ -732,7 +661,7 @@ def test_missing_verified_source_artifact_prevents_evidence_creation(
 ) -> None:
     embedding_path = tmp_path / "embedding.npy"
     cell_ids_path = tmp_path / "cells.txt"
-    embedding_path.write_bytes(b"nonempty")
+    np.save(embedding_path, np.ones((1,512),dtype=np.float32))
     cell_ids_path.write_text("cell-1\n", encoding="utf-8")
     arguments = {
         "input_path": str(tmp_path / "input.h5ad"),
@@ -760,6 +689,8 @@ def test_missing_verified_source_artifact_prevents_evidence_creation(
         "checkpoint_path": "/models/epizoo.pth",
         "device": "cuda:0",
     }
+    from agent.tools.analysis.epizoo_embedding import _publish_compact_embedding
+    result = _publish_compact_embedding(result, overwrite=False)
     step = StepExecutionResult(
         "embed",
         "epizoo_embed_cells",
@@ -802,7 +733,7 @@ def test_embedding_evidence_optionally_projects_verified_pinned_owner_provenance
     pins = {"resource_id": "reviewed-mouse", "checkpoint_sha256": "a" * 64,
             "frequencies_sha256": "b" * 64, "filter_indices_sha256": "c" * 64}
     embedding = tmp_path / "embedding.npy"
-    embedding.write_bytes(b"legacy verified nonempty artifact")
+    np.save(embedding, np.ones((1,512),dtype=np.float32))
     cells = tmp_path / "cells.txt"
     cells.write_text("cell-1\n")
     arguments = {"input_path": str(tmp_path / "input.h5ad"), "output_dir": str(tmp_path),
@@ -817,6 +748,8 @@ def test_embedding_evidence_optionally_projects_verified_pinned_owner_provenance
         "cell_ids_path": str(cells), "n_cells": 1, "embedding_dim": 512, "embedding_dtype": "float32",
         "finite": True, "cell_order_preserved": True, "backend": "EpiZoo", "species": "mouse",
         "checkpoint_path": "/models/epizoo.pth", "device": "cuda:0", "resource_provenance": provenance}
+    from agent.tools.analysis.epizoo_embedding import _publish_compact_embedding
+    result = _publish_compact_embedding(result, overwrite=False)
     plan = AgentPlan("pinned-plan", "pinned-request", "scripted",
                      (PlanStep("embed", "epizoo_embed_cells", arguments),))
     step = StepExecutionResult("embed", "epizoo_embed_cells", StepStatus.SUCCEEDED, 1,
@@ -841,40 +774,6 @@ def test_embedding_evidence_optionally_projects_verified_pinned_owner_provenance
     assert verify_analysis_evidence(legacy_run, historical, registry=registry).passed
 
 
-def test_analysis_stage_tampering_fails_through_existing_verifier(
-    tmp_path: Path,
-) -> None:
-    embedding_path = tmp_path / "embedding.npy"
-    cell_ids_path = tmp_path / "cells.txt"
-    embeddings = np.zeros((5, 512), dtype=np.float32)
-    embeddings[:, 0] = np.arange(5, dtype=np.float32)
-    np.save(embedding_path, embeddings, allow_pickle=False)
-    cell_ids_path.write_text(
-        "cell-1\ncell-2\ncell-3\ncell-4\ncell-5\n", encoding="utf-8"
-    )
-    arguments = {
-        "embedding_path": str(embedding_path),
-        "cell_ids_path": str(cell_ids_path),
-        "output_dir": str(tmp_path / "analysis"),
-        "n_neighbors": 2,
-    }
-    result = build_cell_neighbors(**arguments)
-    registry = build_default_tool_registry()
-    run = _single_step_run(
-        PlanStep("neighbors", "build_cell_neighbors", arguments),
-        arguments,
-        result,
-        registry,
-        request_id="neighbors-evidence",
-    )
-    build_analysis_evidence(run, tmp_path / "before-tamper", registry=registry)
-
-    artifact = ad.read_h5ad(result["analysis_path"])
-    artifact.uns["agent_milestone6"]["stage"] = "tampered"
-    artifact.write_h5ad(result["analysis_path"])
-    with pytest.raises(AnalysisEvidenceError) as caught:
-        build_analysis_evidence(run, tmp_path / "after-tamper", registry=registry)
-    assert caught.value.code == "EVIDENCE_SOURCE_STEP_REVALIDATION_FAILED"
 
 
 def test_label_transfer_digest_tampering_fails_through_existing_verifier(
@@ -931,53 +830,4 @@ def test_label_transfer_digest_tampering_fails_through_existing_verifier(
         build_analysis_evidence(
             run, tmp_path / "after-transfer-tamper", registry=registry
         )
-    assert caught.value.code == "EVIDENCE_SOURCE_STEP_REVALIDATION_FAILED"
-
-
-def test_evaluation_report_tampering_fails_through_existing_verifier(
-    tmp_path: Path,
-) -> None:
-    embedding_path = tmp_path / "eval_embedding.npy"
-    cell_ids_path = tmp_path / "eval_cells.txt"
-    ids = tuple(f"cell-{index}" for index in range(8))
-    embeddings = np.zeros((8, 512), dtype=np.float32)
-    embeddings[:4, 0] = np.arange(4, dtype=np.float32) * 0.01
-    embeddings[4:, 0] = 10.0 + np.arange(4, dtype=np.float32) * 0.01
-    np.save(embedding_path, embeddings, allow_pickle=False)
-    cell_ids_path.write_text("\n".join(ids) + "\n", encoding="utf-8")
-    neighbors = build_cell_neighbors(
-        embedding_path,
-        cell_ids_path,
-        tmp_path / "eval-analysis",
-        n_neighbors=3,
-    )
-    clustered = cluster_cells(
-        neighbors["analysis_path"], tmp_path / "eval-analysis"
-    )
-    reference_path = tmp_path / "evaluation_reference.h5ad"
-    reference = ad.AnnData(obs={"celltype": ["A"] * 4 + ["B"] * 4})
-    reference.obs_names = list(ids)
-    reference.write_h5ad(reference_path)
-    arguments = {
-        "analysis_path": clustered["analysis_path"],
-        "reference_h5ad_path": str(reference_path),
-        "label_key": "celltype",
-        "output_dir": str(tmp_path / "evaluation"),
-    }
-    result = evaluate_cell_clustering(**arguments)
-    registry = build_default_tool_registry()
-    run = _single_step_run(
-        PlanStep("evaluate", "evaluate_cell_clustering", arguments),
-        arguments,
-        result,
-        registry,
-        request_id="clustering-evaluation-evidence",
-    )
-    build_analysis_evidence(run, tmp_path / "before-report-tamper", registry=registry)
-    report_path = Path(result["report_path"])
-    report = json.loads(report_path.read_text())
-    report["metrics"]["nmi"] = 0.123
-    report_path.write_text(json.dumps(report), encoding="utf-8")
-    with pytest.raises(AnalysisEvidenceError) as caught:
-        build_analysis_evidence(run, tmp_path / "after-report-tamper", registry=registry)
     assert caught.value.code == "EVIDENCE_SOURCE_STEP_REVALIDATION_FAILED"

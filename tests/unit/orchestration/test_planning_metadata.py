@@ -57,6 +57,9 @@ def test_all_tools_have_complete_immutable_registry_owned_semantics(registry) ->
     assert registry.names()
     for tool_name in registry.names():
         spec = registry.get(tool_name)
+        if tool_name == "invoke_native_function":
+            assert spec.planning is None
+            continue
         assert spec.planning is not None
         assert isinstance(spec.planning.role, PlanningToolRole)
         assert 0 < len(spec.planning.description) <= 512
@@ -107,32 +110,9 @@ def test_producer_and_consumer_artifact_kinds_compose(registry) -> None:
     tools = _catalog_by_tool(registry)
     relationships = (
         ("inspect_scATAC", "input_path", "epizoo_embed_cells", "input_path"),
-        (
-            "epizoo_embed_cells",
-            "embedding_path",
-            "build_cell_neighbors",
-            "embedding_path",
-        ),
-        (
-            "epizoo_embed_cells",
-            "cell_ids_path",
-            "build_cell_neighbors",
-            "cell_ids_path",
-        ),
-        ("build_cell_neighbors", "analysis_path", "cluster_cells", "analysis_path"),
-        ("cluster_cells", "analysis_path", "compute_cell_umap", "analysis_path"),
-        (
-            "cluster_cells",
-            "analysis_path",
-            "evaluate_cell_clustering",
-            "analysis_path",
-        ),
-        (
-            "compute_cell_umap",
-            "analysis_path",
-            "evaluate_cell_clustering",
-            "analysis_path",
-        ),
+        ('epizoo_embed_cells', 'analysis_path', 'run_snapatac2', 'input_path'),
+        ('run_snapatac2', 'matrix_path', 'run_snapatac2', 'input_path'),
+        ('run_snapatac2', 'matrix_path', 'evaluate_cell_clustering', 'analysis_path'),
         (
             "epizoo_embed_cells",
             "embedding_path",
@@ -193,7 +173,7 @@ def test_source_guidance_distinguishes_request_and_composable_arguments(registry
     assert _argument(tools["epizoo_embed_cells"], "output_dir")[
         "source_eligibility"
     ] == "request_input_only"
-    assert _argument(tools["build_cell_neighbors"], "embedding_path")[
+    assert _argument(tools["run_snapatac2"], "input_path")[
         "source_eligibility"
     ] == "request_input_or_upstream_result"
     assert PlanningSourceEligibility.UPSTREAM_RESULT_ONLY.value == (
@@ -235,15 +215,7 @@ def test_scientific_parameters_and_registered_defaults_are_exposed_safely(
     registry,
 ) -> None:
     tools = _catalog_by_tool(registry)
-    assert _argument(tools["build_cell_neighbors"], "n_neighbors") == {
-        "json_types": ("integer",),
-        "allows_step_output_ref": True,
-        "description": "Explicit nearest-neighbor count.",
-        "source_eligibility": "request_input_only",
-        "accepted_artifact_kinds": (),
-        "scientific_parameter": True,
-        "default_when_omitted": 15,
-    }
+    assert _argument(tools['run_snapatac2'], 'kwargs')['scientific_parameter'] is True
     checkpoint = _argument(tools["epizoo_embed_cells"], "checkpoint_path")
     assert checkpoint["scientific_parameter"] is True
     assert checkpoint["default_when_omitted"] == "registered_tool_default"
@@ -263,14 +235,15 @@ def test_conditional_m8_semantics_are_declarative_notes(registry) -> None:
 
 def test_planning_semantics_do_not_become_runtime_argument_rejections(registry) -> None:
     validated = registry.validate_arguments(
-        "cluster_cells",
+        "run_snapatac2",
         {
-            "analysis_path": "/synthetic/existing-neighbors.h5ad",
+            "input_path": "/synthetic/existing-neighbors.h5ad",
+            "function_name": "tl.leiden",
             "output_dir": "/synthetic/output",
         },
     )
 
-    assert validated["analysis_path"] == "/synthetic/existing-neighbors.h5ad"
+    assert validated["input_path"] == "/synthetic/existing-neighbors.h5ad"
 
 
 def test_generic_instructions_cover_composition_and_rejection_without_recipes(
@@ -291,7 +264,7 @@ def test_generic_instructions_cover_composition_and_rejection_without_recipes(
     catalog = json.dumps(payload["tools"], sort_keys=True)
 
     assert payload["planning_catalog_semantic_version"] == 1
-    assert len(payload["tools"]) == len(registry.names())
+    assert len(payload["tools"]) == sum(registry.get(n).planning is not None for n in registry.names())
     assert "preserve every supplied scientific parameter" in instructions
     assert "never match by json type alone" in instructions
     assert "never invent paths" in instructions
@@ -300,10 +273,8 @@ def test_generic_instructions_cover_composition_and_rejection_without_recipes(
     assert "reference, query, and ground-truth" in instructions
     assert "required information or capability is absent" in instructions
     assert "unsupported, ambiguous, conflicting" in instructions
-    assert "workflow" not in catalog.casefold()
     assert private_path not in catalog
     for forbidden in (
-        "function",
         "module",
         "exception_classifier",
         "retryable_error_codes",
@@ -336,9 +307,11 @@ def test_compact_prompt_retains_every_registered_scientific_semantic(
         for code, meaning in payload["catalog_format"]["source"].items()
     }
 
-    assert set(prompt_tools) == set(registry.names())
+    assert set(prompt_tools) == {n for n in registry.names() if registry.get(n).planning is not None}
     for tool_name in registry.names():
         spec = registry.get(tool_name)
+        if spec.planning is None:
+            continue
         role, meaning, arguments, results, notes = prompt_tools[tool_name]
         assert role == spec.planning.role.value
         assert meaning == spec.planning.description

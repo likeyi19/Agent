@@ -108,7 +108,7 @@ def historical_binding(owner, records, binding):
     values = _serialize(binding.execution_inputs)
     def invalid(): raise ResourceAdmissionError('LOCAL_RESOURCE_BINDING_INVALID')
     if binding.composition is None and binding.tool_name == 'prepare_scATAC_fragments':
-        spec=owner._group_registry().accepted(binding.tool_name)
+        spec=owner._group_registry().get(binding.tool_name)
         known=dict(spec.required_arguments) | dict(spec.optional_arguments)
         if set(values)-set(known) or set(spec.required_arguments)-{'output_dir'}-set(values): invalid()
         for name,value in values.items():

@@ -50,8 +50,6 @@ def test_catalog_uses_one_native_owner_and_no_old_executable_registry():
     assert 'tl.spectral' in dict(catalog.functions)
     for name in ('prepare_scATAC_fragments','prepare_scATAC_bam_fragments','import_scATAC_fragments','compute_scATAC_qc','select_scATAC_cells','build_scATAC_cell_by_ccre','build_scATAC_cell_by_features'):
         assert not registry.contains(name)
-        old = registry.accepted(name)
-        assert not hasattr(old, 'function') and old.planning is None
         with pytest.raises(LookupError): registry.get(name)
     contract = build_semantic_compiler_contract(registry)
     assert any(rule.producer_tool_name == 'run_chromap' and rule.consumer_tool_name == 'run_snapatac2' for rule in contract.step_output_channels)

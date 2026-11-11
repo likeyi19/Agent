@@ -34,9 +34,9 @@ def coordinates(path, sha, field='X_umap'):
     from agent.tools.analysis.marker_annotation import checked_file
     with h5py.File(checked_file(path, sha), 'r') as handle:
         from .peak_h5ad import inspect
-        inspect(handle, observation_fields=())
+        inspect(handle, require_matrix=False, observation_fields=())
         obs = handle['obs']
-        inspect(handle, observation_fields=(obs.attrs['_index'],))
+        inspect(handle, require_matrix=False, observation_fields=(obs.attrs['_index'],))
         ids = ordered_ids(_series(obs[obs.attrs['_index']]), source='Coordinates')
         if (not isinstance(handle.get('obsm', getlink=True), h5py.HardLink)
                 or not isinstance(handle['obsm'], h5py.Group)
@@ -153,7 +153,7 @@ def fields(path):
     """Inspect obs encodings only; numerical arrays are not offered as categories."""
     with h5py.File(path, 'r') as handle:
         from .peak_h5ad import inspect
-        inspect(handle, observation_fields=())
+        inspect(handle, require_matrix=False, observation_fields=())
         obs = handle['obs']
         if any(not isinstance(obs.get(key, getlink=True), h5py.HardLink) for key in obs.attrs['column-order']):
             raise ValueError('Indirect observation fields are unsupported.')
@@ -179,7 +179,7 @@ def selected_observations(handle, fields, *, max_logical_bytes=128 * 1024**2):
     dependency before AnnData follows it; never read X or unrelated obs fields.
     """
     from .peak_h5ad import inspect
-    inspect(handle, observation_fields=())
+    inspect(handle, require_matrix=False, observation_fields=())
     obs = handle['obs']; index = obs.attrs['_index']
     requested = set(fields)
     fields = tuple(dict.fromkeys((index, *fields)))
@@ -205,7 +205,7 @@ def selected_observations(handle, fields, *, max_logical_bytes=128 * 1024**2):
             if not isinstance(target, h5py.Dataset) or target.ndim != 1:
                 raise ValueError('Categorical levels require a vector dataset')
             dependencies.append(target.name)
-    inspect(handle, observation_fields=tuple(dict.fromkeys(dependencies)), max_logical_bytes=max_logical_bytes)
+    inspect(handle, require_matrix=False, observation_fields=tuple(dict.fromkeys(dependencies)), max_logical_bytes=max_logical_bytes)
     values = {field: _series(obs[field]) for field in fields}
     axis = values.pop(index)
     if (getattr(axis, 'ndim', None) != 1 or any(
@@ -234,7 +234,7 @@ def axis(path, sha):
     from .marker_annotation import checked_file
     with h5py.File(checked_file(path, sha), 'r') as handle:
         from .peak_h5ad import inspect
-        inspect(handle, observation_fields=())
+        inspect(handle, require_matrix=False, observation_fields=())
         obs = handle['obs']
-        inspect(handle, observation_fields=(obs.attrs['_index'],))
+        inspect(handle, require_matrix=False, observation_fields=(obs.attrs['_index'],))
         return ordered_ids(_series(obs[obs.attrs['_index']]), source='Accepted observation axis')

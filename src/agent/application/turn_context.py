@@ -18,7 +18,7 @@ def supplied_input_context(inputs, registry):
     values = freeze_json_mapping({} if inputs is None else inputs, 'execution_inputs')
     consumers = {}
     for tool_name in registry.names():
-        tool = registry.accepted(tool_name)
+        tool = registry.get(tool_name)
         if tool.semantic_planning is None:
             continue
         for port in tool.semantic_planning.consumer_ports:
@@ -94,7 +94,7 @@ def result_descriptions(sessions, state, captured):
     for group in groups:
         item, locator = group['canonical'], locators[group['handle']]
         step = steps[group['handle']]
-        spec = sessions._application.registry.accepted(step.tool_name)
+        spec = sessions._application.registry.get(step.tool_name)
         values = []
         nested = step.result.get('parameters', {})
         if not isinstance(nested, Mapping):

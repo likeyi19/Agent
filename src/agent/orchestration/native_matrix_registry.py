@@ -26,7 +26,7 @@ def tool_spec(owner):
     required = dict(
         input_path=arg((str, Path), ('BAM, original fragments or native H5AD, as required by the selected function.' if owner.package == 'snapatac2' else
             'H5AD with exact cells/features, selected measurement and native layers or feature mask as required.'),
-            artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
+            artifacts=(A.RAW_SCATAC, A.EPIZOO_EMBEDDING), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
         output_dir=arg((str, Path), 'Managed native publication destination.'),
         function_name=arg((str,), 'Explicit public ' + owner.package + ' function.', choices=tuple(owner.FUNCTIONS),
             scientific_parameter=True, conversational_choice=True, planner_choice=True))
@@ -38,6 +38,13 @@ def tool_spec(owner):
             scientific_parameter=True, conversational_exact_string=True),
         matrix_semantics=arg((str,), 'Optional actual source measurement; no declaration is required for native invocation.',
             scientific_parameter=True, conversational_exact_string=True))
+    if any('use_rep' in members for members in owner.FUNCTIONS.values()):
+        optional['use_rep'] = arg((str,),
+            'Exact representation for a function exposing native use_rep; X_epizoo is the compact EpiZoo embedding. '
+            'Other exact representations may be supplied in native kwargs. Explicit kwargs prevail. '
+            'Do not pass this selector to graph-consuming functions without use_rep, including Scanpy UMAP.',
+            choices=('X_spectral', 'X_epizoo', 'X_pca', 'X_lsi'), scientific_parameter=True,
+            conversational_choice=True, planner_choice=True)
     raw_fields = set()
     if owner.package == 'snapatac2':
         from agent.tools.analysis import snapatac_raw as raw
@@ -78,7 +85,7 @@ def tool_spec(owner):
     scalar = lambda k, **kw: scalar_port(owner.TOOL, tuple(owner.FUNCTIONS), k, **kw) if ({**required, **optional}[k].planning.scientific_parameter) else base_scalar(k, **kw)
     ports = [Consumer('dataset', (member('dataset', 'input_path'),), True,
         request_sources=(request('input_path', rm('dataset', 'input_path')),),
-        accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1', 'native_matrix_h5ad.v1')
+        accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1', 'native_matrix_h5ad.v1', 'cell_embedding_h5ad.v1')
             + (('native_fragments_file.v1',) if owner.package == 'snapatac2' else ())),
         *(scalar(k, required=k in required) for k in (*required, *optional)
             if k not in {'input_path', 'second_path', *raw_fields})]
@@ -125,12 +132,15 @@ def tool_spec(owner):
         'A user request to retain low-depth/all barcodes may explicitly bind '
         'min_num_fragments=0; do not lower thresholds just for a small dataset. Imported barcodes and later filtered '
         'barcodes are distinct populations. Native import has no X measurement: use native pp.add_tile_matrix '
-        'or pp.make_peak_matrix when a matrix is needed, then pp.select_features and tl.spectral. '
-        'Processed compatible peak-count H5AD starts at pp.select_features; no raw reimport or cell calling. '
-        'Ordinary non-EpiZoo scATAC reduction uses Spectral with native defaults. Build pp.knn, tl.leiden '
-        'and tl.umap from the same X_spectral representation. Reuse accepted exact matrices/graphs across turns '
-        'and clustering for annotation without recomputing reductions. EpiZoo remains a separate explicit '
-        'model-based capability. Explicit PCA uses run_scanpy pp.pca or run_episcanpy tl.pca. '
+        'or pp.make_peak_matrix when a matrix is needed. '
+        'Processed compatible H5AD needs no raw reimport or cell calling. '
+        'For a selected SnapATAC2 spectral workflow, compose pp.select_features, tl.spectral, '
+        'pp.knn and tl.leiden; tl.umap consumes the selected representation independently. '
+        'SnapATAC2 pp.knn writes its native distances graph, not Scanpy connectivities. '
+        'Reuse accepted exact matrices/graphs across turns. '
+        'EpiZoo is a separate model-based embedding: consume its dataset port (embedding-only H5AD), '
+        'selecting use_rep=X_epizoo for representation consumers. Never reconstruct counts or apply '
+        'count-matrix reduction to an embedding-only H5AD. '
         'Preserve supplied barcode/coordinate history and declared source/reference species/assembly. '
         'Use optional native reference ports only for the function that consumes them. '
     ) if owner.package == 'snapatac2' else 'No genome is required for these matrix functions. '
@@ -149,7 +159,14 @@ def tool_spec(owner):
             proof_metadata=pub.proof_metadata, independent_active_publications=True),
         planning=_tool_planning(PlanningToolRole.OPERATION, owner.guidance,
             'Invoke only the named supported native function with explicit kwargs unchanged and unspecified native defaults omitted. '
-            'Preserve source bytes, ordered axes and distinct result semantics.', *notes),
+            'Preserve source bytes, ordered axes and distinct result semantics. '
+            'Select native methods by scientific capabilities and researcher intent, with no package priority.',
+            'Scanpy/epiScanpy Leiden, UMAP and PAGA require compatible Scanpy neighbors; PAGA also needs groups. '
+            'Compose pp.neighbors and clustering when those prerequisites are absent. DPT needs compatible '
+            'neighbors, tl.diffmap and supplied root-cell information (uns.iroot); do not invent a root.',
+            'Use use_rep (or explicit native kwargs.use_rep) for representation consumers, including X_epizoo. '
+            'Scanpy UMAP consumes its neighbors graph, not a use_rep argument. Never substitute incompatible '
+            'package graphs. Explicit parameters prevail; omitted parameters retain native defaults.', *notes),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports), producer_ports=(
             Producer('matrix', owner.CONTRACT, (member('path', 'manifest_path'), member('sha256', 'manifest_sha256'))),
             Producer('dataset', 'native_matrix_h5ad.v1', (member('dataset','matrix_path'),member('sha256','matrix_sha256')), lineage_from_port='dataset'),

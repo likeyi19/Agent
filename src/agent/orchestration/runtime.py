@@ -48,7 +48,7 @@ from .planning_recovery import (
     PlanningRecoveryCancelled,
     RecoveredPlanningAttempt,
 )
-from .planner import DeterministicPlanner, Planner, PlannerError
+from .planner import Planner, PlannerError
 from .registry import ToolRegistry, build_default_tool_registry
 from .prior_outputs import references as prior_references, runtime_store
 from .run_store import (
@@ -92,13 +92,13 @@ class AgentRuntime:
         elif executor.registry is not registry:
             raise ValueError("`executor` and `registry` must use the same registry instance.")
 
-        self._planner = planner if planner is not None else DeterministicPlanner()
+        self._planner = planner
         self._registry = registry
         self._executor = executor
         self._run_store = run_store
 
     @property
-    def planner(self) -> Planner:
+    def planner(self) -> Planner | None:
         return self._planner
 
     @property
@@ -231,6 +231,12 @@ class AgentRuntime:
         PlanningDiagnosticContext | None,
         VerificationResult | None,
     ]:
+        if self._planner is None:
+            raise PlannerError(
+                "PLANNING_PROFILE_REQUIRED",
+                "Scientific planning requires a configured LLM planner; "
+                "prepared execution does not require a planner.",
+            )
         recovered_plan = getattr(self._planner, "plan_with_recovery", None)
         if callable(recovered_plan):
 

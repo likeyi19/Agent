@@ -40,7 +40,7 @@ def _accepted_step(store, run_id, step_id):
 
 def _accepted(store, run_id, step_id):
     stored, step, state = _accepted_step(store, run_id, step_id)
-    spec = build_default_tool_registry().accepted(step.tool_name)
+    spec = build_default_tool_registry().get(step.tool_name)
     identity = execution_identity(run_id, state.plan, step, spec)
     original = stored.verification.artifact_authority
     qualified = _qualified_records(store, run_id).get(step_id)

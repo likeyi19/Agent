@@ -70,7 +70,9 @@ def test_offline_inspection_to_verified_analysis_evidence(tmp_path: Path) -> Non
     source_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
     calls: list[str] = []
     registry = _counting_registry(calls)
-    runtime = AgentRuntime(registry=registry)
+    runtime = AgentRuntime(registry=registry, planner=_StaticPlanner(AgentPlan(
+        "inspection", "milestone7-offline", "fixed-test-plan",
+        (PlanStep("inspect", "inspect_scATAC", {"path": str(source)}),))))
     result = runtime.run(
         AgentRequest(
             "milestone7-offline",

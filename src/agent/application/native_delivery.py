@@ -31,7 +31,7 @@ def _publication(app, revision, origin, output, step_id=None):
     run_id = revision.run_id if output is None else output.run_id
     step_id = step_id if output is None else output.step_id
     step, authority, execution, anchor = _accepted(store, run_id, step_id)
-    spec = app._application.registry.accepted(step.tool_name).scientific_delivery
+    spec = app._application.registry.get(step.tool_name).scientific_delivery
     if spec is None:
         raise ValueError('No reviewed scientific delivery declaration')
     result = _serialize(step.result); record = authority.to_dict(); path = Path(result['manifest_path'])
@@ -135,7 +135,7 @@ def accepted_figures(app, turn, revision):
             continue
         seen.add(key); run = app._application.run_store.load(output.run_id)
         step = next(s for s in run.steps if s.step_id == output.step_id)
-        spec = app._application.registry.accepted(step.tool_name).scientific_delivery
+        spec = app._application.registry.get(step.tool_name).scientific_delivery
         if spec is None or spec.figure is None:
             continue
         store, run_id, step_id, step, authority, anchor, root, manifest, sha, record, spec = _publication(app, revision, turn, output)

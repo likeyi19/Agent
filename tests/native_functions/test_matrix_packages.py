@@ -166,32 +166,6 @@ def test_integrity_recovery_no_retry_and_original_bytes(source, simulated):
         owner.EPISCANPY.verify_publication(result['manifest_path'], expected_sha256=result['manifest_sha256'])
 
 
-def test_catalog_growth_preserves_adapter_identity_and_old_profiles_are_read_only(source, simulated):
-    from types import SimpleNamespace
-    p = owner.EPISCANPY
-    extended = owner.MatrixPackage(p.package, p.version, p.runtime,
-        {**p.FUNCTIONS, 'test_only_declaration': ()}, p.NATIVE_ARGUMENTS, p.guidance)
-    assert extended.PROFILE == p.PROFILE
-    result = p.execute(source, 'exact')
-    path = Path(result['manifest_path']); value = owner.read(path)
-    value['profile'] = owner.HISTORICAL_PROFILES[p.package]
-    path.unlink()  # Replace only this test-owned, unaccepted fixture.
-    sha = owner.write(path, value)
-    context = SimpleNamespace(files=owner.file_closure, execution_for=lambda *args: 'exact')
-    description = p.publication.describe(path, sha, context)
-    assert description['profile'] == description['proof_identity']['profile'] == value['profile']
-    historical = p.result(value, path, sha)
-    from agent.orchestration.native_delivery import delivery_spec
-    spec = delivery_spec(p, 'test')
-    authority = dict(artifact_contract=p.CONTRACT, science_profile=value['profile'], verifier=p.VERIFIER)
-    assert spec.publication(source, historical, authority) == (value, sha)
-    with pytest.raises(ValueError, match='producing request'):
-        spec.publication(source, historical, dict(authority, science_profile=p.PROFILE))
-    with pytest.raises(ValueError, match='producing execution'):
-        p.publication.publication_record(context, p.TOOL, source, historical, 'exact', historical)
-    value['profile'] = 'unknown-profile'; path.unlink(); sha = owner.write(path, value)
-    with pytest.raises(ValueError, match='identity'):
-        p.load(path, sha)
 
 
 def test_axis_substitution_cannot_publish(source, monkeypatch):
@@ -286,8 +260,7 @@ def test_new_package_needs_no_fabricated_historical_profile():
     grown = owner.MatrixPackage('new_package', '1.0', 'isolated', {'transform': (), 'another': ()}, (), 'More functions')
     assert grown.PROFILE == package.PROFILE
     for existing in (owner.EPISCANPY, owner.SIGNAC, owner.SNAPATAC2):
-        assert owner.HISTORICAL_PROFILES[existing.package] in existing.publication.historical_profiles
-        assert len(existing.publication.historical_profiles) == (4 if existing.package in ("Signac", "snapatac2") else 3)
+        assert existing.publication.historical_profiles == frozenset()
 
 
 def test_lsi_preserves_native_layer_values_without_numerical_prevalidation(source, tmp_path):
@@ -425,28 +398,3 @@ def test_pairwise_source_binding_and_rectangular_download(source,tmp_path,monkey
         pair=ad.read_h5ad(exported).uns['Signac_pairwise'];np.testing.assert_array_equal(pair['values'],[[.2],[.7]])
         assert pair['row_cells'].tolist()==['002','001'] and pair['column_cells'].tolist()==['002']
     finally:prepared.close()
-
-
-def test_pre_raw_snapatac_profile_retains_exact_historical_result_shape(source, simulated):
-    from types import SimpleNamespace
-    from agent.orchestration.native_delivery import delivery_spec
-    # Keep the simulated select_features fixture's X unchanged.
-    data = ad.read_h5ad(source['input_path']); data.X.data[:] = 1; data.write_h5ad(source['input_path'])
-    package = owner.SNAPATAC2
-    args = dict(source, function_name='pp.select_features')
-    current = package.execute(args, 'exact')
-    path = Path(current['manifest_path'])
-    value = owner.read(path)
-    value['profile'] = owner.digest(dict(contract=package.CONTRACT, version=package.version,
-        adaptation='ordinary AnnData; native returns and exact subset positions.v4'))
-    path.unlink()  # This simulated fixture has never been accepted.
-    sha = owner.write(path, value)
-    historical = package.result(value, path, sha)
-    assert 'fragments_path' not in historical and historical['matrix_path'] == current['matrix_path']
-    authority = dict(artifact_contract=package.CONTRACT, science_profile=value['profile'], verifier=package.VERIFIER)
-    before = path.read_bytes()
-    assert delivery_spec(package, 'test').publication(args, historical, authority) == (value, sha)
-    context = SimpleNamespace(files=owner.file_closure, execution_for=lambda *a: 'exact')
-    with pytest.raises(ValueError, match='producing execution'):
-        package.publication.publication_record(context, package.TOOL, args, historical, 'exact', historical)
-    assert path.read_bytes() == before

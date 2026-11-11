@@ -58,14 +58,6 @@ class ScopedArgument:
             raise ValueError('Invalid scoped scientific argument declaration.')
 
 
-@dataclass(frozen=True)
-class LeidenResolution(ScopedArgument):
-    """The strict historical wire for the original clustering declaration."""
-
-    def __post_init__(self):
-        super().__post_init__()
-        if self.tool != 'cluster_cells' or self.argument != 'resolution' or len(self.literal) > 80:
-            raise ValueError('Invalid explicit Leiden resolution declaration.')
 
 
 @dataclass(frozen=True)
@@ -887,14 +879,14 @@ def _word_continuation(character):
             or unicodedata.category(character).startswith('M'))
 
 
-def _numeric_token_span(text, start, end, *, legacy_modifier=False):
+def _numeric_token_span(text, start, end):
     """Lexical numeric identity shared by quote location and scalar admission."""
-    alnum = str.isalnum if legacy_modifier else _word_continuation
+    alnum = _word_continuation
     if start and (alnum(text[start - 1]) or text[start - 1] in '.+-/_%'):
         return False
     if end < len(text):
         following = text[end]
-        modifier = (not legacy_modifier and following == '-'
+        modifier = (following == '-'
                     and end + 1 < len(text) and text[end + 1].isalpha())
         sentence_period = (following == '.'
             and (end + 1 == len(text) or not text[end + 1].isdigit()))
@@ -904,7 +896,7 @@ def _numeric_token_span(text, start, end, *, legacy_modifier=False):
     return True
 
 
-def _ground_declaration(value, utterance, *, _legacy_numeric_grounding=False, _string_literal=False,
+def _ground_declaration(value, utterance, *, _string_literal=False,
                         _kind=None, _choices=()):
     """Locate provider-selected text; persisted declarations remain strict spans.
 
@@ -962,11 +954,11 @@ def _ground_declaration(value, utterance, *, _legacy_numeric_grounding=False, _s
         if len(matches) != 1:
             raise IntentError('ambiguous_parameter')
         return matches[0]
-    numeric = (not _legacy_numeric_grounding and re.fullmatch(
+    numeric = (re.fullmatch(
         r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:/[+-]?\d+)?', literal) is not None)
     origin = unique(utterance, evidence, numeric=numeric and evidence == literal)
     number_pattern = r'[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?:/[+-]?\d+)?'
-    if quoted and not _legacy_numeric_grounding and (numeric or _kind == 'number'):
+    if quoted and (numeric or _kind == 'number'):
         tokens = [m for m in re.finditer(number_pattern, evidence)
                   if _numeric_token_span(evidence, *m.span())]
         if len(tokens) > 1:
@@ -974,7 +966,7 @@ def _ground_declaration(value, utterance, *, _legacy_numeric_grounding=False, _s
     try:
         offset = unique(evidence, literal, numeric=numeric, string=_string_literal)
     except IntentError as exc:
-        if exc.reason != 'ungrounded_operand' or not quoted or _legacy_numeric_grounding:
+        if exc.reason != 'ungrounded_operand' or not quoted:
             raise
         # Recover only a single mechanically identifiable value inside the exact
         # association quote. Never search the whole request for a replacement.
@@ -1403,7 +1395,7 @@ def interpret(model, utterance, public, *, diagnostic_context=None, authoritativ
             *(['dialogue.selected_sources lists captured original-file candidates, not accepted result inputs. current_turn_sources identifies files selected in this turn; other entries are earlier Session attachments. dialogue.capabilities[tool].inputs offers reviewed Registry consumers. For execute_plan, associate only the original files requested as inputs through roles={tool,port,source} entries using only these offers. Each consumer may have one source; preserve explicit source associations and the declared scientific role. When dialogue.attachment_candidates is true, these are captured candidate attachments: bind only the files explicitly relevant to the requested task; unused files remain staged. Their stored input_type is a representation hint, never proof of scientific eligibility. For scientific FASTQ preprocessing use request_roles with target run_chromap and the bounded fastq variant with empty required_roles and roles. Interpret explicit assay, layout, single-library namespace/grouping, species, raw barcode whitelist policy and member source/read-role/lane/chunk associations. Missing declarations remain null or absent members. Compression is inspected from bytes. FASTQ species belongs only in fastq.species; arguments may contain only the offered FASTQ scientific consumers, never an EpiZoo species argument. Offered fastq_resources handles select reusable configured references and whitelists, never source-bound contexts. For an explicit unambiguous reference selection, use its offered resource handle together with the supporting resource_preference literal/evidence; ambiguous selections remain unresolved. Agent resolves applicable native components. Never invent values or thresholds. Do not invent FASTQ read membership, barcode history, or unsupported consumers. A single missing role may require clarification. A label-column declaration belongs to its offered operation and reference/ground-truth role. First/second may identify these exact selection positions only when the user explicitly associates them; order, filenames and metadata never imply biological roles. When the requested registered operation is unambiguous but source associations are missing, choose request_roles with target, required_roles={tool,port} from these offers, only the explicitly admitted roles, and original explicit scientific arguments. The required consumers must describe the requested objective, include the target tool and have one exact source binding each; the same source may be explicitly assigned to multiple supported consumers. This captures a question, never a scientific plan or invented workflow. If the operation itself is ambiguous, or explicit associations conflict, use clarify/ambiguous_subject without capturing a task. This selection grants no scientific qualification. An unrelated new task receives no prior input roles. Pending parameter answers retain the exact original selection and roles; they cannot switch datasets.']
               if public.get('dialogue', {}).get('selected_sources') else []),
             'Original-file candidates and accepted results are separate source offers. Select a historical file companion through roles only when the requested consumer actually reads it. Multiple unresolved files require clarification; never select by order or transfer old scientific declarations. For operations on accepted current results, use planning_context and omit file roles; do not recompute from an upload just because it is offered. Questions remain read-only. selected_primary_source, when present, identifies the exact explicitly selected H5AD for a new direct annotation/EpiZoo request; companion candidates cannot replace it. A pending task retains its own captured source. When session_source_candidates_overflow is true, only current explicit files remain offered; ask the user to select required historical files in the input controls. No historical subset has been silently selected.',
-            'For ordinary compatible scATAC clustering/UMAP use run_snapatac2 pp.select_features, tl.spectral, pp.knn, tl.leiden and tl.umap with native defaults. Processed peak-count H5AD requires no raw import or cell calling. Reuse the same X_spectral representation and exact accepted native results for downstream clustering/annotation and across turns. EpiZoo remains a separate model-based capability; explicit EpiZoo never switches methods after failure. Explicit PCA uses the native run_scanpy pp.pca or run_episcanpy tl.pca interface. For uncalled raw fragments select qc_thresholds=otsu on import and filter_cells, preserving explicit thresholds. Do not recalculate cell identities for already called/processed inputs or stack OrdMag with Otsu. No new scientific declarations are inferred.',
+            'Select supported native methods by scientific capabilities and researcher intent, with no package priority. Scanpy and epiScanpy neighbors/Leiden/UMAP and SnapATAC2 KNN/Leiden/UMAP are distinct supported APIs; preserve each selected compatible graph and representation. Processed peak-count H5AD requires no raw import or cell calling. Reuse the selected representation and exact accepted native results for downstream clustering/annotation and across turns. EpiZoo remains a separate model-based capability; explicit EpiZoo never switches methods after failure. Explicit PCA uses the native run_scanpy pp.pca or run_episcanpy tl.pca interface. For uncalled raw fragments select qc_thresholds=otsu on import and filter_cells, preserving explicit thresholds. Do not recalculate cell identities for already called/processed inputs or stack OrdMag with Otsu. No new scientific declarations are inferred.',
             'Resolve explicit result names or semantic roles against this inventory, preferring current results unless history is requested. Multiple unresolved candidates require ambiguous_subject, never a first match.',
             'A single current result or a unique dialogue.predecessor resolves this result. For short why, value-source or certainty follow-ups, retain that scientific target with @focus (and its subject); do not switch to operational provenance or a different output.',
             'The predecessor contains the exact target, previous target/comparison and prior question, not generated prose. No predecessor means no prior-discussion focus; captured result groups and result_referents remain available. Clarify unresolved short references instead of inventing a topic.',
@@ -1513,8 +1505,7 @@ BOOLEAN_LITERALS = {'true': True, 'false': False, 'yes': True, 'no': False,
                    '开启': True, '关闭': False, '是': True, '否': False}
 
 
-def admit_scientific_argument(declaration, utterance, argument_spec, *, observation_fields=None,
-                              _legacy_numeric_boundary=False, historical=False):
+def admit_scientific_argument(declaration, utterance, argument_spec, *, observation_fields=None):
     """Check one semantic declaration's literal identity, then delegate its science."""
     if not isinstance(declaration, ScopedArgument):
         raise IntentError('invalid_decision')
@@ -1590,7 +1581,7 @@ def admit_scientific_argument(declaration, utterance, argument_spec, *, observat
                 or str not in argument_spec.accepted_types or not argument_spec.choices):
             raise IntentError('unsupported_intent')
         try:
-            value = literal if not historical and literal in argument_spec.choices else declaration.value
+            value = literal if literal in argument_spec.choices else declaration.value
             argument_spec.validate(declaration.argument, value)
         except (ValueError, TypeError) as exc:
             raise IntentError('invalid_parameter_value') from exc
@@ -1651,7 +1642,7 @@ def admit_scientific_argument(declaration, utterance, argument_spec, *, observat
         raise IntentError('unsupported_intent')
     # These are numeric-token boundaries, not a classifier for scientific intent
     # or a language parser. The Interpreter owns both assignment and association.
-    if not _numeric_token_span(utterance, start, end, legacy_modifier=_legacy_numeric_boundary):
+    if not _numeric_token_span(utterance, start, end):
         raise IntentError('ungrounded_operand')
     try:
         if any(c not in '+-./0123456789eE' for c in literal):

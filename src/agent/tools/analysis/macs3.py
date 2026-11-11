@@ -73,7 +73,7 @@ def grouped_population(args, fragments):
     from anndata.io import read_elem
     from agent.tools.data.cell_by_ccre_verifier import verify_cell_by_ccre
     from agent.tools.data.matrix_publication import _load
-    from .embedding_analysis import source_bound_cluster_rows
+    from .cell_result import source_bound_cluster_rows
     keys=('matrix_manifest_path','matrix_manifest_sha256','group_analysis_path','group_analysis_sha256','group_label')
     if not all(k in args for k in keys):raise ValueError('A selected group needs its exact count-matrix publication, clustering and group label')
     path=args['matrix_manifest_path'];sha=args['matrix_manifest_sha256']

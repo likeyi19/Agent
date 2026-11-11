@@ -224,15 +224,6 @@ def test_unoffered_field_fails_binding_and_invalid_requests_reject(app):
         with pytest.raises(ValueError): DetailRequest(**kwargs)
 
 
-def test_old_cluster_can_supply_counts_without_original_source(app):
-    root=app.workspace_root/'fixture';root.mkdir()
-    path=root/'assignments.h5ad'
-    ad.AnnData(obs=pd.DataFrame(dict(leiden=pd.Categorical(['west','east','west'])),index=['x','y','z'])).write_h5ad(path)
-    rid=accepted(app,'cluster_cells',overrides=dict(analysis_path=str(path),analysis_sha256=sha(path),n_cells=3))[0]
-    view=detail(app,rid,field='result:leiden')
-    assert view.status=='available',view
-    assert [r['count'] for r in view.detail[0].value['records']]==[1,2]
-    assert view.detail[0].derivation['sources'][0]['source_sha256'] is None
 
 
 def test_selected_observation_rejects_indirect_storage_and_bounds(app):
@@ -313,31 +304,6 @@ def test_derived_table_does_not_bypass_r5_consistency_review(app):
     assert result.status=='unavailable' and result.scientific is None and model.reviews==1
 
 
-@pytest.mark.parametrize('shared_graph',[True,False])
-def test_existing_qualified_graph_population_does_not_require_original_counts(app,monkeypatch,shared_graph):
-    from agent.application import dialogue_evidence as de
-    from agent.application.session_state import digest
-    # The pre-existing helper owns graph qualification. This bounded contract
-    # test supplies its reviewed fact; it does not manufacture native authority.
-    def graph_facts(sessions,run,step,planned):
-        identity='a'*64 if shared_graph or run.run_id=='first:run' else 'b'*64
-        return (de.EvidenceFact('clustering_neighbors_identity_sha256','available',identity,
-            artifact_name='accepted_run_result',artifact_sha256=digest(run.to_dict())),)
-    monkeypatch.setattr(de,'_clustering_neighbors_facts',graph_facts)
-    root=app.workspace_root/'fixture';root.mkdir()
-    revisions=[]
-    for name,values in (('first',['left','right','left']),('second',['right','left','left'])):
-        path=root/(name+'.h5ad')
-        ad.AnnData(obs=pd.DataFrame(dict(leiden=pd.Categorical(values)),index=['x','y','z'])).write_h5ad(path)
-        revisions.append(accepted(app,'cluster_cells',name=name,overrides=dict(
-            analysis_path=str(path),analysis_sha256=sha(path),n_cells=3))[0])
-    output=app.sessions.load('session').revisions[-1].outputs[0]
-    peer=dict(revision_id=revisions[-1],output_name='output0',accepted_step_sha256=output.accepted_step_sha256)
-    view=detail(app,revisions[0],'category_association',field='result:leiden',other_field='result:leiden',comparison=peer)
-    assert view.status==('available' if shared_graph else 'unavailable'),view
-    if shared_graph:
-        assert view.detail[0].value['n_paired']==3
-        assert all(s['source_sha256'] is None for s in view.detail[0].derivation['sources'])
 
 
 def test_later_fields_are_paged_and_exact_user_selection_is_not_first_page_limited(app,monkeypatch):

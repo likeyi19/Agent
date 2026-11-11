@@ -31,8 +31,8 @@ def test_retired_execution_and_answer_grammar_removed():
     registry=build_default_tool_registry()
     for name in ('select_scATAC_cells','build_scATAC_cell_by_ccre','build_scATAC_cell_by_features','pca_embed_cells'):
         assert name not in registry.names()
-        assert registry.accepted(name).name == name
-        assert not hasattr(registry.accepted(name), 'function')
+        assert registry.get(name).name == name
+        assert not hasattr(registry.get(name), 'function')
 
 
 class OutcomeModel:

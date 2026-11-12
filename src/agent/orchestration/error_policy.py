@@ -535,6 +535,9 @@ def build_recovery_policy_snapshot(
         if registry.contains(tool_name):
             spec = registry.get(tool_name)
             classifier_version = spec.recovery_policy_version
+            if spec.annotation_children:
+                from agent.schemas.verification_authority import digest
+                classifier_version += ':annotation-children:' + digest(sorted(spec.annotation_children))
             retryable_codes = tuple(sorted(spec.retryable_error_codes))
         else:
             classifier_version = UNREGISTERED_TOOL_POLICY_VERSION

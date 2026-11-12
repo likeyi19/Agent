@@ -1006,11 +1006,20 @@ class PlanExecutor:
                         if durable_run_id is not None and current() is not None and supports_tool(step.tool_name, self._registry):
                             current().register_execution(tool_kind(step.tool_name, self._registry), attempt_arguments['output_dir'],
                                 execution_identity(durable_run_id, plan, step, spec))
-                        if durable_run_id is not None and spec.durable_hooks is not None:
-                            returned_result = spec.durable_hooks.execute(attempt_arguments,
-                                execution_identity(durable_run_id, plan, step, spec))
-                        else:
-                            returned_result = spec.function(**attempt_arguments)
+                        from .annotation_runs import tool_scope
+                        def annotation_checkpoint(details):
+                            trace.add(TraceEventType.ANNOTATION_PROGRESS, 'Annotation child progress.',
+                                      step_id=step.step_id, details=details)
+                            notify('ANNOTATION_PROGRESS')
+                        if spec.annotation_children and (durable_run_id is None or checkpoint is None):
+                            raise ValueError('Annotation orchestration requires durable Runtime execution.')
+                        with tool_scope(plan, step, attempt_arguments, durable_run_id, annotation_checkpoint,
+                                        required=bool(spec.annotation_children)):
+                            if durable_run_id is not None and spec.durable_hooks is not None:
+                                returned_result = spec.durable_hooks.execute(attempt_arguments,
+                                    execution_identity(durable_run_id, plan, step, spec))
+                            else:
+                                returned_result = spec.function(**attempt_arguments)
                         if input_guard is not None:
                             input_guard(step, attempt_arguments)
                 except ToolWorkCancelled:
@@ -1024,6 +1033,10 @@ class PlanExecutor:
                         duration_seconds=max(0.0,perf_counter()-started_clock))
                     break
                 except Exception as exc:
+                    from .annotation_runs import AnnotationCheckpointError
+                    from .run_store import CancellationRequestedError
+                    if isinstance(exc, (AnnotationCheckpointError, CancellationRequestedError)) and spec.annotation_children:
+                        raise
                     tool_error = self._registry.classify_exception(
                         step.tool_name,
                         exc,

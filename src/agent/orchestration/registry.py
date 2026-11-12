@@ -759,12 +759,21 @@ class ToolSpec:
     parameter_prerequisites: Callable[[Mapping[str, object]], tuple[str, ...]] | None = None
     native_functions: NativeFunctionCatalog | None = None
     application_inputs: frozenset[str] = field(default_factory=frozenset)
+    # Reviewed, internal annotation orchestration only. No production tool opts
+    # in until its coordinator/publication contract is implemented.
+    annotation_children: frozenset[str] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
             raise ValueError("ToolSpec `name` must be a non-empty string.")
         if not callable(self.function):
             raise TypeError("ToolSpec `function` must be callable.")
+        if (not isinstance(self.annotation_children, frozenset)
+                or any(not isinstance(name, str) or not name.strip() or name == self.name
+                       for name in self.annotation_children)):
+            raise ValueError('Annotation children must be distinct registered tool names.')
+        if self.annotation_children and (self.durable_hooks is None or self.retryable_error_codes):
+            raise ValueError('Annotation orchestration requires durable hooks and no automatic retries.')
         if self.parameter_prerequisites is not None and not callable(self.parameter_prerequisites):
             raise TypeError('Tool parameter prerequisites must be callable.')
         if self.durable_hooks is not None and not isinstance(self.durable_hooks, DurableToolHooks):
@@ -1114,6 +1123,13 @@ class ToolRegistry:
         names = tuple(spec.name for spec in specs)
         if len(set(names)) != len(names):
             raise ValueError("Tool registry names must be unique.")
+        by_name = {spec.name: spec for spec in specs}
+        for spec in specs:
+            if spec.annotation_children and ('output_dir' not in spec.required_arguments
+                    or any(name not in by_name or by_name[name].annotation_children
+                           or 'output_dir' not in by_name[name].required_arguments
+                           for name in spec.annotation_children)):
+                raise ValueError('Annotation requires registered non-coordinator children with managed outputs.')
         _validate_semantic_registry(specs)
         object.__setattr__(
             self, "_specs", MappingProxyType({spec.name: spec for spec in specs})

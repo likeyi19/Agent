@@ -474,6 +474,22 @@ class AgentRuntime:
         No planner, interpretation, recovery planning or provider is involved.
         The same executor preflight, leases, checkpoints and verifier still apply.
         """
+        return self._run_prepared(request, plan)
+
+    @runtime_store
+    def continue_annotation(self, request: AgentRequest, plan: AgentPlan, *, previous) -> AgentRunResult:
+        """Explicit backend continuation of exact terminal annotation progress.
+
+        This creates a fresh parent, never a SessionTurn or a Revision. Application
+        selection/authorization and the annotation UI remain their existing owners.
+        """
+        from .annotation_runs import checked_continuation
+        store = self._required_run_store()
+        with store.execution_lease(previous.run_id):
+            details = checked_continuation(self, previous, plan)
+            return self._run_prepared(request, plan, continuation=details)
+
+    def _run_prepared(self, request, plan, *, continuation=None):
         if plan.request_id != request.request_id or request.mode is not RunMode.EXECUTE:
             raise ValueError('Prepared execution requires the exact executable request.')
         store = self._required_run_store()
@@ -481,10 +497,29 @@ class AgentRuntime:
         with store.execution_lease(run_id):
             trace = _TraceRecorder()
             trace.add(TraceEventType.PLANNING, 'Explicit structured operation bound without planning.')
+            if continuation is not None:
+                trace.add(TraceEventType.ANNOTATION_PROGRESS, 'Explicit annotation continuation selected.',
+                          step_id=plan.steps[0].step_id, details=continuation)
             now = _utc_now()
             state = store.create(PersistedRunState(schema_version=RUN_STATE_SCHEMA_VERSION,
                 revision=0, run_id=run_id, request=request, lifecycle_status=RunLifecycleStatus.PLANNING,
                 created_at=now, updated_at=now, trace=trace.events))
+            state = self._update_state(state, plan=plan, plan_fingerprint=fingerprint_plan(plan),
+                recovery_policy_snapshot=build_recovery_policy_snapshot(plan, self._registry,
+                    max_attempts_per_step=self._executor.recovery_policy.max_attempts_per_step))
+            return self._run_durable_execute(request, plan, run_id, trace, state)
+
+    def _complete_annotation_child_creation(self, request, plan):
+        """Finish only a reserved child's pre-plan crash window under its lease."""
+        store = self._required_run_store()
+        run_id = request.request_id + ':run'
+        with store.execution_lease(run_id):
+            state = store.load(run_id)
+            if (state.request != request or state.plan is not None or state.steps
+                    or state.lifecycle_status is not RunLifecycleStatus.PLANNING):
+                raise ValueError('Reserved child is not in its pre-plan creation window.')
+            trace = _TraceRecorder()
+            trace.extend(state.trace)
             state = self._update_state(state, plan=plan, plan_fingerprint=fingerprint_plan(plan),
                 recovery_policy_snapshot=build_recovery_policy_snapshot(plan, self._registry,
                     max_attempts_per_step=self._executor.recovery_policy.max_attempts_per_step))
@@ -732,15 +767,17 @@ class AgentRuntime:
                 raise
 
         try:
-            result = self._run_execute(
-                request,
-                plan,
-                run_id,
-                trace,
-                completed_steps=completed_steps,
-                checkpoint=checkpoint,
-                should_cancel=self._cancellation_check(run_id),
-            )
+            from .annotation_runs import runtime_scope
+            with runtime_scope(self):
+                result = self._run_execute(
+                    request,
+                    plan,
+                    run_id,
+                    trace,
+                    completed_steps=completed_steps,
+                    checkpoint=checkpoint,
+                    should_cancel=self._cancellation_check(run_id),
+                )
         except CancellationRequestedError as exc:
             if arbitrated_progress is None:
                 raise
@@ -970,6 +1007,9 @@ class AgentRuntime:
                 if recovered is not None or spec.durable_hooks is None:
                     raise ValueError('Ambiguous in-flight recovery.')
                 value = spec.durable_hooks.recover(args, execution_identity(state.run_id, state.plan, step, spec))
+                if spec.annotation_children:
+                    from .annotation_runs import verify_recovered_completion
+                    verify_recovered_completion(self, state, step)
             else:
                 value = old.result
             if step.tool_name in ('adopt_scATAC_cell_by_features','adapt_epizoo_species','posttrain_epizoo_model'):
@@ -1268,7 +1308,12 @@ class AgentRuntime:
         return cancellation
 
     def _cancellation_check(self, run_id: str) -> CancellationCheck:
+        from .annotation_runs import child_cancellation_parent
+        parent_run_id = child_cancellation_parent()
+
         def should_cancel() -> str | None:
+            if parent_run_id is not None and self._load_cancellation(parent_run_id) is not None:
+                self._required_run_store().request_cancellation(run_id)
             cancellation = self._load_cancellation(run_id)
             return None if cancellation is None else cancellation.requested_at
 

@@ -119,6 +119,9 @@ def prepare_input(args, stage, *, source=None):
     matrix.X = x.copy() if x is not None else None
     effective['matrix_semantics'] = effective.get('matrix_semantics') or 'unspecified_retained_measurement'
     matrix.uns['matrix_semantics'] = effective['matrix_semantics']
+    if args.get('grouping_path') is not None:
+        from .native_gene_activity import project_grouping
+        matrix, effective['_grouping_projection'] = project_grouping(matrix, args, source)
     if args.get('cell_subset') is not None:
         matrix, membership = subset_input(matrix, args, source or file_closure([args['input_path']])[0])
         effective['_cell_subset'] = membership
@@ -314,7 +317,8 @@ class MatrixPackage:
             implementation_paths.append(script.with_name('native_matrix_worker.py'))
         if not is_r:
             implementation_paths.append(executable.parent.parent / 'pyvenv.cfg')
-            if (self.package, args['function_name']) in {('snapatac2', 'pp.make_gene_matrix'), ('episcanpy', 'tl.geneactivity')}:
+            if (args.get('grouping_path') is not None or
+                    (self.package, args['function_name']) in {('snapatac2', 'pp.make_gene_matrix'), ('episcanpy', 'tl.geneactivity')}):
                 implementation_paths.append(script.with_name('native_gene_activity.py'))
             if not raw_call:
                 implementation_paths.extend(script.with_name(name) for name in ('native_clustering.py', 'cell_result.py'))
@@ -532,6 +536,8 @@ class MatrixPackage:
                     summary['parameters'][key] = receipt[key]
             if '_cell_subset' in effective:
                 summary['parameters']['cell_subset'] = effective['_cell_subset']
+            if '_grouping_projection' in effective:
+                summary['parameters']['grouping_projection'] = effective['_grouping_projection']
             if args.get('input_orientation') == 'features_by_cells':
                 summary['parameters']['input_orientation'] = 'explicit native AnnData transpose: features_by_cells to cells_by_features'
             selection = receipt.get('parameter_selection')
@@ -558,6 +564,9 @@ class MatrixPackage:
             write(root / 'metadata.json', dict(summary=summary, source=source, receipt=receipt,
                 input_orientation='cells by features; Signac receives features by cells'))
             expected = {r['path']: r for r in [source, *([annotation] if annotation else []), *([second_source] if second_source else []), *receipt['implementation']]}
+            if '_grouping_projection' in effective:
+                pin = effective['_grouping_projection']['source']
+                expected[pin['path']] = pin
             sources = file_closure(expected)
             if sources != sorted(expected.values(), key=lambda r: r['path']):
                 raise AuthorityError('Source or runtime changed during invocation')
@@ -569,7 +578,7 @@ class MatrixPackage:
         return self.verify_publication(path, expected_sha256=sha)
 
     def invoke(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, use_rep=None, parameter_selection=None,
-               gene_activity=None, cell_subset=None, input_orientation=None):
+               gene_activity=None, cell_subset=None, input_orientation=None, grouping_path=None):
         return self.execute({k: v for k, v in locals().items() if k != "self" and v is not None})
 
     def invoke_signac(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, second_path=None, second_sha256=None, second_count_slot=None):

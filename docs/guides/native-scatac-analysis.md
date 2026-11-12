@@ -471,3 +471,116 @@ not independent validation or proof of a new cell type. ICTA-4 owns future
 orchestration, result-scoped exposure, iteration and budget enforcement; none is
 implemented here. See the [ICTA-3C report](../../../agent-data/acceptance/iterative-cell-type-annotation/icta-3c/REPORT.md)
 for genuine native outcomes, independent checks and preservation evidence.
+
+### ICTA-4A internal iterative annotation and hierarchical H5AD
+
+ICTA-4A implements the internal orchestration previously deferred above. It does
+not change the production `annotate_scATAC_cell_types` Registry entry, which remains
+MAESTRO-backed until ICTA-4B. `iterative_annotation.coordinate` is a durable hook;
+only the opt-in test harness registers it. Native Functions has no implicit
+coordinator, provider call or annotation workflow.
+
+The caller captures an original H5AD, an accepted native grouping through
+`PriorOutputRef`, an accepted compatible Gene Activity result or one selected
+ICTA-2 construction route, and the installed CellMarker resource identity.
+Initial clustering remains the existing research planner's responsibility. The
+coordinator does not choose another method or plan a missing global graph. It
+uses `annotation_invocation().invoke` for every native operation and the same
+Runtime, Executor, RunStore, source bindings and native publication owners.
+
+Activity is constructed once when needed, with the captured native method,
+reference, slot and kwargs. Optional `activity_source_path` is an exact accepted
+`PriorOutputRef` selected independently of `grouping_path`: default SnapATAC2
+`pp.make_gene_matrix` needs actual fragment/insertion storage, while explicit
+`use_x=True` retains its native X-based semantics. Omission preserves the existing
+grouping-input route, including epiScanpy peak-count construction. There is no
+storage inference, source substitution or automatic change to `use_x`; native
+functions judge their supplied inputs. Accepted `make_peak_matrix` ancestry
+retains the verified ordered cell axis back to the selected fragment source, so
+activity and grouping can meet at that exact source without barcode inference.
+Existing accepted activity is reused without implicit
+normalization or logarithm. Registered Scanpy markers accept an optional internal
+`grouping_path` binding: the native input adapter derives exact activity positions
+from common accepted source ancestry and recorded subsets, then projects the
+selected clustering column. Cell IDs are checked after this positional join;
+matching names, shape or uploaded `uns` cannot establish it. The projection records
+its grouping publication, checksum and actual activity positions. It already
+selects the complete current population; additional subset or transpose adaptation
+must occur upstream. This handoff neither computes groups nor rebuilds activity.
+Independently supplied activity with no exact common ancestry needs an established
+source association before it can be paired with a separate peak result.
+
+Each round uses the existing `marker_kwargs` defaults and `annotate_markers`:
+Scanpy Wilcoxon/BH, positive signed markers with adjusted p ≤ 0.05, all static
+CellMarker categories without weighting, SciPy hypergeometric ORA/BH with adjusted
+p ≤ 0.05, unique best significant candidate, and exact ties kept ambiguous. Labels
+are current-round computational evidence, not independently established cell types.
+
+Branches are scheduled breadth first, in first-appearance order on the accepted
+cell axis. Their global IDs hash the parent branch and actual native group value.
+Each eligible branch performs the existing local select_features → spectral → knn
+→ leiden sequence, with bounded ASW for omitted resolution and explicit parameters
+prevailing. Its genuine positive child-versus-parent-rest differential Runs feed
+`assess_subdivision`. Only supported children become branches. Unsupported and
+native `-1` cells remain in the residual parent, without residual reclustering.
+Naming, ambiguity and the number of significant labels do not control recursion.
+
+`maximum_levels` defaults to **5**, counting the initial annotation as level 1.
+This is a configurable execution budget. Branches can stop independently for no
+candidate, no support, partial/full retention, missing original peak space,
+native-unassigned membership or budget exhaustion. Gene-only accepted data still
+receive current-round annotation and a factual missing-peak limitation. Native
+failure, cancellation and interruption propagate through the existing lifecycle;
+they do not become biological stopping evidence or a completed publication.
+
+The existing reservation/outcome trace is the only durable progress owner.
+Explicit continuation reconstructs the tree from accepted children and repeats
+only deterministic evidence interpretation. Accepted native Runs are verified and
+reused. Failed/unknown child execution remains failed/unknown: continuation does
+not authorize scientific retry or alter parameters. Successfully accepted sibling
+work remains intact. The ICTA-1 completion gate requires every reserved child to
+have an exact successful outcome before accepting/recovering a parent publication.
+
+`hierarchical_annotation` publishes one managed `annotated.h5ad` and three evidence
+files (`hierarchy.json`, `annotations.json`, `subdivisions.json`) through
+`NativePublication`. The manifest pins exact sources, resources, native evidence,
+implementation files and output checksums. The H5AD copies the original encoded
+scientific slots, preserves every ordered observation, X, layers, raw and existing
+scientific metadata, and adds these observation columns:
+
+- `cell_type_level_N`: the assigned current-round label at that level; genuinely
+  missing for unnamed/ambiguous branches and for deeper levels never reached.
+- `annotation_branch_level_N`: the global branch identity independently of labels.
+- `cell_type_final`: the deepest assigned label available along the ancestry.
+- `annotation_status`: the current leaf's assigned, ambiguous, unresolved,
+  insufficient-evidence or unassigned status.
+- `annotation_branch_id` and `annotation_depth`: the actual current leaf and level.
+
+An unnamed child can therefore retain a broad parent label in `cell_type_final`
+while its own label is missing and its current status remains unresolved. That is
+not a confirmed subtype. `uns["agent_hierarchical_annotation"]` contains an ordinary
+AnnData dictionary with the level budget, relative evidence filenames and a branch
+DataFrame indexed by global branch identity. Each row records its parent (empty
+for roots), level, cell count, residual cell count and stopping reason. It contains
+no native execution records or private absolute file locations. The complete
+hierarchy and marker/ORA/differential evidence remain in the pinned JSON sidecars
+and native child publications, without truncation. Verification compares every
+portable branch row with the complete hierarchy. Uploaded hierarchy metadata is never execution
+authority. Existing observation columns with these output names are not silently
+overwritten. Verification checks the hierarchy partition, exact tested child and
+residual memberships, original slots, observation projection and file identities.
+
+The shared H5AD inspector reads complete UTF-8 strings with h5py, including
+compound-record fields and attributes. It applies no per-string byte limit or
+per-attribute size/count limit. Decoded dataset and attribute payloads contribute
+to the existing configured aggregate resource budget. Storage-layout, link,
+compression-filter and privacy checks remain in force, including private text
+appearing late in a long value.
+
+The [ICTA-4A report](../../../agent-data/acceptance/iterative-cell-type-annotation/icta-4a/REPORT.md)
+records bounded synthetic/native qualification and limitations. ICTA-4B must wire
+this owner to the single existing public operation, connect existing result-scoped
+parameter binding and SRV-1 delivery, and fully retire MAESTRO-specific production
+science, preparation, contracts, reports, figures and downloads. No MAESTRO fallback
+or dual production annotation route is intended. Web/browser and biological
+qualification remain outside ICTA-4A.

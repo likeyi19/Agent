@@ -173,3 +173,124 @@ def test_inspector_keeps_external_reference_and_host_allocation_bound(source,tmp
         handle['uns']['external']=h5py.ExternalLink(str(tmp_path/'untrusted.h5'),'data')
     with pytest.raises(ValueError,match='Indirect HDF5'):
         peak_h5ad.inspect(source)
+
+
+@pytest.mark.parametrize('fixed', [False, True])
+def test_complete_long_utf8_scalar_vector_and_record_strings(source, fixed):
+    text='细胞🙂'*12000+'完整结尾'
+    encoded=text.encode('utf-8');assert len(encoded)>65536
+    dtype=h5py.string_dtype('utf-8',length=len(encoded) if fixed else None)
+    with h5py.File(source,'r+') as handle:
+        scalar=handle['uns'].create_dataset('long_scalar',data=encoded,dtype=dtype)
+        vector=handle['uns'].create_dataset('long_vector',data=[encoded,b'short',encoded],dtype=dtype)
+        records=np.empty(2,dtype=[('names',dtype),('score','f8')])
+        records['names']=[encoded,b'short'];records['score']=[1.,2.]
+        record=handle['uns'].create_dataset('long_record',data=records)
+        assert peak_h5ad.strings(scalar,())==[text]
+        assert peak_h5ad.strings(vector,slice(0,3))==[text,'short',text]
+        assert peak_h5ad.strings(vector,slice(1,3))==['short',text]
+        assert list(peak_h5ad.record_strings(record,'names'))==[text,'short']
+    before=source.read_bytes()
+    size=peak_h5ad.inspect(source,privacy=True)
+    assert size>=4*len(encoded)
+    with pytest.raises(ValueError,match='storage limit'):
+        peak_h5ad.inspect(source,max_logical_bytes=len(encoded))
+    assert source.read_bytes()==before
+
+
+def test_large_attributes_use_aggregate_budget_without_field_caps(source):
+    text='注释🙂'*12000+'结尾';numbers=np.arange(10000,dtype='int64')
+    with h5py.File(source,'r+') as handle:
+        group=handle['uns'].create_group('metadata',track_order=True)
+        group.attrs['long_text']=text
+        group.attrs.create('long_array',np.array([text,'末尾'],dtype=object),dtype=h5py.string_dtype('utf-8'))
+        group.attrs['numeric_metadata']=numbers
+        assert group.attrs.get_id('numeric_metadata').get_storage_size()>65536
+    before=source.read_bytes()
+    size=peak_h5ad.inspect(source,privacy=True)
+    assert size>=2*len(text.encode('utf-8'))+numbers.nbytes
+    with pytest.raises(ValueError,match='storage limit'):
+        peak_h5ad.inspect(source,max_logical_bytes=100000)
+    with h5py.File(source) as handle:
+        attrs=handle['uns/metadata'].attrs
+        assert attrs['long_text']==text and attrs['long_array'].tolist()==[text,'末尾']
+        np.testing.assert_array_equal(attrs['numeric_metadata'],numbers)
+    assert source.read_bytes()==before
+
+
+@pytest.mark.parametrize('nested',[False,True])
+@pytest.mark.parametrize('vector',[False,True])
+@pytest.mark.parametrize('private',[False,True])
+def test_compound_attribute_complete_strings_accounting_and_privacy(source,nested,vector,private):
+    baseline=peak_h5ad.inspect(source)
+    text='细胞🙂'*12000+(' /private/research/hidden.h5ad' if private else '完整结尾')
+    dtype=np.dtype([('text',h5py.string_dtype('utf-8')),('scores','f8',(3,)),('count','i8')])
+    values=np.zeros(2 if vector else (),dtype=[('metadata',dtype)] if nested else dtype)
+    fields=values['metadata'] if nested else values
+    fields['text']=text.encode('utf-8');fields['scores']=[1.,2.,3.];fields['count']=7
+    with h5py.File(source,'r+') as handle:handle['uns'].attrs.create('compound',values)
+    before=source.read_bytes()
+    expected=baseline+fields.size*(len(text.encode('utf-8'))+8)+fields['scores'].nbytes+fields['count'].nbytes
+    assert expected-baseline>65536 and values.nbytes<expected-baseline
+    assert peak_h5ad.inspect(source,max_logical_bytes=expected)==expected
+    with pytest.raises(ValueError,match='storage limit'):
+        peak_h5ad.inspect(source,max_logical_bytes=expected-1)
+    if private:
+        with pytest.raises(ValueError,match='Private locator'):
+            peak_h5ad.inspect(source,privacy=True)
+    else:assert peak_h5ad.inspect(source,privacy=True)==expected
+    with h5py.File(source) as handle:
+        saved=np.asarray(handle['uns'].attrs['compound'])
+        saved=saved['metadata'] if nested else saved
+        assert [v.decode('utf-8') for v in saved['text'].ravel()]==[text]*fields.size
+        np.testing.assert_array_equal(saved['scores'],fields['scores'])
+        np.testing.assert_array_equal(saved['count'],fields['count'])
+    assert source.read_bytes()==before
+
+
+def test_compound_attribute_strings_remain_strict_utf8(source):
+    values=np.array([(b'bad\xff',)],dtype=[('text',h5py.string_dtype('utf-8'))])
+    with h5py.File(source,'r+') as handle:handle['uns'].attrs.create('compound',values)
+    with pytest.raises(UnicodeDecodeError):peak_h5ad.inspect(source)
+
+
+@pytest.mark.parametrize('kind',['scalar','vector','record','attribute'])
+def test_long_string_privacy_inspects_the_complete_tail(source, kind):
+    text='细胞'*12000+' /private/research/hidden.h5ad'
+    with h5py.File(source,'r+') as handle:
+        if kind=='attribute':handle['uns'].attrs['long']=text
+        elif kind=='record':
+            values=np.empty(1,dtype=[('name',h5py.string_dtype('utf-8'))]);values['name']=[text.encode()]
+            handle['uns'].create_dataset('long',data=values)
+        else:handle['uns'].create_dataset('long',data=text if kind=='scalar' else ['safe',text],dtype=h5py.string_dtype('utf-8'))
+    peak_h5ad.inspect(source)
+    with pytest.raises(ValueError,match='Private locator'):
+        peak_h5ad.inspect(source,privacy=True)
+    if kind in {'scalar','vector'}:
+        peak_h5ad.inspect(source,privacy=True,private_paths=('/uns/long',))
+
+
+@pytest.mark.parametrize('record',[False,True])
+def test_string_decoding_remains_strict_utf8(source,record):
+    with h5py.File(source,'r+') as handle:
+        value=np.array([(b'bad\xff',)],dtype=[('name','S4')]) if record else np.bytes_(b'bad\xff')
+        handle['uns'].create_dataset('invalid',data=value)
+    with pytest.raises(UnicodeDecodeError):peak_h5ad.inspect(source)
+
+
+@pytest.mark.parametrize('storage',['soft_link','virtual','external','filter','reference','chunk'])
+def test_string_limit_removal_preserves_storage_safety(source,tmp_path,storage):
+    with h5py.File(source,'r+') as handle:
+        group=handle['uns']
+        if storage=='soft_link':group['unsafe']=h5py.SoftLink('/X')
+        elif storage=='virtual':
+            layout=h5py.VirtualLayout(shape=(2,),dtype='f8')
+            layout[:]=h5py.VirtualSource(str(tmp_path/'other.h5'),'data',shape=(2,))
+            group.create_virtual_dataset('unsafe',layout)
+        elif storage=='external':
+            group.create_dataset('unsafe',shape=(2,),dtype='f8',external=[(str(tmp_path/'other.bin'),0,h5py.h5f.UNLIMITED)])
+        elif storage=='filter':group.create_dataset('unsafe',data=[1.,2.],compression='lzf')
+        elif storage=='reference':group.create_dataset('unsafe',shape=(1,),dtype=h5py.ref_dtype)
+        else:group.create_dataset('unsafe',shape=(100,),chunks=(100,),dtype='f8')
+    with peak_h5ad.inspection_limits(1024**2,512),pytest.raises(ValueError,match='Indirect|layout|filter|dtype|chunk'):
+        peak_h5ad.inspect(source)

@@ -251,6 +251,20 @@ class _AnnotationInvocation:
         run_id, _ = self._completed[branch_id, operation_id]
         return bind_output(self._store, self._runtime.registry, run_id, 'operation', port_name)
 
+    def evidence_context(self):
+        """Existing accepted-evidence readers use the owning store and Registry."""
+        self.check_cancelled()
+        return dict(store=self._store, registry=self._runtime.registry)
+
+    def input_binding(self, name):
+        """Return an exact captured historical input, never infer one from a path."""
+        self.check_cancelled()
+        reference = self._step.arguments.get(name)
+        if not isinstance(reference, PriorOutputRef):
+            raise AuthorityError('Annotation input requires an accepted PriorOutputRef: ' + name)
+        validate_binding(reference.binding, **self.evidence_context(), integrity=True)
+        return reference.binding
+
     def invoke(self, *, branch_id, operation_id, tool_name, arguments=None, parent_inputs=None):
         """One finite registered operation; parameters are passed exactly.
 

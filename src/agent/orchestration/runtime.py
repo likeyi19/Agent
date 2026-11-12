@@ -996,7 +996,12 @@ class AgentRuntime:
             from agent.tools.scientific_authority import supports_tool, tool_kind, hooks_for_tool
             if (step.tool_name in ('annotate_scATAC_cell_types','adopt_scATAC_cell_by_features','adapt_epizoo_species','posttrain_epizoo_model')
                     or (hooks_for_tool(step.tool_name, self._registry) is not None
-                        and old.verification is not None and old.verification.artifact_authority is not None)
+                        and ((old.verification is not None and old.verification.artifact_authority is not None)
+                             # An in-flight coordinator may have published before its
+                             # first verification checkpoint. Exact recovery and child
+                             # completion below must pass before verify_step issues trust.
+                             or (old.status is StepStatus.RUNNING and spec.annotation_children
+                                 and spec.durable_hooks is not None)))
                     or (prior_references(state.plan) and supports_tool(step.tool_name, self._registry)
                         and hooks_for_tool(step.tool_name, self._registry) is None)):
                 from agent.tools.data.authority_context import current

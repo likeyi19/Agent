@@ -91,22 +91,16 @@ def test_compound_reference_objects_are_not_scientific_records(tmp_path):
 
 
 @pytest.mark.parametrize('size', [256, 257, 65536, 65537])
-def test_record_string_bound_is_shared_by_storage_and_privacy(tmp_path, size):
+def test_complete_record_strings_are_shared_by_storage_and_privacy(tmp_path, size):
     from agent.application.matrix_delivery import _private_metadata
     a = ad.AnnData(np.ones((2, 2)))
     a.uns['names'] = np.array([('x' * size,)], dtype=[('group', 'O')])
     path = tmp_path / 'record.h5ad'
     a.write_h5ad(path)
-    if size > 65536:
-        with pytest.raises(ValueError, match='65536'):
-            peak_h5ad.inspect(path)
-        with h5py.File(path) as handle, pytest.raises(ValueError, match='65536'):
-            _private_metadata(handle['uns/names'])
-    else:
-        peak_h5ad.inspect(path, privacy=True)
-        with h5py.File(path) as handle:
-            assert list(peak_h5ad.record_strings(handle['uns/names'], 'group')) == ['x' * size]
-            assert not _private_metadata(handle['uns/names'])
+    peak_h5ad.inspect(path, privacy=True)
+    with h5py.File(path) as handle:
+        assert list(peak_h5ad.record_strings(handle['uns/names'], 'group')) == ['x' * size]
+        assert not _private_metadata(handle['uns/names'])
 
 
 @pytest.mark.parametrize('function', [

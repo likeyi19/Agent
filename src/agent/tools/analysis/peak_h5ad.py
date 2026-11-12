@@ -34,27 +34,15 @@ _PATH = re.compile(r'(?:^|[\s\"\'=:(])(?:/|~/|[A-Za-z]:[\\/]|\\\\)|file://')
 
 
 def strings(item, selection):
-    values = np.asarray(item.astype('S257')[selection])
-    result = []
-    for index, value in np.ndenumerate(values):
-        raw = bytes(value)
-        if len(raw) == 257:
-            position = () if item.ndim == 0 else selection.start + index[0]
-            raw = bytes(item.astype('S65537')[position])
-        if len(raw) > 65536:
-            raise ValueError('H5AD string exceeds 65536-byte limit')
-        result.append(raw.decode('utf-8', errors='strict'))
-    return result
+    values = item.asstr(encoding='utf-8', errors='strict')[selection]
+    return np.asarray(values).reshape(-1).tolist()
 
 
 def record_strings(item, field):
-    """Bounded flat-record string decoding shared by storage and privacy walks."""
-    bounded = item.astype(np.dtype([(field, 'S65537')]))
+    """Read complete string fields in batches, without fixed-width conversion."""
+    values = item.fields(field)
     for start in range(0, len(item), 64):
-        for raw in bounded[start:start+64][field]:
-            raw = bytes(raw)
-            if len(raw) > 65536:
-                raise ValueError('H5AD string exceeds 65536-byte limit')
+        for raw in values[start:start+64]:
             yield raw.decode('utf-8', errors='strict')
 
 
@@ -90,16 +78,23 @@ def inspect(source, *, private_paths=(), privacy=False, observation_fields=None,
                 raise ValueError('Repeated HDF5 object is unsupported')
             seen.add(address)
             for key in item.attrs:
-                attr = item.attrs.get_id(key)
-                if np.prod(attr.shape, dtype=np.int64) and attr.get_storage_size() > 65536:
-                    raise ValueError('Excessive H5AD attribute')
-                value = item.attrs[key]
-                if np.asarray(value).size > 4096:
-                    raise ValueError('Excessive H5AD attribute')
-                if privacy and np.asarray(value).dtype.kind in 'OSU':
-                    for text in np.asarray(value).ravel():
-                        if _PATH.search(str(text)):
-                            raise ValueError('Private locator in H5AD metadata')
+                members = [np.asarray(item.attrs[key])]
+                while members:
+                    value = members.pop()
+                    if value.dtype.names:
+                        # Compound storage may hold pointers to strings. Inspect
+                        # each actual member, including nested compound members.
+                        members.extend(value[field] for field in value.dtype.names)
+                    elif value.dtype.kind in 'OSU':
+                        for text in value.ravel():
+                            text = text.decode('utf-8', errors='strict') if isinstance(text, bytes) else str(text)
+                            size += len(text.encode('utf-8')) + 8
+                            if privacy and _PATH.search(text):
+                                raise ValueError('Private locator in H5AD metadata')
+                    else:
+                        size += value.nbytes
+                    if max_logical_bytes is not None and size > max_logical_bytes:
+                        raise ValueError('H5AD decoded values exceed configured storage limit')
             if isinstance(item, h5py.Group):
                 names = observation_fields if observation_fields is not None and item.name == '/obs' else item
                 for name in names:

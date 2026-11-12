@@ -67,6 +67,10 @@ def tool_spec(owner):
             choices=('X_spectral', 'X_epizoo', 'X_pca', 'X_lsi'), scientific_parameter=True,
             conversational_choice=True, planner_choice=True)
     raw_fields = set()
+    if owner.package == 'scanpy':
+        optional['grouping_path'] = arg((str, Path),
+            'Accepted native grouping for rank_genes_groups on reused Gene Activity; exact common source ancestry required.',
+            source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT)
     if owner.package == 'snapatac2':
         from agent.tools.analysis import snapatac_raw as raw
         optional['qc_thresholds'] = arg((str,),
@@ -118,7 +122,10 @@ def tool_spec(owner):
         accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1', 'native_matrix_h5ad.v1', 'cell_embedding_h5ad.v1')
             + (('native_fragments_file.v1',) if owner.package == 'snapatac2' else ())),
         *(scalar(k, required=k in required) for k in (*required, *optional)
-            if k not in {'input_path', 'second_path', *raw_fields})]
+            if k not in {'input_path', 'second_path', 'grouping_path', *raw_fields})]
+    if owner.package == 'scanpy':
+        ports.append(Consumer('grouping', (member('dataset', 'grouping_path'),), False,
+            accepted_upstream_types=('native_matrix_h5ad.v1',)))
     if owner.package == 'snapatac2':
         from .native_parameters import input_name
         for port, (path, sha, _) in raw.PORTS.items():

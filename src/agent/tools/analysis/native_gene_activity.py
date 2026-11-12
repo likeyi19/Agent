@@ -160,3 +160,104 @@ def write_description(path, summary):
             description=summary['parameters']['gene_activity'], method=summary['function_name'], measurement=summary['measurement'],
             effective_parameters=summary['parameters'].get('effective_native_parameters', {}),
             source_identity=portable_source), ensure_ascii=False))
+
+
+def population_ancestry(path, sha, context):
+    """Exact row maps through accepted native publications, nearest source first.
+
+    Cell names are checked after the join, never used to establish correspondence.
+    Source bytes without an accepted producer terminate the chain.
+    """
+    from agent.schemas.verification_authority import AuthorityError
+    from .cell_result import describe
+    context.validate_anchors()
+    proofs = {(p.result_metadata.get('matrix_path'), p.result_metadata.get('matrix_sha256')): p
+              for p in context.proofs.values() if p.result_metadata.get('matrix_path')}
+    with h5py.File(path, 'r') as handle:
+        positions = list(range(len(read_elem(handle['obs']))))
+    chain, seen = {}, set()
+    location = (str(path), sha)
+    while location not in seen:
+        seen.add(location)
+        chain[location] = positions
+        proof = proofs.get(location)
+        if proof is None:
+            break
+        native = proof.result_metadata
+        parameters = native['parameters']
+        method = native['function_name']
+        descriptor = describe('run_' + method.split('.')[0], native)
+        if parameters.get('input_orientation'):
+            break
+        if not (descriptor and descriptor['preserves_counts'] or
+                method in {'scanpy.tl.rank_genes_groups', 'scanpy.pp.log1p', 'scanpy.pp.normalize_total',
+                           'episcanpy.pp.log1p', 'episcanpy.pp.normalize_total',
+                           'snapatac2.pp.make_gene_matrix', 'snapatac2.pp.make_peak_matrix',
+                           'episcanpy.tl.geneactivity'}):
+            break
+        projection = parameters.get('grouping_projection')
+        selection = parameters.get('cell_subset')
+        if selection is not None:
+            positions = [selection['positions'][i] for i in positions]
+        if projection is not None:
+            positions = [projection['activity_positions'][i] for i in positions]
+        location = (proof.description['manifest']['arguments']['input_path'], native['source_identity']['sha256'])
+        previous = native['source_identity'].get('accepted_publication')
+        if previous is not None:
+            parent = proofs.get(location)
+            if parent is None or any(parent.result_metadata[k] != previous[k] for k in ('manifest_path', 'manifest_sha256')):
+                raise AuthorityError('Population ancestry lacks the exact accepted source publication')
+    return chain
+
+
+def corresponding_positions(source_path, source_sha, target_path, target_sha, context):
+    """Map the target's ordered cells to exact source positions via shared ancestry."""
+    from agent.schemas.verification_authority import AuthorityError
+    source = population_ancestry(source_path, source_sha, context)
+    target = population_ancestry(target_path, target_sha, context)
+    for identity, target_positions in target.items():
+        if identity not in source:
+            continue
+        source_positions = source[identity]
+        if len(set(source_positions)) != len(source_positions) or len(set(target_positions)) != len(target_positions):
+            raise AuthorityError('Population ancestry duplicates source observations')
+        reverse = {p: i for i, p in enumerate(source_positions)}
+        if not set(target_positions) <= set(reverse):
+            raise AuthorityError('Selected activity does not cover the exact grouping population')
+        positions = [reverse[p] for p in target_positions]
+        with h5py.File(source_path, 'r') as handle:
+            names = read_elem(handle['obs']).index[positions].tolist()
+        with h5py.File(target_path, 'r') as handle:
+            if names != read_elem(handle['obs']).index.tolist():
+                raise AuthorityError('Accepted population ancestry changed ordered cell identities')
+        return positions
+    raise AuthorityError('Activity and grouping have no exact accepted common cell source')
+
+
+def project_grouping(matrix, args, source):
+    """Small metadata adaptation before registered Scanpy markers; no statistics."""
+    from agent.schemas.verification_authority import AuthorityError
+    from agent.tools.data.authority_context import current
+    from agent.tools._file_identity import file_closure
+    from .cell_result import describe
+    context = current()
+    if context is None or args['function_name'] != 'tl.rank_genes_groups':
+        raise AuthorityError('Grouping projection requires accepted sources for native markers')
+    if args.get('cell_subset') is not None or args.get('input_orientation', 'cells_by_features') != 'cells_by_features':
+        raise AuthorityError('Grouping projection selects its exact accepted population; select or orient inputs upstream')
+    pin = file_closure([args['grouping_path']])[0]
+    native = next((p.result_metadata for p in context.proofs.values()
+                   if p.result_metadata.get('matrix_path') == pin['path']
+                   and p.result_metadata.get('matrix_sha256') == pin['sha256']), None)
+    if native is None:
+        raise AuthorityError('Grouping projection requires an accepted native publication')
+    descriptor = describe('run_' + native['function_name'].split('.')[0], native)
+    groupby = args.get('kwargs', {}).get('groupby')
+    if not descriptor or descriptor['grouping'] != groupby:
+        raise AuthorityError('Marker grouping differs from the selected native clustering')
+    positions = corresponding_positions(args['input_path'], source['sha256'], pin['path'], pin['sha256'], context)
+    matrix = matrix[positions, :].copy()
+    with h5py.File(pin['path'], 'r') as handle:
+        matrix.obs[groupby] = read_elem(handle['obs'])[groupby]
+    return matrix, dict(source=pin, activity_positions=positions, groupby=groupby,
+        accepted_publication={k: native[k] for k in ('manifest_path', 'manifest_sha256')})

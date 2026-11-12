@@ -16,7 +16,7 @@ from agent.orchestration.registry import (
     SemanticConsumerPortSpec, SemanticPortMember, SemanticProducerPortSpec, SemanticToolSpec,
     ToolRegistry, ToolSpec,
 )
-from agent.orchestration.prior_outputs import bind_output, prior_output_store
+from agent.orchestration.prior_outputs import bind_output, prior_output_store, validate_binding
 from agent.schemas import (AgentPlan, AgentRequest, ErrorCategory, PlanStep,
     RunLifecycleStatus, RunStatus, StepOutputRef, StepStatus, TraceEventType)
 from agent.schemas.prior_output import PriorOutputRef
@@ -510,10 +510,144 @@ def test_final_parent_publication_recovers_without_reentering_coordinator(harnes
                        and s.steps[0].status is StepStatus.SUCCEEDED, before=True)
     with pytest.raises(Crash):
         h.runtime(fault).run_prepared(*h.prepare())
+    child = child_state(h)
+    pending = h.store.load('parent-1:run')
+    assert pending.steps[0].status is StepStatus.RUNNING
+    assert pending.steps[0].verification is None
     h.before_parent = lambda inv: pytest.fail('coordinator re-entered during publication recovery')
     result = h.runtime().resume('parent-1:run')
     assert result.status is RunStatus.SUCCEEDED, h.exceptions
     assert len(h.calls) == 1
+    authority = result.steps[0].verification.artifact_authority
+    assert authority is not None
+    assert authority['schema_version'] == 2
+    assert authority['execution_identity'] == execution_identity(
+        pending.run_id, pending.plan, pending.plan.steps[0], h.registry.get('parent'))
+    binding = bind_output(h.store, h.registry, result.run_id, 'annotate', 'dataset')
+    validate_binding(binding, store=h.store, registry=h.registry, integrity=True)
+    assert h.store.load(child.run_id).to_dict() == child.to_dict()
+
+
+@pytest.mark.parametrize('damage', ['missing_manifest', 'missing_output', 'incomplete',
+                                   'output_bytes', 'source_bytes', 'execution_identity'])
+def test_coordinator_recovery_cannot_issue_authority_for_invalid_publication(harness, damage):
+    h = harness
+    fault = FaultStore(h.store, lambda s: s.run_id == 'parent-1:run' and bool(s.steps)
+                       and s.steps[0].status is StepStatus.SUCCEEDED, before=True)
+    with pytest.raises(Crash):
+        h.runtime(fault).run_prepared(*h.prepare())
+    pending = h.store.load('parent-1:run')
+    child = child_state(h)
+    root = Path(pending.steps[0].resolved_arguments['output_dir'])
+    if damage == 'missing_manifest':
+        (root / 'manifest.json').unlink()
+    elif damage == 'missing_output':
+        (root / 'data.txt').unlink()
+    elif damage in {'incomplete', 'execution_identity'}:
+        path = root / 'manifest.json'
+        value = json.loads(path.read_text())
+        if damage == 'incomplete':
+            value['native_completion'] = 'running'
+        else:
+            # A genuine other execution identity cannot authorize this parent.
+            value['execution_identity'] = child.steps[0].verification.artifact_authority['execution_identity']
+        path.write_text(json.dumps(value))
+    else:
+        Path(h.source if damage == 'source_bytes' else root / 'data.txt').write_text('changed')
+    h.before_parent = lambda inv: pytest.fail('recovery re-entered coordinator')
+    result = h.runtime().resume(pending.run_id)
+    assert result.status is RunStatus.FAILED
+    saved = h.store.load(pending.run_id)
+    assert saved.lifecycle_status is RunLifecycleStatus.INTERRUPTED
+    assert all(s.verification is None or s.verification.artifact_authority is None for s in saved.steps)
+    with pytest.raises(AuthorityError):
+        bind_output(h.store, h.registry, pending.run_id, 'annotate', 'dataset')
+    assert h.store.load(child.run_id).to_dict() == child.to_dict()
+    assert len(h.calls) == 1
+
+
+def test_failed_child_blocks_recovery_even_if_coordinator_writes_publication(harness, monkeypatch):
+    from agent.orchestration.annotation_runs import _AnnotationInvocation
+    h = harness
+    invoke = _AnnotationInvocation.invoke
+    def ignore_child_failure(inv, **kwargs):
+        with pytest.raises(Exception):
+            invoke(inv, **kwargs)
+        return {}  # Simulate a broken coordinator that continues after failure.
+    def fail(*args):
+        raise ValueError('native child failed')
+    def crash_before_completion_check(inv):
+        assert (Path(inv._arguments['output_dir']) / 'manifest.json').is_file()
+        raise Crash()
+    h.child_action = fail
+    with monkeypatch.context() as patch:
+        patch.setattr(_AnnotationInvocation, 'invoke', ignore_child_failure)
+        patch.setattr(_AnnotationInvocation, '_require_complete', crash_before_completion_check)
+        with pytest.raises(Crash):
+            h.runtime().run_prepared(*h.prepare())
+    child = child_state(h)
+    assert child.lifecycle_status is RunLifecycleStatus.FAILED
+    result = h.runtime().resume('parent-1:run')
+    assert result.status is RunStatus.FAILED
+    assert all(s.verification is None for s in result.steps)
+    assert h.store.load(child.run_id).to_dict() == child.to_dict()
+    assert len(h.calls) == 1
+
+
+def test_terminal_success_without_authority_is_not_upgraded(harness):
+    h = harness
+    result = h.runtime().run_prepared(*h.prepare())
+    assert result.status is RunStatus.SUCCEEDED
+    state = h.store.load(result.run_id)
+    step = replace(state.steps[0], verification=replace(state.steps[0].verification, artifact_authority=None))
+    # A separate disposable historical fixture; never rewrite a terminal Run.
+    historical = FileRunStore(h.store.root.parent / 'historical_run_state')
+    saved = historical.create(replace(state, revision=0, steps=(step,)))
+    before = historical.state_path(saved.run_id).read_bytes()
+    h.before_parent = lambda inv: pytest.fail('terminal coordinator re-entered')
+    assert h.runtime(historical).resume(saved.run_id).status is RunStatus.SUCCEEDED
+    with pytest.raises(AuthorityError, match='legacy qualification is not implicit'):
+        bind_output(historical, h.registry, saved.run_id, 'annotate', 'dataset')
+    assert historical.state_path(saved.run_id).read_bytes() == before
+    assert h.store.load(state.run_id).to_dict() == state.to_dict()
+    assert len(h.calls) == 1
+
+
+def test_unrelated_durable_owner_does_not_gain_recovery_authority(harness):
+    h = harness
+    request, original = h.prepare('unrelated')
+    plan = replace(original, steps=(replace(original.steps[0], tool_name='child'),))
+    fault = FaultStore(h.store, lambda s: s.run_id == 'unrelated:run' and bool(s.steps)
+                       and s.steps[0].status is StepStatus.SUCCEEDED, before=True)
+    with pytest.raises(Crash):
+        h.runtime(fault).run_prepared(request, plan)
+    result = h.runtime().resume('unrelated:run')
+    assert result.status is RunStatus.SUCCEEDED
+    assert Path(result.steps[0].result['data_path']).is_file()
+    assert result.steps[0].verification.artifact_authority is None
+    with pytest.raises(AuthorityError, match='legacy qualification is not implicit'):
+        bind_output(h.store, h.registry, result.run_id, 'annotate', 'dataset')
+    assert len(h.calls) == 1
+
+
+def test_recovered_coordinator_cannot_borrow_accepted_execution_authority(harness, monkeypatch):
+    h = harness
+    fault = FaultStore(h.store, lambda s: s.run_id == 'parent-1:run' and bool(s.steps)
+                       and s.steps[0].status is StepStatus.SUCCEEDED, before=True)
+    with pytest.raises(Crash):
+        h.runtime(fault).run_prepared(*h.prepare())
+    assert h.runtime().resume('parent-1:run').status is RunStatus.SUCCEEDED
+    state = h.store.load('parent-1:run')
+    binding = bind_output(h.store, h.registry, state.run_id, 'annotate', 'dataset')
+    child = child_state(h)
+    borrowed = replace(state, steps=(replace(state.steps[0], verification=replace(
+        state.steps[0].verification, artifact_authority=child.steps[0].verification.artifact_authority)),))
+    load = h.store.load
+    with monkeypatch.context() as patch:
+        patch.setattr(h.store, 'load', lambda rid: borrowed if rid == state.run_id else load(rid))
+        with pytest.raises(AuthorityError, match='different execution'):
+            validate_binding(binding, store=h.store, registry=h.registry, integrity=True)
+    assert h.store.load(state.run_id).to_dict() == state.to_dict()
 
 
 def test_continuation_cannot_silently_skip_reserved_branch(harness):

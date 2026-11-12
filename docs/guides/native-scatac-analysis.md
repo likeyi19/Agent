@@ -294,8 +294,9 @@ The ICTA-2B report records genuine registered marker calls, accepted PriorOutput
 reuse, source-bound subsets, Session restart and H5AD delivery for all three routes.
 Tiny synthetic fixtures qualify mechanics, not biological annotation accuracy or
 production-scale performance. ICTA-1 child lifecycle, direct Native Functions,
-MAESTRO annotation and UI remain unchanged. CellMarker matching, biological decisions
-and hierarchical annotation remain later phases.
+MAESTRO annotation and UI remain unchanged. The ICTA-3B and ICTA-3C sections below
+describe current internal evidence interpretation; hierarchical orchestration
+remains a later phase.
 
 ### Shared native invocation boundary (ICTA-2 engineering closeout)
 
@@ -386,6 +387,87 @@ results. Integrity failures remain errors, not scientific uncertainty.
 
 Multiple significant candidates do not trigger subclustering. MAESTRO, Native
 Functions, public planning/execution and Session/Revision owners are unchanged.
-ICTA-3C subdivision and ICTA-4 orchestration remain unimplemented. See the
+ICTA-3C now supplies the internal subdivision interpretation described below;
+ICTA-4 orchestration remains unimplemented. See the
 [ICTA-3B report](../../../agent-data/acceptance/iterative-cell-type-annotation/icta-3b/REPORT.md)
 for genuine native fixtures, exact provenance, preservation and bounded validation.
+
+### Local subdivision evidence (ICTA-3C, internal)
+
+`agent.tools.analysis.local_subdivision.assess_subdivision` interprets one attempted
+local subdivision. It accepts the parent clustering binding, the four accepted
+local bindings (`pp.select_features → tl.spectral → pp.knn → tl.leiden`) and
+child-keyed accepted `tl.diff_test` bindings. It executes no native work. Existing
+Registry, Runtime, native workers, publication and exact PriorOutput owners retain
+all execution and integrity responsibilities; existing ASW and explicit parameter
+precedence are unchanged.
+
+The selected parent clustering must retain the original peak X. Existing
+source-bound peak declarations or accepted `pp.make_peak_matrix` ancestry identify
+that space independently of measurement units. For example, an input recording
+`matrix_semantics='binary_accessibility'` or `'fragment_counts'` can carry the
+explicit existing `matrix_semantics='peak_accessibility'` invocation declaration.
+The native owner retains the original measurement and the supplied declaration
+separately, tied to the exact source bytes. No new field or measurement whitelist
+is required. A counting unit alone does not establish peaks. Gene constructors,
+tile construction and raw fragments retain their actual native identity even if
+a later declaration calls them peaks; filenames, shapes and matching cells do not
+establish peak space. Accepted count-preserving ancestry carries a peak declaration
+without requiring SnapATAC2-specific construction history.
+The first local step uses ICTA-2 `cell_subset={"groupby": actual_parent_key,
+"groups": [actual_parent_label]}`. The adapter derives positions, cell IDs and
+source hashes. Complete parent membership and actual local-written feature,
+Spectral and KNN slots are checked at evidence reading. These are correspondence
+checks, not new native execution admission conditions. Separate representations
+without accepted ancestry require the caller's existing exact handoff; this
+component never constructs cross-file cell alignment.
+
+`differential_kwargs(local_binding, child, store=..., registry=...)` derives actual
+local child and remaining-parent positions and `direction='positive'`. The caller
+uses ordinary registered `run_snapatac2(function_name='tl.diff_test')`. SnapATAC2
+2.9.0 performs its logistic-regression likelihood-ratio test and native BH adjustment.
+Omitted parameters retain native defaults, including `min_log_fc=0.25`,
+`min_pct=0.05`, `features=None` and `covariates=None`. The installed covariates option
+raises its genuine native error. Full native returns remain in the accepted H5AD;
+the decision preserves the publication binding, complete table projection and
+actual effective parameters. Nonfinite projected numbers become null while
+original native bytes remain unchanged.
+
+Default interpretation retains a child with at least five distinct actual peak
+features having positive native log2 fold change and native adjusted p-value
+**strictly below 0.01**. Positive sign identifies enrichment, without another
+fold-change magnitude cutoff. Repeated native rows for a feature count once.
+`adjusted_p_threshold` and `minimum_peak_features` can reinterpret the same accepted
+statistics without executing science. They are initial interpretation defaults,
+not universal biological truths or native admission rules. No cell-count,
+population-fraction, feature-detection or stability gate is added.
+
+A single candidate yields `no_candidate_subdivision`. Multiple candidates yield
+`no_supported_subdivision`, `partial_supported_subdivision` or
+`supported_subdivision`. Unsupported children remain explored native clustering
+results, with their cells retained exactly in the residual parent. Supported
+children plus residual cover the original selected positions once, preserving
+source order. Unassessed evidence has `retained=None`, not a biological negative.
+Native Leiden's `-1` observations remain unassigned residual cells and participate
+in each child's rest comparison; they are not treated as another candidate child.
+Failed Run/step locators preserve actual native or infrastructure execution errors;
+`failed_local` can identify an unsuccessful next step after an accepted local
+prefix. Missing peak or differential input stays `missing_input`. Integrity errors
+propagate instead of becoming biological uncertainty. No result claims homogeneity.
+
+Optional full ICTA-3B evidence is carried unchanged with an accepted
+`annotation_bindings` construction/marker chain descending from the local
+clustering. Peak and gene axes remain distinct, and the chain must retain exact
+ordered cells and grouping. Names, ambiguity and numbers of significant CellMarker
+candidates do not affect retention. Supported unnamed children remain exploratory.
+A supplied `budget_reason` is separate from scientific stopping; the recorded
+default maximum is five levels, but no depth enforcement or scheduler exists here.
+
+This is an [IDclust-inspired](https://doi.org/10.1093/nargab/lqae174) decision strategy
+using SnapATAC2, not a reproduction of IDclust's pseudobulk edgeR or its optimizer.
+The [mouse-brain atlas](https://doi.org/10.1038/s41586-023-06824-9) supplies the local
+SnapATAC2 clustering basis. Significant peaks are exploratory within-data evidence,
+not independent validation or proof of a new cell type. ICTA-4 owns future
+orchestration, result-scoped exposure, iteration and budget enforcement; none is
+implemented here. See the [ICTA-3C report](../../../agent-data/acceptance/iterative-cell-type-annotation/icta-3c/REPORT.md)
+for genuine native outcomes, independent checks and preservation evidence.

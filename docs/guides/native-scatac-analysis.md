@@ -321,3 +321,71 @@ encodings remain rejected; host-side storage/privacy budgets remain enforced.
 Native Mapping returns retain string keys without coercion; ambiguous nonstring
 keys and unsupported serialized objects fail with a technical publication error.
 No general Python object transport or scientific repair is introduced.
+
+### Current-round marker candidates (ICTA-3B, internal)
+
+`agent.tools.analysis.marker_candidates` consumes an exact accepted `run_scanpy`
+`tl.rank_genes_groups` dataset binding through the existing RunStore/Registry
+integrity checks. It does not execute science or register a new tool. A future
+caller submits the ordinary native step using `marker_kwargs(actual_groupby)`:
+Wilcoxon, native BH correction, reference `rest`, detection fractions enabled,
+`use_raw=False`, and `n_genes=None` (all tested features). Other parameters retain
+installed defaults. An already accepted suitable result is consumed directly.
+SnapATAC2 activity, epiScanpy activity and declared existing Gene Activity/Gene
+Score use the same calculation. No normalization or reconstruction is implicit.
+
+`annotate_markers(binding, store=..., registry=..., evidence=CellMarkerEvidence(...),
+species=..., context=...)` returns ordinary serializable evidence. The native
+publication retains the actual selected X measurement, source and construction
+history, cells, grouping, parameters, Run/Step and publication identities. Marker
+records retain original feature names, signed scores, raw/adjusted p-values and
+available detection fractions. Nonfinite values are represented as missing in
+this JSON projection; the original H5AD remains authoritative and unchanged.
+
+The default gene identity is an exact nonempty feature name. A caller may explicitly
+select a feature column and either `identity_kind='name'` (literal marker/symbol
+lookup) or `'gene_id'` (literal database ID lookup). Numeric IDs are not converted;
+`12501.0` and `12501` remain different. There is no alias or ontology inference.
+Repeated literal identities count once, and a gene is positive if any corresponding
+tested feature has positive score and native adjusted p-value at most 0.05.
+If duplicate ranked feature names cannot identify a unique selected feature-column
+value, only those names are excluded, with their original statistics and exclusion
+reasons retained. ORA continues on all remaining comparable genes without a
+minimum coverage requirement. Full ranked-feature coverage is
+required for this evidence calculation, never as a native execution gate.
+
+The universe includes all distinct comparable tested genes, including unmatched
+ones. Candidate identity is exact `(species, cell_name)`; context can constrain
+only explicitly supplied tissue/disease fields. All source categories contribute
+together. Each candidate uses a set of distinct matched input identities; source
+rows and multiple algorithms never multiply genes. Within each source association,
+name lookup selects its nonempty symbol if that exact symbol matched the universe,
+otherwise its exact matched marker; ID lookup selects its exact matched gene ID.
+All original field matches remain in lazy evidence. This is a source-field
+representation choice, not verified alias mapping or reconciliation across records.
+For each cluster, SciPy
+`hypergeom.sf(k-1, N, K, n)` and `false_discovery_control(method='bh')` evaluate
+all candidates with `K > 0`, including zero-overlap candidates. Candidates with
+`K=0` are recorded as uncovered, not biological negatives. Marker and enrichment
+thresholds are separate evidence-interpretation arguments, both defaulting to 0.05.
+
+All significant candidates are retained. The unique smallest adjusted enrichment
+p-value yields `assigned`; an exact minimum tie yields `ambiguous`. Valid analysis
+without significant enrichment is `unresolved`; unavailable identities or
+reference coverage yield `insufficient_evidence`. These are current-round
+computational outcomes, not probabilities of biological correctness.
+
+Candidate summaries contain source categories, matched fields, method details,
+record/context/literature counts and an exact pinned evidence locator. Entirely
+blank literature tuples contribute zero; partial literature fields remain counted.
+Empty method strings are not named methods. Original blanks remain in lazy evidence.
+`candidate_evidence(result, candidate, lookup)` streams every original matching
+record, including tissue/disease/literature fields, missing values and original
+source-row references. No raw-row payload or candidate cap is imposed on ordinary
+results. Integrity failures remain errors, not scientific uncertainty.
+
+Multiple significant candidates do not trigger subclustering. MAESTRO, Native
+Functions, public planning/execution and Session/Revision owners are unchanged.
+ICTA-3C subdivision and ICTA-4 orchestration remain unimplemented. See the
+[ICTA-3B report](../../../agent-data/acceptance/iterative-cell-type-annotation/icta-3b/REPORT.md)
+for genuine native fixtures, exact provenance, preservation and bounded validation.

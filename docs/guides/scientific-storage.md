@@ -68,7 +68,69 @@ within the existing supported bounds before raw FASTQ UAT.
 | Species adaptation | Explicit source/SEAM bundles, backend configuration, target genome/features and method-specific mapping resources |
 | Differential accessibility | Explicit qualified edgeR runtime and the repository-controlled R scripts |
 
-The original CellMarker source/table closure is retained as independent research evidence. Its post-annotation product corroboration entry and operation are retired; native MAESTRO continues to use its own compatible gene/signature resources. Cell Ontology resources and optional mapping dependencies are not required by Agent.
+The older CellMarker source/table closure remains independent research evidence;
+its former post-annotation corroboration operation stays retired. ICTA-3A adds a
+separate internal CellMarker 3.0 static evidence resource from
+[Zenodo 22808257](https://zenodo.org/records/22808257). Native MAESTRO continues
+to use its own compatible gene/signature resources. Cell Ontology resources and
+optional mapping dependencies are not required by Agent.
+
+The five verified original ZIPs and derived `cellmarker3.sqlite` live under
+`resources/cellmarker3/zenodo-22808257/`. Only `all_cell_marker.txt` supplies index
+rows; the other archives are overlapping provenance collections. The
+[`cellmarker` owner](../../src/agent/tools/data/cellmarker.py) streams the All ZIP,
+preserves its 23 strings and one-based data-record positions, and creates three
+SQLite indexes on `(species, marker)`, `(species, symbol)` and `(species, gene_id)`.
+No TXT extraction, normalization, biological weighting or annotation is involved.
+
+Provision with `build_index(all_zip, sqlite_path, expected_sha256=verified_sha)`.
+It verifies every field and source position before publishing the database
+atomically; an existing index is verified and reused, never overwritten. Install
+through `ScientificResourceLibrary.install('cellmarker', resource, ...)`. The
+resource has `schema='cellmarker-static-resource.v1'`, the selected `record_url`,
+`index_format='cellmarker-evidence.sqlite.v1'`, an `archives` mapping keyed by all
+five original ZIP names, and `index`. Every file descriptor contains its canonical
+`path`, `sha256` and `size_bytes`. The existing library owns version coexistence,
+immutable file checks and atomic installation. This kind creates no Planner or
+Native Functions choice and grants no annotation-result authority.
+
+An internal consumer explicitly selects a resource ID and resolves it once per
+operation, then streams technical pages:
+
+```python
+from agent.tools.data.cellmarker import CellMarkerEvidence
+
+evidence = CellMarkerEvidence(library, selected_resource_id)
+for page in evidence.query(["Gpr116", "Adgrf5"], species="Mouse", page_size=128):
+    for item in page["items"]:
+        fields = item["fields"]          # all 23 original strings
+        matches = item["matches"]        # input position, value and matched field
+        source_rows = item["source_rows"]
+        multiplicity = item["multiplicity"]
+```
+
+Names match `marker` and `symbol` exactly and case-sensitively; that does not
+establish aliases. `gene_ids=["224792.0"]` matches original `gene_id` strings;
+`"224792"` is a different query, with no floating-point or namespace conversion.
+Species may be omitted to search all stored species. `filters` accepts exact
+string values for other source columns, including empty strings when explicitly
+querying missing fields. Optional context is never required. Empty marker/ID
+strings match nothing; unmatched queries yield a completed page with no items.
+
+Identical full records are grouped with their actual source positions and
+multiplicity. Differing tissue, cell, publication, source, dataset and method
+contexts remain distinct. Pages are transport boundaries: consume them all for
+complete evidence, or close the iterator when stopping retrieval. Batch inputs use
+a connection-local TEMP table, not an arbitrary marker-count limit. Each page
+includes the query identity and static source/index identity. The main database
+is opened read-only. Resolution verifies the library's file closure once;
+subsequent queries/pages use existing exact-file snapshot checks. A fresh process
+resolves the installed resource offline without rebuilding it. These internal
+records are not an ordinary user-facing scientific result or model-context dump.
+
+The [Gate 0 inspection](../../../agent-data/acceptance/iterative-cell-type-annotation/icta-3a/gate0/REPORT.md)
+and [ICTA-3A implementation evidence](../../../agent-data/acceptance/iterative-cell-type-annotation/icta-3a/REPORT.md)
+record source semantics, actual counts, query limitations and verification.
 
 The EpiZoo owner resolves `AGENT_EPIZOO_CHECKPOINT` and
 `AGENT_EPIZOO_RESOURCES_DIR` at scientific consumption. An omitted Python

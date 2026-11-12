@@ -3,7 +3,6 @@
 Packages own their numerical methods. This owner shares only bounded input
 adaptation, invocation, exact axes and the existing native publication lifecycle.
 """
-import math
 import json
 import csv
 import os
@@ -27,30 +26,28 @@ from agent.tools._file_identity import file_closure
 from . import peak_h5ad
 from .native_publication import NativePublication
 from .sequence_prediction import arguments as path_arguments, library, read, write
-from .sequence_reference import metadata_declarations, check_declarations
+from .sequence_reference import metadata_declarations
 
 
 def native_kwargs(functions, args):
-    """Shared bounded JSON/function boundary; scientific object checks stay with owners."""
+    """Shared data-only JSON/function boundary; scientific object checks stay with owners."""
     function, kwargs = args.get('function_name'), args.get('kwargs', {})
     if function not in functions or type(kwargs) is not dict or set(kwargs) - set(functions[function]):
         raise ValueError('Unsupported native function or argument; no method is substituted')
-    def ordinary(value, depth=0):
-        if depth > 4:
-            return False
-        if value is None or type(value) in (bool, int):
+    def ordinary(value):
+        if value is None or type(value) in (bool, int, float, str):
             return True
-        if type(value) is float:
-            return math.isfinite(value)
-        if type(value) is str:
-            return len(value) <= 128 and not any(ord(c) < 32 for c in value)
         if type(value) is list:
-            return len(value) <= 128 and all(ordinary(v, depth + 1) for v in value)
+            return all(ordinary(v) for v in value)
         if type(value) is dict:
-            return len(value) <= 128 and all(type(k) is str and ordinary(k) and ordinary(v, depth + 1) for k, v in value.items())
+            return all(type(k) is str and ordinary(v) for k, v in value.items())
         return False
-    if not ordinary(kwargs) or len(json.dumps(kwargs).encode()) > 8192:
-        raise ValueError('Native kwargs must be bounded JSON data, not executable expressions or input objects')
+    try:
+        if not ordinary(kwargs):
+            raise ValueError('Native kwargs require data-only JSON values')
+        json.dumps(kwargs, allow_nan=False)
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise ValueError('Native kwargs must be representable as data-only strict JSON') from exc
     return kwargs
 
 
@@ -89,17 +86,30 @@ def declarations(handle, args):
     if slot != 'X' and not slot.startswith('layers/'):
         slot = 'layers/' + slot
     effective = metadata_declarations(handle, slot, args, read_elem(handle['var']))
+    # A declaration is not reference qualification or permission to relabel X.
+    uns = handle.get('uns', {})
+    recorded = {}
+    for key in ('species', 'assembly', 'coordinate_system', 'matrix_semantics'):
+        if key in uns and isinstance(value := read_elem(uns[key]), str):
+            recorded[key] = value
+    effective['_source_declarations'] = recorded
+    if slot == 'X' and 'matrix_semantics' in recorded:
+        effective['matrix_semantics'] = recorded['matrix_semantics']
     effective['count_slot'] = slot
     return effective
 
 
-def prepare_input(args, stage):
+def prepare_input(args, stage, *, source=None):
     """AnnData owns encoding; only task-local objects can be mutated by packages."""
     peak_h5ad.inspect(args['input_path'], require_matrix=False, max_logical_bytes=None)
     with h5py.File(args['input_path'], 'r') as handle:
         effective = declarations(handle, args)
-    check_declarations(args['input_path'], effective)
     original = ad.read_h5ad(args['input_path'])
+    orientation = args.get('input_orientation', 'cells_by_features')
+    if orientation == 'features_by_cells':
+        original = original.T.copy()
+    elif orientation != 'cells_by_features':
+        raise ValueError('Unknown explicit AnnData input orientation')
     slot = effective['count_slot']
     x = original.X if slot == 'X' else original.layers[slot.removeprefix('layers/')]
     # The bounded HDF5/AnnData readers admit ordinary serialized annotations,
@@ -109,8 +119,48 @@ def prepare_input(args, stage):
     matrix.X = x.copy() if x is not None else None
     effective['matrix_semantics'] = effective.get('matrix_semantics') or 'unspecified_retained_measurement'
     matrix.uns['matrix_semantics'] = effective['matrix_semantics']
+    if args.get('cell_subset') is not None:
+        matrix, membership = subset_input(matrix, args, source or file_closure([args['input_path']])[0])
+        effective['_cell_subset'] = membership
     matrix.write_h5ad(stage / 'input.h5ad')
     return matrix, effective
+
+
+def subset_input(matrix, args, source):
+    """Derive selection provenance; AnnData owns the actual row indexing.
+
+    Annotation-owned group selection supplies only groupby/groups on its bound
+    source. Explicit positions may select part of a group or repeat observations.
+    Hierarchical branch completeness/distinctness is not this adapter's policy.
+    """
+    from .native_gene_activity import axis_identity
+    selection = args['cell_subset']
+    if type(selection) is not dict or set(selection) - {'source_sha256', 'positions', 'cell_ids', 'population', 'groupby', 'groups'}:
+        raise ValueError('Cell subset requires source positions or an actual source grouping')
+    if 'source_sha256' in selection and selection['source_sha256'] != source['sha256']:
+        raise AuthorityError('Cell subset source bytes changed')
+    group_positions = None
+    if 'groupby' in selection or 'groups' in selection:
+        if type(selection.get('groups')) is not list or selection.get('groupby') not in matrix.obs:
+            raise ValueError('Select an actual obs grouping and group values')
+        group_positions = np.flatnonzero(matrix.obs[selection['groupby']].isin(selection['groups'])).tolist()
+    positions = selection.get('positions', group_positions)
+    if type(positions) is not list or any(type(i) is not int or not 0 <= i < matrix.n_obs for i in positions):
+        raise AuthorityError('Cell subset positions do not identify source observations')
+    identities = matrix.obs_names[positions].tolist()
+    if 'cell_ids' in selection and selection['cell_ids'] != identities:
+        raise AuthorityError('Cell subset identities do not match exact source positions')
+    membership = dict(selection, source_sha256=source['sha256'], positions=positions, cell_ids=identities,
+        source_axes=axis_identity(args['input_path']),
+        position_axis='var' if args.get('input_orientation') == 'features_by_cells' else 'obs',
+        provenance='exact source positions',
+        inherited_slot_meaning='AnnData-sliced source slots; global graphs and coordinates are not newly computed local results')
+    if group_positions is not None:
+        if not set(positions) <= set(group_positions):
+            raise AuthorityError('Cell subset differs from the selected source grouping membership')
+        membership['provenance'] = 'exact source obs membership; group labels retain their source meaning'
+        membership['complete_group_membership'] = set(positions) == set(group_positions)
+    return matrix[positions, :].copy(), membership
 
 
 @lru_cache(maxsize=128)
@@ -134,6 +184,8 @@ class MatrixPackage:
         self.package, self.version, self.runtime = package, version, runtime
         if package == 'Signac':
             self.invoke = self.invoke_signac
+        if package == 'episcanpy':
+            self.invoke = self.invoke_episcanpy
         if package == 'snapatac2':
             from . import snapatac_raw as raw
             self.invoke = self.invoke_snapatac2
@@ -171,6 +223,12 @@ class MatrixPackage:
     def native_arguments(self, args):
         function = args.get('function_name')
         kwargs = native_kwargs(self.FUNCTIONS, args)
+        if args.get('gene_activity') is not None and type(args['gene_activity']) is not bool:
+            raise ValueError('gene_activity is an explicit input declaration')
+        if self.package == 'snapatac2':
+            from .snapatac_raw import FUNCTIONS
+            if function in FUNCTIONS and any(k in args for k in ('gene_activity', 'cell_subset', 'input_orientation')):
+                raise ValueError('AnnData input adaptations apply to native matrix consumers, not raw functions')
         if args.get('parameter_selection') is not None:
             from .native_clustering import ELIGIBLE
             if (self.package, function) not in ELIGIBLE or args['parameter_selection'] not in ('asw', 'native_defaults'):
@@ -189,8 +247,8 @@ class MatrixPackage:
                     kwargs = dict(kwargs)
                     kwargs.setdefault('min_num_fragments', 0)
             if args.get('counting_strategy') is not None:
-                if function not in ('pp.make_peak_matrix', 'pp.add_tile_matrix'):
-                    raise ValueError('counting_strategy applies only to native peak or tile matrix construction')
+                if function not in ('pp.make_peak_matrix', 'pp.add_tile_matrix', 'pp.make_gene_matrix'):
+                    raise ValueError('counting_strategy applies only to pp.make_peak_matrix, pp.add_tile_matrix or pp.make_gene_matrix')
                 if 'counting_strategy' in kwargs and kwargs['counting_strategy'] != args['counting_strategy']:
                     raise ValueError('Explicit native kwargs and scalar have conflicting counting_strategy values')
                 kwargs = dict(kwargs, counting_strategy=args['counting_strategy'])
@@ -203,6 +261,12 @@ class MatrixPackage:
                 raw.input_paths(args)
             elif any(args.get(path) is not None or args.get(sha) is not None for path, sha, _ in raw.PORTS.values()):
                 raise ValueError('Raw reference files do not apply to this native matrix function')
+        if self.package == 'episcanpy':
+            if function == 'tl.geneactivity':
+                if not args.get('gene_anno_path'):
+                    raise ValueError('episcanpy.tl.geneactivity requires the gene_anno GTF input file')
+            elif args.get('gene_anno_path') is not None or args.get('gene_anno_sha256') is not None:
+                raise ValueError('Gene annotation applies only to episcanpy.tl.geneactivity')
         if (args.get('second_path') or args.get('second_count_slot') or args.get('second_sha256')) and (self.package != 'Signac' or function not in ('corSparse', 'Jaccard')):
             raise ValueError('A second matrix applies only to Signac corSparse/Jaccard')
         if function == 'Jaccard' and not args.get('second_path'):
@@ -250,11 +314,16 @@ class MatrixPackage:
             implementation_paths.append(script.with_name('native_matrix_worker.py'))
         if not is_r:
             implementation_paths.append(executable.parent.parent / 'pyvenv.cfg')
+            if (self.package, args['function_name']) in {('snapatac2', 'pp.make_gene_matrix'), ('episcanpy', 'tl.geneactivity')}:
+                implementation_paths.append(script.with_name('native_gene_activity.py'))
             if not raw_call:
                 implementation_paths.extend(script.with_name(name) for name in ('native_clustering.py', 'cell_result.py'))
         implementation = file_closure(implementation_paths)
         request = dict(stage=str(stage), package=self.package, version=self.version,
             function_name=args['function_name'], kwargs=self.native_arguments(args), second_matrix=bool(args.get('second_path')))
+        if self.package == 'episcanpy' and args['function_name'] == 'tl.geneactivity':
+            request['gene_anno_path'] = args['gene_anno_path']
+            request['activity_inputs'] = {k: args[k] for k in ('species', 'assembly', 'count_slot', 'matrix_semantics') if k in args}
         if not raw_call and not is_r:
             source = file_closure([args['input_path']])[0]
             request.update(source_sha256=source['sha256'], parameter_selection=args.get('parameter_selection'))
@@ -287,6 +356,8 @@ class MatrixPackage:
                     original = proof.description['manifest']['arguments']['input_path']
                     location = (original, result['source_identity']['sha256'])
                 request['visualization_representations'] = sorted(visualizations)
+            if args.get('cell_subset') is not None or args.get('input_orientation') == 'features_by_cells':
+                request['graph_inputs'] = []
         if raw_call:
             request['raw_inputs'] = {key: args[key] for key in ('input_path', 'matrix_semantics', 'species', 'assembly',
                 'qc_thresholds',
@@ -380,12 +451,16 @@ class MatrixPackage:
         source = file_closure([args['input_path']])[0]
         if args.get('input_sha256') and source['sha256'] != args['input_sha256']:
             raise AuthorityError('Selected input bytes changed')
+        gene_activity = self.package == 'episcanpy' and args['function_name'] == 'tl.geneactivity'
+        annotation = file_closure([args['gene_anno_path']])[0] if gene_activity else None
+        if annotation and args.get('gene_anno_sha256') and annotation['sha256'] != args['gene_anno_sha256']:
+            raise AuthorityError('Selected gene annotation bytes changed')
         second_source = file_closure([args['second_path']])[0] if args.get('second_path') else None
         if second_source and args.get('second_sha256') and second_source['sha256'] != args['second_sha256']:
             raise AuthorityError('Selected second matrix bytes changed')
         with tempfile.TemporaryDirectory(prefix='.native-matrix-', dir=root) as temp:
             stage = Path(temp)
-            matrix, effective = prepare_input(args, stage)
+            matrix, effective = prepare_input(args, stage, source=source)
             cells, features = matrix.obs_names.tolist(), matrix.var_names.tolist()
             if self.package == 'Signac':
                 if any(any(c in s for c in '\t\r\n') for s in cells + features):
@@ -402,10 +477,6 @@ class MatrixPackage:
                 mmwrite(stage/'second.mtx', sparse.csc_matrix(other.X.T))
                 other.obs.to_csv(stage/'second-cells.tsv', sep='\t', columns=[], index_label='cell_id', quoting=csv.QUOTE_NONE)
                 effective['second_path'] = args['second_path']
-            if args['function_name'] == 'pp.scale' and kwargs.get('zero_center', True):
-                selected = matrix.layers[kwargs['layer']] if kwargs.get('layer') else matrix.obsm[kwargs['obsm']] if kwargs.get('obsm') else matrix.X
-                if sparse.issparse(selected):
-                    raise ValueError('Native centered scale densifies the complete sparse matrix; select zero_center=false explicitly or supply dense data')
             receipt = self.native(effective, stage, matrix)
             peak_h5ad.inspect(stage / 'result.h5ad', require_matrix=False)
             output = ad.read_h5ad(stage / 'result.h5ad')
@@ -417,9 +488,9 @@ class MatrixPackage:
                 ci, fi = positions['cells'], positions['features']
                 if ci != list(range(len(cells))) or any(type(i) is not int or not 0 <= i < len(features) for i in fi) or fi != sorted(set(fi)):
                     raise AuthorityError('Invalid native subset source positions')
-            if output.obs_names.tolist() != [cells[i] for i in ci] or output.var_names.tolist() != [features[i] for i in fi]:
+            if output.obs_names.tolist() != [cells[i] for i in ci] or (not gene_activity and output.var_names.tolist() != [features[i] for i in fi]):
                 raise AuthorityError('Native result changed the exact ordered input axes')
-            if args['function_name'] not in ('pp.binarize', 'pp.log1p', 'pp.normalize_total', 'RunTFIDF', 'BinarizeCounts', 'pp.scale') and matrix.X is not None:
+            if not gene_activity and args['function_name'] not in ('pp.binarize', 'pp.log1p', 'pp.normalize_total', 'RunTFIDF', 'BinarizeCounts', 'pp.scale') and matrix.X is not None:
                 original = ad.read_h5ad(stage / 'input.h5ad')[ci, fi]
                 before, after = (sparse.csr_matrix(x, copy=True) for x in (original.X, output.X))
                 for retained in (before, after):
@@ -436,7 +507,7 @@ class MatrixPackage:
                 value = output.X if group == 'X' else getattr(output, group)[key]
                 if group in ('X', 'layers', 'obsm', 'varm', 'obsp'):
                     values = value.data if sparse.issparse(value) else np.asarray(value)
-                    if values.dtype.kind not in 'biuf':
+                    if values.dtype.kind not in 'biufc':
                         raise AuthorityError('Native numeric result changed representation')
             measurement = receipt.get('measurement') or effective['matrix_semantics']
             output.uns['matrix_semantics'] = measurement
@@ -446,7 +517,9 @@ class MatrixPackage:
                 function_name=self.package + ('::' if self.package == 'Signac' else '.') + args['function_name'],
                 n_cells=output.n_obs, n_features=output.n_vars, measurement=measurement,
                 parameters=dict(kwargs=kwargs, omitted_optional_arguments='native defaults', count_slot=effective['count_slot']),
-                source_identity=dict(sha256=source['sha256'], size_bytes=source['size_bytes'], measurement=effective['matrix_semantics']),
+                source_identity=dict(sha256=source['sha256'], size_bytes=source['size_bytes'], measurement=effective['matrix_semantics'],
+                    declarations=effective['_source_declarations'],
+                    supplied_declarations={k: args[k] for k in ('species', 'assembly', 'coordinate_system', 'matrix_semantics') if k in args}),
                 software_versions=receipt['versions'], native_output_type=receipt['native_output_type'],
                 result_slots=receipt['result_slots'], limitations=LIMITATIONS)
             if 'effective_parameters' in receipt:
@@ -457,6 +530,10 @@ class MatrixPackage:
             for key in ('graph_inputs', 'parameter_selection'):
                 if key in receipt:
                     summary['parameters'][key] = receipt[key]
+            if '_cell_subset' in effective:
+                summary['parameters']['cell_subset'] = effective['_cell_subset']
+            if args.get('input_orientation') == 'features_by_cells':
+                summary['parameters']['input_orientation'] = 'explicit native AnnData transpose: features_by_cells to cells_by_features'
             selection = receipt.get('parameter_selection')
             if selection and selection['origin'] == 'automatic':
                 summary['parameters']['kwargs'] = dict(kwargs, **{selection['parameter']: selection['selected_value']})
@@ -470,10 +547,17 @@ class MatrixPackage:
             if positions is not None:
                 output.uns['agent_native_invocation']['source_axis_positions'] = positions
             output.write_h5ad(root / 'result.h5ad')
+            if gene_activity:
+                from .native_gene_activity import publish_description
+                summary['source_identity']['references'] = [dict(role='gene_anno', sha256=annotation['sha256'])]
+                publish_description(root / 'result.h5ad', args, receipt, summary, source)
+            else:
+                from .native_gene_activity import reuse_description
+                reuse_description(root / 'result.h5ad', args, summary, source)
             write(root / 'native-receipt.json', receipt)
             write(root / 'metadata.json', dict(summary=summary, source=source, receipt=receipt,
                 input_orientation='cells by features; Signac receives features by cells'))
-            expected = {r['path']: r for r in [source, *([second_source] if second_source else []), *receipt['implementation']]}
+            expected = {r['path']: r for r in [source, *([annotation] if annotation else []), *([second_source] if second_source else []), *receipt['implementation']]}
             sources = file_closure(expected)
             if sources != sorted(expected.values(), key=lambda r: r['path']):
                 raise AuthorityError('Source or runtime changed during invocation')
@@ -484,21 +568,28 @@ class MatrixPackage:
             current().register_execution(self.KIND, root, execution_identity)
         return self.verify_publication(path, expected_sha256=sha)
 
-    def invoke(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, use_rep=None, parameter_selection=None):
+    def invoke(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, use_rep=None, parameter_selection=None,
+               gene_activity=None, cell_subset=None, input_orientation=None):
         return self.execute({k: v for k, v in locals().items() if k != "self" and v is not None})
 
     def invoke_signac(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, second_path=None, second_sha256=None, second_count_slot=None):
+        return self.execute({k: v for k, v in locals().items() if k != 'self' and v is not None})
+
+    def invoke_episcanpy(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None,
+                         matrix_semantics=None, use_rep=None, parameter_selection=None, gene_anno_path=None,
+                         gene_anno_sha256=None, species=None, assembly=None, gene_activity=None, cell_subset=None, input_orientation=None):
         return self.execute({k: v for k, v in locals().items() if k != 'self' and v is not None})
 
     def invoke_snapatac2(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, use_rep=None,
                         matrix_semantics=None, chrom_sizes_path=None, chrom_sizes_sha256=None, gene_anno_path=None,
                         gene_anno_sha256=None, peaks_path=None, peaks_sha256=None, whitelist_path=None,
                         whitelist_sha256=None, species=None, assembly=None, fragment_order=None, counting_strategy=None,
-                        qc_thresholds=None, parameter_selection=None):
+                        qc_thresholds=None, parameter_selection=None, gene_activity=None, cell_subset=None, input_orientation=None):
         return self.execute({k: v for k, v in locals().items() if k != 'self' and v is not None})
 
 
 EPISCANPY = MatrixPackage('episcanpy', '0.4.0', 'episcanpy-0.4.0', {
+    'tl.geneactivity': ('key_added', 'upstream', 'feature_type', 'annotation', 'layer_name', 'raw', 'copy'),
     'tl.pca': ('n_comps', 'zero_center', 'svd_solver', 'random_state', 'return_info', 'use_highly_variable', 'dtype', 'copy', 'chunked', 'chunk_size'),
     'pp.neighbors': ('n_neighbors', 'n_pcs', 'use_rep', 'knn', 'random_state', 'method', 'metric', 'metric_kwds', 'copy'),
     'tl.dpt': ('n_dcs', 'n_branchings', 'min_group_size', 'allow_kendall_tau_shift', 'neighbors_key', 'copy'),
@@ -515,6 +606,11 @@ EPISCANPY = MatrixPackage('episcanpy', '0.4.0', 'episcanpy-0.4.0', {
     'tl.hc': ('num_clusters',),
     'tl.rank_features': ('groupby', 'omic', 'use_raw', 'groups', 'reference', 'n_features', 'rankby_abs', 'key_added', 'copy', 'method', 'corr_method'),
 }, (
+    ('upstream', 'geneactivity upstream window in bp; native default 5000.'),
+    ('feature_type', 'geneactivity exact GTF feature type; native default gene.'),
+    ('annotation', 'geneactivity exact GTF source category; native default HAVANA, explicit null accepts all sources.'),
+    ('layer_name', 'geneactivity native argument; installed 0.4.0 ignores this and returns new X.'),
+    ('raw', 'geneactivity selects raw.X; native indexing still uses current var positions. Differing axes are recorded, not repaired or rejected by Agent.'),
     ('n_comps', 'Native n_comps for the selected function; omitted retains its installed default.'),
     ('zero_center', 'pca native centering; omitted retains its installed default.'),
     ('svd_solver', 'pca installed native solver.'),

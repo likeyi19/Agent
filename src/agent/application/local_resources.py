@@ -46,6 +46,7 @@ _GROUP_PORTS = (
     ('run_macs3', 'treatment2'),
     ('run_macs3', 'control2'),
     ('run_episcanpy', 'dataset'),
+    ('run_episcanpy', 'gene_anno'),
     ('run_snapatac2', 'dataset'),
     ('run_snapatac2', 'chrom_sizes'),
     ('run_snapatac2', 'gene_anno'),

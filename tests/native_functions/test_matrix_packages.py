@@ -51,13 +51,14 @@ def test_axes_measurement_and_managed_copy(source, tmp_path, storage):
     assert Path(source['input_path']).read_bytes() == before
 
 
-def test_layer_requires_own_measurement_and_conflicts_fail(source, tmp_path):
+def test_layer_measurement_and_supplied_declarations_remain_distinct(source, tmp_path):
     a = ad.read_h5ad(source['input_path']); a.layers['other'] = a.X.copy(); a.write_h5ad(source['input_path'])
     stage = tmp_path / 'stage'; stage.mkdir()
     _, effective = owner.prepare_input(dict(source, count_slot='other'), stage)
     assert effective['matrix_semantics'] == 'unspecified_retained_measurement'
-    with pytest.raises(ValueError, match='conflicts'):
-        owner.prepare_input(dict(source, matrix_semantics='insertion_counts'), stage)
+    retained, effective = owner.prepare_input(dict(source, matrix_semantics='insertion_counts'), stage)
+    assert retained.uns['matrix_semantics'] == effective['matrix_semantics'] == 'peak_counts'
+    assert effective['_source_declarations']['matrix_semantics'] == 'peak_counts'
     a, effective = owner.prepare_input(dict(source, count_slot='other', matrix_semantics='insertion_counts'), stage)
     assert effective['count_slot'] == 'layers/other' and a.uns['matrix_semantics'] == 'insertion_counts'
 

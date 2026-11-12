@@ -28,8 +28,10 @@ def returned_data(result):
         return result.to_numpy()
     if isinstance(result, (pd.DataFrame, np.ndarray)) or sparse.issparse(result):
         return result
-    if type(result) is dict:
-        return {str(k): returned_data(v) for k, v in result.items()}
+    if isinstance(result, Mapping):
+        if any(not isinstance(k, str) for k in result):
+            raise TypeError('Native return mapping requires string keys for faithful HDF5 publication')
+        return {k: returned_data(v) for k, v in result.items()}
     if isinstance(result, (list, tuple)):
         return {str(i): returned_data(v) for i, v in enumerate(result)}
     if result is None or isinstance(result, (str, bool, int, float, np.generic)):
@@ -67,6 +69,20 @@ def main(request_path):
         from native_clustering import invoke, valid_graphs, graph_record
         from cell_result import grouping_key
         function = functions(package)[name]
+        activity = package == 'episcanpy' and name == 'tl.geneactivity'
+        call_kwargs = kwargs
+        activity_source = None
+        if activity:
+            from native_gene_activity import source_metadata
+            implementation = Path(inspect.getsourcefile(function))
+            activity_implementation = dict(path=str(implementation.resolve()),
+                sha256=hashlib.sha256(implementation.read_bytes()).hexdigest(), size_bytes=implementation.stat().st_size)
+            activity_source = source_metadata(stage / 'input.h5ad', req['activity_inputs'],
+                slot='raw.X' if kwargs.get('raw') else req['activity_inputs'].get('count_slot', 'X'))
+            if kwargs.get('raw'):
+                activity_source['raw_current_features_equal'] = (
+                    a.raw is not None and a.raw.var_names.tolist() == a.var_names.tolist())
+            call_kwargs = dict(kwargs, gtf_file=req['gene_anno_path'])
         graphs = valid_graphs(a, req.get('graph_inputs', []))
         # A positional marker follows native subsetting, including duplicate labels.
         marker = None
@@ -89,7 +105,7 @@ def main(request_path):
                 adaptation = dict(slot='obsm.' + key, source_dtype='float32', execution_dtype='float64',
                     conversion='lossless widening for native KD-tree FFI; original representation restored')
         try:
-            result, selection = invoke(function, a, package, name, kwargs,
+            result, selection = invoke(function, a, package, name, call_kwargs,
                                        req.get('parameter_selection'), graphs)
         finally:
             if restored_rep is not None:
@@ -145,6 +161,9 @@ def main(request_path):
             elif name == 'pp.knn': slots += ['obsp.distances']
             elif name == 'pp.mnc_correct': slots += ['obsm.' + (kwargs.get('key_added') or kwargs.get('use_rep', 'X_spectral') + '_mnn')]
         layer_semantics = {}; measurement = None
+        if activity:
+            slots = ['X'] + ['var.' + key for key in a.var]
+            measurement = 'episcanpy_gene_domain_sum'
         if not independent and name in ('pp.binarize', 'pp.log1p', 'pp.scale', 'pp.normalize_total'):
             changed = not (package == 'episcanpy' and name == 'pp.normalize_total' and not kwargs.get('inplace', True))
             if changed:
@@ -178,6 +197,12 @@ def main(request_path):
             if p.default is not inspect.Parameter.empty}
         effective.update(kwargs)
         receipt['effective_parameters'] = effective
+        if activity:
+            from native_gene_activity import axis_identity
+            receipt['gene_activity_axes'] = axis_identity(stage / 'result.h5ad')
+            receipt['gene_activity_source'] = activity_source
+            receipt['inherited_slots'] = activity_source['slots']
+            receipt['implementation'] = [activity_implementation]
         if selection is not None:
             receipt['parameter_selection'] = selection
         if graphs:

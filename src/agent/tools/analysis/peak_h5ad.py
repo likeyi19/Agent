@@ -129,9 +129,9 @@ def inspect(source, *, private_paths=(), privacy=False, observation_fields=None,
                             size += len(text.encode('utf-8')) + 8
                             if privacy and item.name not in private_paths and (_PATH.search(text) or any(ord(c)<32 for c in text)):
                                 raise ValueError('Private locator or control character in H5AD metadata')
-                elif item.dtype.kind in 'biuf':
+                elif item.dtype.kind in 'biufc':
                     size += (item.size or 0) * item.dtype.itemsize
-                elif item.dtype.names and item.ndim == 1 and len(item.dtype.names) <= 128:
+                elif item.dtype.names and item.ndim == 1:
                     # AnnData rank statistics use flat record arrays with one
                     # numeric/string field per group. No references, nested
                     # objects or variable-length numeric arrays are admitted.
@@ -139,7 +139,7 @@ def inspect(source, *, private_paths=(), privacy=False, observation_fields=None,
                         dtype = item.dtype.fields[field][0]
                         if privacy and _PATH.search(field):
                             raise ValueError('Private locator in H5AD record field')
-                        if dtype.kind in 'biuf':
+                        if dtype.kind in 'biufc':
                             size += item.size * dtype.itemsize
                         elif h5py.check_string_dtype(dtype) is not None:
                             for text in record_strings(item, field):

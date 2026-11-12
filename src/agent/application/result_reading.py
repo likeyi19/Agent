@@ -196,7 +196,8 @@ def _column(sessions, run, step, selected, *, associate=False):
         own = files.get('result')
         if own is not None:
             from agent.tools.analysis.categorical import axis, require_same_cells
-            require_same_cells(ids, axis(own['path'], own['sha256']))
+            require_same_cells(ids, axis(own['path'], own['sha256']),
+                left_source=file['sha256'], right_source=own['sha256'])
     return ids, values, identity
 
 
@@ -283,7 +284,7 @@ def cell_overlay(sessions, coordinate, categories, field):
             **({'neighbors_identity_sha256': other_identity['neighbors_identity_sha256']}
                if other_identity.get('neighbors_identity_sha256') is not None else {}))
     basis = qualified_sources(identity, other_identity)
-    owner.require_same_cells(ids, other_ids)
+    owner.require_same_cells(ids, other_ids, left_source=identity['artifact_sha256'], right_source=other_identity['artifact_sha256'])
     from .dialogue_evidence import _unsafe_fact_value
     if _unsafe_fact_value(labels.tolist()):
         raise ValueError('Selected labels are ineligible for public figure delivery.')
@@ -503,7 +504,8 @@ def read(sessions, state, run, step, request):
         except ValueError as exc:
             raise _Unavailable('categorical_source_mismatch') from exc
         try:
-            value = owner.association(left_ids, left, right_ids, right, offset=request.offset, limit=request.limit)
+            value = owner.association(left_ids, left, right_ids, right, offset=request.offset, limit=request.limit,
+                left_source=left_source['artifact_sha256'], right_source=right_source['artifact_sha256'])
         except ValueError as exc:
             raise _Unavailable('categorical_axis_mismatch') from exc
         sources.append(right_source)

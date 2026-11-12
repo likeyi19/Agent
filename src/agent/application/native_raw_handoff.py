@@ -212,7 +212,7 @@ def configured_inputs(choice, tool):
     values = {}
     if row is not None:
         for port,component in row['components'].items():
-            if tool == 'run_snapatac2' and port in PORTS:
+            if (tool == 'run_snapatac2' and port in PORTS) or (tool == 'run_episcanpy' and port == 'gene_anno'):
                 path,sha,_ = PORTS[port]
                 values.update({path:component['path'],sha:component['sha256']})
             elif tool == 'run_chromap' and port in ('reference','whitelist'):
@@ -504,10 +504,11 @@ def bind_plan(plan, receipt, *, bindings=None):
     steps = []
     for step in plan.steps:
         args = dict(step.arguments)
-        if step.tool_name != 'run_snapatac2':
+        if step.tool_name not in ('run_snapatac2', 'run_episcanpy'):
             steps.append(step); continue
         function = args.get('function_name')
-        for port in APPLIES.get(function, ()):
+        applies = APPLIES if step.tool_name == 'run_snapatac2' else {'tl.geneactivity': ('gene_anno',)}
+        for port in applies.get(function, ()):
             if port == 'whitelist': continue  # Optional native input; never auto cell calling.
             path_key,sha_key,_ = PORTS[port]
             # An explicit native dictionary is already the function's input.

@@ -1,5 +1,6 @@
 """Package-level native matrix interfaces using the existing typed Registry."""
 from pathlib import Path
+from collections.abc import Mapping
 from agent.tools.analysis import native_matrix
 
 
@@ -39,6 +40,19 @@ def tool_spec(owner):
         matrix_semantics=arg((str,), 'Optional actual source measurement; no declaration is required for native invocation.',
             scientific_parameter=True, conversational_exact_string=True))
     if owner.package in ('snapatac2', 'scanpy', 'episcanpy'):
+        optional['gene_activity'] = arg((bool,),
+            'Explicitly identify existing Gene Activity/Gene Score in selected X/layer; no reconstruction or normalization. '
+            'Unknown construction stays unknown; uploaded uns metadata is not accepted execution authority.',
+            scientific_parameter=True)
+        optional['cell_subset'] = arg((Mapping,),
+            'Internal native input adaptation for annotation-owned populations. On an exactly bound source, '
+            'groupby/groups determines membership; positions may also be supplied. The owner captures source '
+            'checksum, positions and cell IDs, verifying any supplied assertions. Do not ask researchers for '
+            'these provenance fields. Sliced global graphs/coordinates remain inherited.',
+            scientific_parameter=True)
+        optional['input_orientation'] = arg((str,),
+            'Only an explicit features_by_cells declaration transposes the task-local AnnData before source-slot/cell selection.',
+            choices=('cells_by_features', 'features_by_cells'), scientific_parameter=True)
         optional['parameter_selection'] = arg((str,),
             'AI Research automatically selects omitted eligible clustering parameters by bounded ASW after method selection. '
             'Use native_defaults only when the researcher requests native defaults; asw requests bounded selection. '
@@ -63,7 +77,7 @@ def tool_spec(owner):
             'Explicit native calls omit this choice and retain native defaults.',
             choices=('otsu',), scientific_parameter=True, conversational_choice=True, planner_choice=True)
         optional['counting_strategy'] = arg((str,),
-            'Native pp.make_peak_matrix/pp.add_tile_matrix counting strategy. For research tasks select a representation compatible '
+            'Native pp.make_peak_matrix/pp.add_tile_matrix/pp.make_gene_matrix counting strategy. For research tasks select a representation compatible '
             'with the current objective and stated downstream method: fragment gives fragment-body overlaps, '
             'insertion gives endpoints, paired-insertion gives paired endpoints. MAESTRO region-count annotation '
             'accepts fragment counts, not insertion counts. Preserve explicit kwargs; for explicit native calls '
@@ -80,6 +94,15 @@ def tool_spec(owner):
             optional[path] = arg((str, Path), description, artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT)
             optional[sha] = arg((str,), 'Exact captured ' + port + ' checksum.')
             raw_fields.update((path, sha))
+        for key in ('species', 'assembly'):
+            optional[key] = arg((str,), 'Supplied source ' + key + '; no inferred reference correspondence.',
+                scientific_parameter=True, conversational_exact_string=True)
+    if owner.package == 'episcanpy':
+        from agent.tools.analysis.snapatac_raw import PORTS
+        path, sha, description = PORTS['gene_anno']
+        optional[path] = arg((str, Path), description, artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT)
+        optional[sha] = arg((str,), 'Exact captured gene annotation checksum.')
+        raw_fields.update((path, sha))
         for key in ('species', 'assembly'):
             optional[key] = arg((str,), 'Supplied source ' + key + '; no inferred reference correspondence.',
                 scientific_parameter=True, conversational_exact_string=True)
@@ -108,6 +131,13 @@ def tool_spec(owner):
         ports.append(Consumer('second', (member('dataset', 'second_path'),), False,
             request_sources=(request('second_path', rm('dataset', 'second_path')),),
             accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1', 'native_matrix_h5ad.v1')))
+    if owner.package == 'episcanpy':
+        from .native_parameters import input_name
+        ports.append(Consumer('gene_anno', (member('path', 'gene_anno_path'), member('sha256', 'gene_anno_sha256')), False,
+            request_sources=(request('gene_anno_path', rm('path', 'gene_anno_path'), rm('sha256', 'gene_anno_sha256')),
+                request(input_name(owner.TOOL, 'tl.geneactivity', 'gene_anno_path'),
+                    rm('path', input_name(owner.TOOL, 'tl.geneactivity', 'gene_anno_path')),
+                    rm('sha256', input_name(owner.TOOL, 'tl.geneactivity', 'gene_anno_sha256'))))))
     pub = owner.publication
     raw_guidance = (
         'Native raw functions: pp.make_fragment_file consumes BAM and produces fragments. pp.import_fragments '
@@ -150,7 +180,17 @@ def tool_spec(owner):
         'count-matrix reduction to an embedding-only H5AD. '
         'Preserve supplied barcode/coordinate history and declared source/reference species/assembly. '
         'Use optional native reference ports only for the function that consumes them. '
-    ) if owner.package == 'snapatac2' else 'No genome is required for these matrix functions. '
+        'pp.make_gene_matrix consumes native fragment-backed H5AD and compatible gene_anno GTF/GFF, '
+        'returning a new cell-by-gene/transcript H5AD; retain the accepted fragment source. '
+        'Explicit use_x=true aggregates the existing region values, not reconstructed fragments. '
+    ) if owner.package == 'snapatac2' else (
+        'tl.geneactivity requires compatible GTF gene_anno and genomic peak coordinate var_names. '
+        'It sums supplied peak values into a new gene/transcript X with native dense intermediates/output; '
+        'binary accessibility and peak counts remain different measurements. '
+        'Native default annotation=HAVANA selects that GTF source; explicit annotation=null accepts all sources. '
+        'Copied graphs and embeddings remain source-derived. No implicit normalization or binarization. '
+        'Other matrix functions need no genome. '
+    ) if owner.package == 'episcanpy' else 'No genome is required for these matrix functions. '
     notes = tuple(sentence + '.' for sentence in raw_guidance.strip().rstrip('.').split('. '))
     return ToolSpec(native_functions=NativeFunctionCatalog(owner.package, tuple((name, tuple(members)) for name, members in owner.FUNCTIONS.items()), parameter_metadata=owner.parameter_metadata),name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
         scientific_delivery=delivery_spec(owner, 'scientific_native_result', h5ad_roles=('result.h5ad',)),

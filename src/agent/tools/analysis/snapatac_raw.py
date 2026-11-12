@@ -27,16 +27,19 @@ FUNCTIONS = {
         'counting_strategy', 'value_type', 'summary_type', 'inplace', 'n_jobs'),
     'pp.make_peak_matrix': ('chunk_size', 'use_x', 'min_frag_size', 'max_frag_size', 'counting_strategy',
         'value_type', 'summary_type', 'use_rep', 'inplace'),
+    'pp.make_gene_matrix': ('inplace', 'backend', 'chunk_size', 'use_x', 'id_type', 'upstream', 'downstream',
+        'include_gene_body', 'transcript_name_key', 'transcript_id_key', 'gene_name_key', 'gene_id_key',
+        'min_frag_size', 'max_frag_size', 'counting_strategy'),
 }
 PORTS = {
     'chrom_sizes': ('chrom_sizes_path', 'chrom_sizes_sha256', 'FAI or two-column chromosome sizes used by native fragment import.'),
-    'gene_anno': ('gene_anno_path', 'gene_anno_sha256', 'GTF/GFF annotation used by native TSS enrichment.'),
+    'gene_anno': ('gene_anno_path', 'gene_anno_sha256', 'Compatible GTF/GFF annotation for the selected native function (epiScanpy requires GTF).'),
     'peaks': ('peaks_path', 'peaks_sha256', 'BED of the exact requested peak/cCRE/region features, in source coordinates.'),
     'whitelist': ('whitelist_path', 'whitelist_sha256', 'Optional barcode whitelist for native import; no implicit cell calling.'),
 }
-REQUIRED = {'pp.import_fragments': ('chrom_sizes',), 'metrics.tsse': ('gene_anno',)}
+REQUIRED = {'pp.import_fragments': ('chrom_sizes',), 'metrics.tsse': ('gene_anno',), 'pp.make_gene_matrix': ('gene_anno',)}
 APPLIES = {'pp.import_fragments': ('chrom_sizes', 'whitelist'), 'metrics.tsse': ('gene_anno',),
-           'pp.make_peak_matrix': ('peaks',)}
+           'pp.make_peak_matrix': ('peaks',), 'pp.make_gene_matrix': ('gene_anno',)}
 RAW_FILES = {
     'fragments.tsv.gz': ('Native BAM-derived fragments; exact method and support semantics in metadata', 'application/gzip'),
     'fragments.tsv': ('Native BAM-derived fragments; uncompressed native output', 'text/tab-separated-values'),
@@ -137,7 +140,7 @@ def execute(owner, args, execution_identity):
                     raise AuthorityError('Native filtering changed ordered source cell identities')
             elif cells != prior_cells:
                 raise AuthorityError('Native function changed ordered source cell identities')
-            if name not in ('pp.make_peak_matrix', 'pp.add_tile_matrix') and features != prior_features:
+            if name not in ('pp.make_peak_matrix', 'pp.add_tile_matrix', 'pp.make_gene_matrix') and features != prior_features:
                 raise AuthorityError('Native QC/filtering changed feature identities')
         source = sources[0]
         summary = dict(status='success', contract_version=owner.CONTRACT,
@@ -149,9 +152,13 @@ def execute(owner, args, execution_identity):
             source_identity=dict(sha256=source['sha256'], size_bytes=source['size_bytes'],
                 references=[dict(role=port, sha256=next(p['sha256'] for p in sources if p['path'] == args[path]))
                     for port, (path, _, _) in PORTS.items() if args.get(path)],
-                declarations={key: args[key] for key in ('species', 'assembly', 'matrix_semantics') if key in args}),
+                declarations=receipt.get('source_declarations', {}),
+                supplied_declarations={key: args[key] for key in ('species', 'assembly', 'matrix_semantics') if key in args}),
             software_versions=receipt['versions'], native_output_type=receipt['native_output_type'],
             result_slots=receipt['result_slots'], limitations=LIMITATIONS)
+        if name == 'pp.make_gene_matrix':
+            from .native_gene_activity import publish_description
+            publish_description(stage / payload, args, receipt, summary, source)
         if args.get('qc_thresholds') is not None:
             summary['parameters']['qc_thresholds'] = args['qc_thresholds']
             if 'threshold_selection' in receipt:

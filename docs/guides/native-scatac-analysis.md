@@ -166,3 +166,158 @@ and the [selection acceptance report](../../../agent-data/acceptance/scientific-
 
 The [consolidation report](../../../agent-data/acceptance/scientific-execution-consolidation-2026-11-11/REPORT.md)
 records the audit, bounded native evidence and remaining limitations.
+
+## Native Gene Activity and exact populations (ICTA-2)
+
+AI Research exposes two native constructors through the existing matrix adapters.
+They publish independent cells × genes/transcripts H5AD files through the ordinary
+`dataset` port (`native_matrix_h5ad.v1`), with exact source bytes and ordered cells.
+Neither constructor normalizes, binarizes or relabels the supplied measurement.
+
+- `run_snapatac2(function_name='pp.make_gene_matrix')` consumes the accepted native
+  fragment-backed H5AD and a compatible managed `gene_anno_path` / checksum GTF or
+  GFF. Fragment input first uses the existing native import. Defaults are
+  `id_type='gene'`, upstream 2,000 bp, downstream 0, whole gene body, and
+  `counting_strategy='paired-insertion'`. Native fragment/body, insertion/end-point
+  and paired-insertion counts remain distinct. Explicit `use_x=True` aggregates
+  existing region values and records their original measurement. `inplace=True`
+  mutates only the task-local copy; otherwise the adapter binds native `file` to
+  the managed H5AD destination. The installed `backend` argument is supported.
+  Arbitrary output-file kwargs are not accepted. Keep the accepted fragment source:
+  a new native gene matrix need not contain fragment storage. Native feature names
+  and attributes are preserved; absent gene IDs are not reconstructed from names.
+- `run_episcanpy(function_name='tl.geneactivity')` consumes ordinary peak H5AD and
+  a compatible managed GTF on the same `gene_anno` port. Native `var_names` parsing
+  accepts `chr:start-end` and `chr_start_end`. It sums the supplied peak values
+  overlapping native gene domains, using upstream 5,000 bp by default. Binary
+  accessibility therefore produces sums of accessible features, not fragment
+  counts. The installed default `annotation='HAVANA'` filters GTF source records;
+  explicit `annotation=None` accepts all sources. `feature_type` is passed unchanged.
+  The native coordinate conventions and chromosome names are not corrected.
+  Only overlapping features are returned; duplicate symbols are preserved.
+  Missing gene/transcript IDs, unnamed indexes and native duplicate names are retained
+  as returned; they are not repaired or biologically qualified.
+
+The installed epiScanpy 0.4.0 implementation creates dense intermediates and output.
+It uses the existing isolated memory/time/cancellation boundary, with no alternative
+Agent calculation or added size cap. Empty overlap can fail inside native
+concatenation. `key_added`, `layer_name` and `copy` do not change its actual new-X
+return behavior. `raw=True` selects `.raw.X` even when a layer was selected as X.
+The native implementation indexes that matrix using current `var_names` positions.
+Different raw/current feature axes do not cause an Agent refusal: the receipt records
+ordered equality or inequality and the lack of independently verified correspondence.
+Actual missing-raw or out-of-range failures remain native failures. Independent raw
+measurement history stays unknown.
+
+All three routes expose `parameters.gene_activity.interface='gene-activity.v1'` in the
+existing native result. This compact description identifies X, actual feature type,
+ordered cell/feature and feature-attribute digests, native feature index name, original selected slot and
+measurement, declarations, known source history and inherited metadata slots.
+The enclosing result supplies construction method, effective native parameters,
+software versions, annotation checksum, source checksum and accepted publication
+identity when available. The same description accompanies the H5AD in
+`uns.agent_gene_activity`; that field alone grants no scientific authority.
+NativePublication and accepted Run/step bindings remain authoritative. Copied graphs,
+embeddings and metadata are explicitly source-derived, not new gene-space analyses.
+Unknown transformation history remains unknown. A retained construction description
+is not a claim that a later transformed X is still raw activity: consult the current
+`matrix_semantics` and exact native invocation/accepted ancestry.
+
+The third route is direct existing Gene Activity/Gene Score reuse. Pass
+`gene_activity=True` to the requested existing `run_scanpy`, `run_episcanpy` or
+SnapATAC2 **matrix** consumer. `count_slot='X'` (default) or an explicit layer
+selects the unchanged native input values. No annotation file, peaks, Agent-specific
+uns field, separate gene IDs, species or normalization declaration is required.
+Supplied `matrix_semantics` and source metadata retain their meaning; absent history
+stays unknown. This declaration identifies the selected input, not an independently
+verified construction. An uploaded `uns.agent_gene_activity` is source data only.
+Exact accepted source proofs carry the recorded construction through subsequent X
+consumers; they do not identify an arbitrary different layer as activity.
+
+For example, explicitly logarithmized Gene Activity with `obs['group']` can go
+straight to `run_scanpy(function_name='tl.rank_genes_groups', gene_activity=True,
+kwargs={'groupby': 'group', 'method': 't-test', 'use_raw': False})`. The same native
+Scanpy path consumes both constructor outputs. In the tiny qualification fixtures,
+`pp.log1p` was explicitly requested before marker testing; the adapter never inserts
+it. Native comparison results and warnings are retained. Gene Activity is not
+measured RNA expression and no universal marker cutoff or cell identity is inferred.
+
+Optional `cell_subset` is an internal input adaptation on those existing matrix
+consumers. For an annotation-owned cluster selection, the existing result binding
+supplies an accepted source with its grouping; the internal invocation supplies only
+`cell_subset={'groupby': 'leiden', 'groups': ['0']}`. The adapter derives the complete
+actual membership in source order. Researchers need not enter positions, cell IDs,
+checksums or arbitrary population labels. Registry metadata does not expose a
+conversational JSON cell-selection flow. This prepares ICTA-1 child invocations;
+biological branch decisions and hierarchy validation remain future work.
+
+The existing source binding and NativePublication retain accepted Run/step/publication
+identity. The adapter records the actual source checksum, ordered positions, cell
+identities and source-axis digests in the published execution parameters. Explicit low-level
+positions are also supported; supplied checksum/ID assertions must agree with that
+source. When grouping is supplied alongside positions, every selected cell must
+belong to the claimed groups. Complete membership is recorded descriptively, not
+required for every native operation. No `population` label is required.
+
+AnnData performs `a[positions, :].copy()`; the requested native operation consumes
+that exact selection and publishes its ordinary H5AD. Repeated positions retain
+repeated observations and native warnings, without deduplication or renaming. This
+does not qualify duplicate cells for future biological branches. Categorical readers
+preserve repeated positions; association within the same pinned artifact is positional.
+Cross-artifact readers that have only names cannot establish an unambiguous join for
+repeated IDs. The adapter and native publication/recovery preserve them faithfully.
+
+Original accessibility and activity sources must have an established exact cell
+relationship. In the execution fixture, accepted clustering retains original
+accessibility X, and its native activity construction retains the same ordered cells
+and grouping. The existing accepted-result bindings feed both ICTA-1 child Runs;
+the same group intent derives matching memberships with each source's own checksum,
+positions and distinct feature axis. No equal-size or barcode-based automatic
+correspondence is inferred. Features, X/layers and source semantics remain separate.
+Source files and accepted upstream publications remain unchanged.
+
+Sliced global graphs and coordinates remain inherited slots. Their accepted graph
+provenance is not carried as newly computed local graph provenance. Request native
+feature selection/reduction/neighbors/clustering explicitly for a local analysis;
+these transformations and ASW retain their existing owners. Explicit requests to use
+inherited slots still reach native functions. No minimum population threshold is
+added. Native numerical feasibility and failures remain authoritative.
+
+Default AnnData orientation is cells by features. Only explicit
+`input_orientation='features_by_cells'` invokes native AnnData transpose before slot
+and population selection; positions then refer to original var. Shape never selects
+orientation. This is not a general conversion interface. Raw SnapATAC2 constructors
+retain their existing raw input owner; these optional adaptations apply to matrix
+consumers.
+
+The ICTA-2B report records genuine registered marker calls, accepted PriorOutput
+reuse, source-bound subsets, Session restart and H5AD delivery for all three routes.
+Tiny synthetic fixtures qualify mechanics, not biological annotation accuracy or
+production-scale performance. ICTA-1 child lifecycle, direct Native Functions,
+MAESTRO annotation and UI remain unchanged. CellMarker matching, biological decisions
+and hierarchical annotation remain later phases.
+
+### Shared native invocation boundary (ICTA-2 engineering closeout)
+
+Registered native kwargs accept data-only strict JSON without arbitrary string,
+collection, nesting or payload-size caps in the matrix adapter. Callable and kwarg
+names remain registered; executable objects and nonfinite JSON literals remain
+unsupported. The existing isolated process controls memory and time. Sparse Scanpy
+`pp.scale(zero_center=True)` now reaches that installed function unchanged; native
+Scanpy owns any densification and the actual result or resource failure.
+
+Optional supplied declarations do not veto a general matrix invocation. The exact
+manifest retains supplied arguments; source identity records source declarations
+and supplied declarations separately. Existing source species/assembly and X
+measurement retain their stored meaning; no metadata disagreement establishes
+reference compatibility. Requested native transformations still describe their
+actual output measurement. Dedicated coordinate/reference qualification retains
+its existing contract and is not inferred from these declarations.
+
+The shared HDF5 inspector accepts ordinary complex numeric arrays and flat record
+arrays with more than 128 fields. Native publication, recovery and privacy export
+retain their exact values. External/virtual storage, unreviewed filters and unsafe
+encodings remain rejected; host-side storage/privacy budgets remain enforced.
+Native Mapping returns retain string keys without coercion; ambiguous nonstring
+keys and unsupported serialized objects fail with a technical publication error.
+No general Python object transport or scientific repair is introduced.

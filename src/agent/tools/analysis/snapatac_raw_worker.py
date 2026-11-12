@@ -69,6 +69,8 @@ def main(request_path):
         call = dict(kw); a = None; result = None; slots = []; measurement = inputs.get('matrix_semantics')
         declarations = {k: inputs[k] for k in ('species', 'assembly') if inputs.get(k) is not None}
         threshold_selection = None
+        activity_source = None
+        source_declarations = {}
         if inputs.get('qc_thresholds') == 'otsu' and name == 'pp.filter_cells':
             from skimage.filters import threshold_otsu
             implementation_paths.append(Path(inspect.getsourcefile(threshold_otsu)))
@@ -99,24 +101,34 @@ def main(request_path):
             for key in ('species', 'assembly'):
                 if key in a.uns:
                     existing = a.uns[key]
-                    if key in declarations and declarations[key] != existing:
-                        raise ValueError('Supplied ' + key + ' conflicts with the native source declaration')
+                    source_declarations[key] = existing
                     declarations[key] = existing
-            if name == 'metrics.tsse': call['gene_anno'] = inputs['gene_anno_path']
-            if name in ('pp.make_peak_matrix', 'pp.add_tile_matrix'):
+            if 'matrix_semantics' in a.uns:
+                source_declarations['matrix_semantics'] = a.uns['matrix_semantics']
+                measurement = source_declarations['matrix_semantics']
+            if name in ('metrics.tsse', 'pp.make_gene_matrix'): call['gene_anno'] = inputs['gene_anno_path']
+            if name in ('pp.make_peak_matrix', 'pp.add_tile_matrix', 'pp.make_gene_matrix'):
                 source_measurement = ('X_region_aggregation' if kw.get('use_x') else 'paired_fragments' if 'fragment_paired' in a.obsm
                     else 'single_end_insertions' if 'fragment_single' in a.obsm else 'native_base_values')
                 if inputs.get('peaks_path'): call['peak_file'] = inputs['peaks_path']
                 if not kw.get('inplace', name == 'pp.add_tile_matrix'): call['file'] = str(stage / 'matrix.h5ad')
+            if name == 'pp.make_gene_matrix':
+                from native_gene_activity import source_metadata
+                activity_source = source_metadata(inputs['input_path'], inputs,
+                    slot='X' if kw.get('use_x') else 'obsm.fragment_paired' if 'fragment_paired' in a.obsm else 'obsm.fragment_single')
+                if not kw.get('use_x'):
+                    activity_source['measurement'] = source_measurement
             if name == 'pp.filter_cells' and inputs.get('qc_thresholds') == 'otsu':
                 thresholds, threshold_selection = otsu_thresholds(a.obs, kw)
                 call.update(thresholds)
             result = fn(a, **call)
-            if name in ('pp.make_peak_matrix', 'pp.add_tile_matrix'):
+            if name in ('pp.make_peak_matrix', 'pp.add_tile_matrix', 'pp.make_gene_matrix'):
                 if result is not None:
                     a.close(); a = result
                 strategy = kw.get('counting_strategy', 'paired-insertion')
                 measurement = peak_measurement(source_measurement, strategy)
+                if name == 'pp.make_gene_matrix':
+                    measurement = ('snapatac2_gene_region_sum' if kw.get('use_x') else 'snapatac2_gene_' + measurement)
                 slots = ['X']
             elif name == 'metrics.tsse': slots = ['obs.tsse', 'uns.library_tsse', 'uns.frac_overlap_TSS', 'uns.TSS_profile']
             elif name == 'metrics.frag_size_distr': slots = ['uns.' + kw.get('add_key', 'frag_size_distr')]
@@ -167,7 +179,13 @@ def main(request_path):
                 for p in ('snapatac2', 'anndata', 'numpy', 'scipy', 'hdf5plugin')},
             native_signature=str(inspect.signature(fn)), native_output_type=native_type,
             function_source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(), result_slots=slots,
-            effective_parameters=effective, measurement=measurement, implementation=native_implementation)
+            effective_parameters=effective, measurement=measurement, source_declarations=source_declarations, implementation=native_implementation)
+        if activity_source is not None:
+            from native_gene_activity import axis_identity, source_metadata
+            receipt['gene_activity_axes'] = axis_identity(stage / 'result.h5ad')
+            receipt['gene_activity_source'] = activity_source
+            receipt['inherited_slots'] = sorted(set(activity_source['slots']) & set(
+                source_metadata(stage / 'result.h5ad', {})['slots']) - {'uns.matrix_semantics'})
         if threshold_selection is not None:
             receipt['threshold_selection'] = threshold_selection
             receipt['versions']['scikit-image'] = importlib.metadata.version('scikit-image')

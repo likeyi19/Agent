@@ -680,3 +680,17 @@ def test_finite_choice_dispatch_also_uses_existing_resource_answer():
         submission=dict(clarification_choice=dict(question_turn_id='question',handle='resource.exact')))
     answer=selected_answer(received,(question,))
     assert isinstance(answer,ResourceAnswer) and answer.pending=='@resources' and answer.choice=='resource.exact'
+
+
+@pytest.mark.parametrize('tool,function', [('run_snapatac2','pp.make_gene_matrix'), ('run_episcanpy','tl.geneactivity')])
+def test_gene_activity_uses_selected_managed_annotation_only(inputs,tool,function):
+    other=inputs.root/'other.gtf';other.write_text(inputs.gtf.read_text().replace('fixture','HAVANA'))
+    selected=inputs.component('selected-genes','gene_anno',other)
+    p=AgentPlan('activity','activity','Native gene activity',(
+        PlanStep('activity',tool,dict(function_name=function,input_path=str(inputs.source),output_dir=str(inputs.root/'activity'))),))
+    bound=bind_plan(p,receipt(inputs,(inputs.genes,selected),selected='selected-genes'))
+    assert bound.steps[0].arguments['gene_anno_path']==str(other)
+    assert bound.steps[0].arguments['gene_anno_sha256']==pin(other)['sha256']
+    assert 'chrom_sizes_path' not in bound.steps[0].arguments
+    with pytest.raises(ResourcePrerequisite): bind_plan(p,receipt(inputs,(inputs.genome,)))
+    with pytest.raises(ResourcePrerequisite): bind_plan(p,receipt(inputs,(inputs.genes,selected)))

@@ -16,13 +16,16 @@ READ_VERSION = 'categorical-observations.v1'
 
 
 def ordered_ids(index, *, source):
-    values = tuple(str(value) for value in index)
-    if not values or any(not value for value in values) or len(set(values)) != len(values):
-        raise ValueError(f'{source} requires nonempty unique cell identifiers.')
-    return values
+    # Names are labels on a positional axis, not necessarily unique join keys.
+    return tuple(str(value) for value in index)
 
 
-def require_same_cells(left, right):
+def require_same_cells(left, right, *, left_source=None, right_source=None):
+    if left_source is None or left_source != right_source:
+        if not left or not right or any(not value for value in (*left, *right)):
+            raise ValueError('Cross-artifact association requires nonempty cell identifiers.')
+        if len(set(left)) != len(left) or len(set(right)) != len(right):
+            raise ValueError('Cross-artifact association requires unique cell identifiers; repeated identifiers require the same pinned artifact for positional association.')
     if len(left) != len(right):
         raise ValueError('Scientific artifacts must contain identical cell counts.')
     if left != right:
@@ -30,7 +33,7 @@ def require_same_cells(left, right):
 
 
 def coordinates(path, sha, field='X_umap'):
-    """Read only a pinned two-dimensional UMAP and its unique ordered obs axis."""
+    """Read only a pinned two-dimensional UMAP and its exact ordered obs axis."""
     from agent.tools.analysis.marker_annotation import checked_file
     with h5py.File(checked_file(path, sha), 'r') as handle:
         from .peak_h5ad import inspect
@@ -123,8 +126,8 @@ def counts(series, *, offset=0, limit=8):
                 **_page(rows, offset, len(labels)))
 
 
-def association(left_ids, left, right_ids, right, *, offset=0, limit=8):
-    require_same_cells(left_ids, right_ids)
+def association(left_ids, left, right_ids, right, *, offset=0, limit=8, left_source=None, right_source=None):
+    require_same_cells(left_ids, right_ids, left_source=left_source, right_source=right_source)
     if len(left) != len(left_ids) or len(right) != len(right_ids):
         raise ValueError('Categorical vectors must match the exact cell axis.')
     a, al, _ = _labels(left); b, bl, _ = _labels(right)

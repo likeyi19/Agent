@@ -31,7 +31,7 @@ def test_exact_scientific_input_does_not_depend_on_coarse_context(context):
 
 def test_metadata_and_visualization_never_become_scientific_inputs():
     decision = Execute('run_scanpy', references=('g0',),
-        visualization=dict(coordinates='g0', labels='new', field='result:primary_annotation'))
+        visualization=dict(coordinates='g0', labels='new', field='result:cell_type_final'))
     assert 'input_results' not in _research_intent(interaction(), decision)
 
 

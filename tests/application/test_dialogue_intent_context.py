@@ -64,8 +64,8 @@ def test_annotation_subject_inventory_and_continuation(app):
         assert [c['id'] for c in subjects['candidates']]==['3','7'] and subjects['complete']
         assert {c['id'] for c in subjects['candidates']}=={'3','7'}
         return dict(question(subject='3'),kind='answer_scientific')
-    assert ask(app,'explain','What does cluster 3 show?',Model(decide,['primary_annotation'])).scientific
-    result=ask(app,'other','What about cluster 7?',Model(question('@focus','7',focus='continue'),['primary_annotation']))
+    assert ask(app,'explain','What does cluster 3 show?',Model(decide,['label'])).scientific
+    result=ask(app,'other','What about cluster 7?',Model(question('@focus','7',focus='continue'),['label']))
     assert result.scientific.claims[0].subject=='7'
 
 

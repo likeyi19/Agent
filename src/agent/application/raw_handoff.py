@@ -14,10 +14,9 @@ from .session_state import digest
 from .epizoo_handoff import EpiZooDeclaration
 
 
-_ANNOTATION_REFERENCE_MISSING = 'No deployed annotation reference matches the declared biological context. Clarify the species, assembly or tissue applicability when needed; otherwise the operator must provision a compatible gene/signature reference in the scientific resource library.'
 
 def _context_text(*values):
-    from agent.tools.analysis.marker_annotation import identifier
+    from agent.tools._file_identity import identifier
     for value in values:
         if value is not None:
             identifier(value)
@@ -145,32 +144,6 @@ class FragmentsDeclaration:
 
 
 @dataclass(frozen=True)
-class AnnotationUploads:
-    """Explicit file roles and declared provenance, never inferred from filenames."""
-    gene_source: str | None = None
-    signature_source: str | None = None
-    gene_provenance: str | None = None
-    gene_release: str | None = None
-    signature_provenance: str | None = None
-    signature_release: str | None = None
-    species: str | None = None
-    assembly: str | None = None
-    context: str | None = None
-    gene_namespace: str | None = None
-
-    def __post_init__(self):
-        from agent.tools.analysis.marker_annotation import identifier
-        for name, value in asdict(self).items():
-            if value is None:
-                continue
-            identifier(value)
-            if len(value) > 512 or name.endswith('_source') and re.fullmatch(r'source\.(?:[0-9]|1[0-5])', value) is None:
-                raise ValueError('Invalid uploaded annotation resource declaration.')
-        if self.gene_source is not None and self.gene_source == self.signature_source:
-            raise ValueError('Gene annotations and signatures require distinct files.')
-
-
-@dataclass(frozen=True)
 class AnnotationDeclaration:
     """Source history and biological context for the existing annotation owner."""
     source: str | None = None
@@ -181,16 +154,13 @@ class AnnotationDeclaration:
     context: str | None = None
     grouping_provenance: str | None = None
     resource: str | None = None
-    uploaded: AnnotationUploads | None = None
     groups_result: str | None = None
     grouping_strategy: str | None = None
 
     def __post_init__(self):
-        from agent.tools.analysis.marker_annotation import identifier
+        from agent.tools._file_identity import identifier
         if self.grouping_strategy not in (None, 'reuse_only', 'compute_if_needed'):
             raise ValueError('Invalid grouping strategy.')
-        if self.uploaded is not None and type(self.uploaded) is not AnnotationUploads:
-            raise ValueError('Invalid uploaded resource declarations.')
         for name in ('source', 'groups_source'):
             value = getattr(self, name)
             if value is not None and (type(value) is not str or re.fullmatch(r'source\.(?:[0-9]|1[0-5])', value) is None):
@@ -230,9 +200,7 @@ def source_handles(declared):
         from .epizoo_handoff import sources
         return sources(declared)
     if isinstance(declared, AnnotationDeclaration):
-        return [h for h in (declared.source, declared.groups_source,
-            *(getattr(declared.uploaded, k) for k in ('gene_source', 'signature_source')
-              if declared.uploaded is not None)) if h is not None]
+        return [h for h in (declared.source, declared.groups_source) if h is not None]
     if isinstance(declared, FragmentsDeclaration):
         return [h for h in (declared.source, declared.index_source, declared.feature_source, declared.genome_source, declared.genome_index_source) if h is not None]
     return ([declared.source] if declared.source else []) if isinstance(declared, BamDeclaration) else [m.source for m in declared.members]
@@ -246,7 +214,7 @@ def _field(interaction):
 def validate_downstream_annotation(value):
     """Biological declarations for planned counts; raw intake owns file roles."""
     if (type(value) is not AnnotationDeclaration or source_handles(value)
-            or value.groups_result is not None or value.uploaded is not None):
+            or value.groups_result is not None):
         raise ValueError('Raw-to-annotation declarations cannot replace planned count or grouping sources.')
 
 
@@ -266,13 +234,9 @@ def declaration(value, field='fastq'):
             raise ValueError('Invalid EpiZoo declaration shape.')
         return EpiZooDeclaration(**value)
     if field == 'annotation':
-        if type(value) is not dict or set(value) - {'uploaded', 'groups_result', 'grouping_strategy'} != set(AnnotationDeclaration.__dataclass_fields__) - {'uploaded', 'groups_result', 'grouping_strategy'}:
+        if type(value) is not dict or set(value) - {'groups_result', 'grouping_strategy'} != set(AnnotationDeclaration.__dataclass_fields__) - {'groups_result', 'grouping_strategy'}:
             raise ValueError('Invalid annotation declaration shape.')
         value = dict(value)
-        if value.get('uploaded') is not None:
-            if type(value['uploaded']) is not dict or set(value['uploaded']) != set(AnnotationUploads.__dataclass_fields__):
-                raise ValueError('Invalid uploaded annotation resource shape.')
-            value['uploaded'] = AnnotationUploads(**value['uploaded'])
         return AnnotationDeclaration(**value)
     if field == 'fragments':
         if type(value) is not dict or set(value) - {'resource_preference'} != set(FragmentsDeclaration.__dataclass_fields__) - {'resource_preference'}:
@@ -321,7 +285,6 @@ def merge(previous, additions, *, pending=False, unknown_fields=()):
         # never changes the original H5AD or another captured scientific input.
         values['genome_resource'] = additions.genome_resource
     if isinstance(previous, AnnotationDeclaration):
-        values['uploaded'] = previous.uploaded
         if pending and additions.groups_source is not None and previous.groups_result is not None:
             # A newly attached grouping can replace an unusable result choice;
             # the captured count source and original registrations stay intact.
@@ -330,20 +293,6 @@ def merge(previous, additions, *, pending=False, unknown_fields=()):
     for key in values.keys() - {'members'}:
         value = getattr(additions, key)
         if value is not None:
-            if key == 'uploaded':
-                old = asdict(previous.uploaded or AnnotationUploads())
-                for role in ('gene', 'signature'):
-                    supplied = getattr(value, role + '_source')
-                    if supplied is not None and supplied != old[role + '_source']:
-                        old[role + '_provenance'] = None
-                        old[role + '_release'] = None
-                for name, supplied in asdict(value).items():
-                    if supplied is not None:
-                        # Explicit uploaded reference corrections retain source
-                        # registrations and are recorded as new typed additions.
-                        old[name] = supplied
-                values[key] = AnnotationUploads(**old)
-                continue
             correctable = pending and (key in scientific_metadata_fields(previous)
                 or isinstance(previous, AnnotationDeclaration) and key == 'groups_result')
             if (key not in ('resource', 'genome_resource', 'resource_preference') and not correctable
@@ -372,8 +321,6 @@ def declaration_dict(value):
     if isinstance(value,EpiZooDeclaration):
         for key in ('chain_source','reference_species'):
             if result[key] is None: result.pop(key)
-    if isinstance(value, AnnotationDeclaration) and value.uploaded is None:
-        result.pop('uploaded')
     if isinstance(value, AnnotationDeclaration) and value.groups_result is None:
         result.pop('groups_result')
     if isinstance(value, AnnotationDeclaration) and value.grouping_strategy is None:
@@ -394,26 +341,10 @@ def schema(field='fastq'):
                 if choices else {'type': 'null'})
     identity = {'anyOf': [{'type': 'string', 'minLength': 1, 'maxLength': 256}, {'type': 'null'}]}
     if field == 'annotation':
-        from agent.tools.analysis.annotation_contract import EXTERNAL_SEMANTICS
         text = {'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]}
-        uploaded = _object({k: identity if k.endswith('_source') else
-            {'anyOf': [{'type': 'string', 'maxLength': 512}, {'type': 'null'}]}
-            for k in AnnotationUploads.__dataclass_fields__})
-        return _object(dict(source=identity,
-            groups_source=identity,
-            groups_result=identity,
-            **{k: text for k in ('species', 'assembly', 'grouping_provenance')},
-            context=dict(text, description='Interpret the user-supported tissue meaning using an exact compatible offered context when available: '
-                + 'see the captured annotation resource offers'
-                + '. Do not append demographic or health qualifiers to an equivalent offered tissue identifier. Preserve genuinely different tissue/context as a declaration; never select by availability alone.'),
-            grouping_strategy=optional(('reuse_only', 'compute_if_needed')),
-            measurement=dict(text, description=(
-                f'Use {EXTERNAL_SEMANTICS} for explicitly declared raw Cell Ranger ATAC '
-                'cut-site counts. Preserve other declared measurement types as text for '
-                'compatibility checking. Use fragment_counts for declared region fragment overlaps, peak_counts for raw peak counts, binary_accessibility for binary region presence; unknown history is null. Integer values, filenames '
-                'and resource availability do not establish counting history.')),
-            resource=identity,
-            uploaded={'anyOf': [uploaded, {'type': 'null'}]}))
+        return _object(dict(source=identity, groups_source=identity, groups_result=identity,
+            **{k:text for k in ('species','assembly','context','measurement','grouping_provenance')},
+            grouping_strategy=optional(('reuse_only','compute_if_needed')), resource=identity))
     if field == 'fragments':
         return _object(dict(source=identity,
             resource=identity,
@@ -455,8 +386,7 @@ def resources(input_sets, field='fastq'):
         from .epizoo_handoff import resources as epizoo_resources
         return epizoo_resources(input_sets)
     if field == 'annotation':
-        return tuple(s for s in input_sets if 'annotation_spec_path' in s.inputs()
-                     or {'qc_reference_manifest_path', 'qc_reference_manifest_sha256'} <= set(s.inputs()))
+        return ()  # CellMarker and native references are resolved by annotation_preparation.
     if field == 'fragments':
         return tuple(s for s in input_sets if s.fragments_companion)
     if field == 'bam':
@@ -501,8 +431,7 @@ def resource_evidence(input_sets, field):
         values = choice.inputs()
         try:
             if field == 'annotation':
-                from agent.tools.analysis.annotation_input import resource_base
-                result[choice.input_set_id] = resource_base(values)
+                result[choice.input_set_id] = None
                 continue
             if not values.get('reference_bundle_sha256'):
                 raise ValueError('A reference content pin is required.')
@@ -522,6 +451,8 @@ def resource_evidence(input_sets, field):
 def _resolve_resource(declared, choices, evidence, pinned=None):
     """Deterministic choice over owner-qualified contracts; no linguistic rules."""
     from agent.tools.data import scatac_reference as reference
+    if isinstance(declared, AnnotationDeclaration):
+        raise ValueError('Annotation resources belong to the selected production preparation owner.')
     if set(evidence) != {s.input_set_id for s in choices}:
         raise ValueError('Resource observations do not match the captured catalog.')
     candidates, descriptions, remedies = [], {}, {}
@@ -529,33 +460,6 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
         raw = evidence[choice.input_set_id]
         if raw is None:
             descriptions[choice.input_set_id] = 'its pinned reference is unavailable or invalid'
-            continue
-        if isinstance(declared, AnnotationDeclaration):
-            from agent.tools.analysis.annotation_contract import EXTERNAL_SPEC, EXTERNAL_PRIMARY, direct
-            uploaded = declared.uploaded
-            scope_only = 'schema' not in raw and 'contig_scope' in raw
-            permitted = {'annotation_spec_path', 'annotation_spec_sha256', 'annotation_method', 'count_slot',
-                         'qc_reference_manifest_path', 'qc_reference_manifest_sha256'}
-            keys = ('species', 'assembly') if uploaded is not None and uploaded.signature_source else ('species', 'assembly', 'context')
-            compatible = ((scope_only and uploaded is not None or raw.get('schema') == EXTERNAL_SPEC and direct(raw.get('method')))
-                and (scope_only or not set(choice.inputs()) - permitted)
-                and direct(choice.inputs().get('annotation_method', EXTERNAL_PRIMARY))
-                and all(getattr(declared, key) is None or getattr(declared, key) == raw.get(key)
-                        for key in (('species', 'assembly') if scope_only else keys)))
-            conflicts = [key for key in (('species', 'assembly') if scope_only else keys)
-                         if getattr(declared, key) is not None and getattr(declared, key) != raw.get(key)]
-            if (not scope_only and (raw.get('schema') != EXTERNAL_SPEC or not direct(raw.get('method')))
-                    or not direct(choice.inputs().get('annotation_method', EXTERNAL_PRIMARY))):
-                conflicts.append('method')
-            descriptions[choice.input_set_id] = ('compatible annotation reference' if compatible else
-                'incompatible annotation ' + (', '.join(conflicts) if conflicts else 'resource contract'))
-            if 'measurement' in conflicts:
-                remedies[choice.input_set_id] = ''
-                descriptions[choice.input_set_id] += ('. Replacing a reference does not change the input measurement. '
-                    'Supply genuinely compatible counts or choose a method supporting the original measurement; '
-                    'do not relabel or reinterpret the counts')
-            if compatible:
-                candidates.append(choice)
             continue
         if isinstance(declared, FragmentsDeclaration) and raw.get('contract_version') == 'regulatory-feature-reference.v1':
             from agent.tools.data.regulatory_feature_reference import validate_regulatory_feature_reference
@@ -583,21 +487,11 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
             remedy = remedies.get(selected.input_set_id, ' Supply a corrected resource or explicitly choose an alternative.')
             return [f'Cannot use {selected.label}: {descriptions[selected.input_set_id]}.' + remedy], None
         return [], selected
-    if (not candidates and isinstance(declared, AnnotationDeclaration) and declared.uploaded is not None
-            and declared.uploaded.gene_source is not None and declared.uploaded.signature_source is not None):
-        # Explicit complete scientific resources need no unrelated QC InputSet.
-        return [], None
     # An available reference cannot establish the sample's species/alignment history.
-    if (declared.species is None or isinstance(declared, (BamDeclaration, FragmentsDeclaration)) and declared.assembly is None
-            or isinstance(declared, AnnotationDeclaration) and any(getattr(declared, k) is None
-                for k in ('assembly', 'measurement', 'context'))):
+    if (declared.species is None or isinstance(declared, (BamDeclaration, FragmentsDeclaration)) and declared.assembly is None):
         return [], None
     if not candidates:
-        if isinstance(declared, AnnotationDeclaration):
-            details = '; '.join(f'{s.label}: {descriptions[s.input_set_id]}' for s in choices)
-            return [_ANNOTATION_REFERENCE_MISSING + (' Available resources: ' + details + '.' if details else '')], None
-        needed = ('A qualified annotation gene/marker resource compatible with species, assembly, measurement and tissue context'
-                  if isinstance(declared, AnnotationDeclaration) else 'A qualified fragments reference compatible with the declared species and assembly'
+        needed = ('A qualified fragments reference compatible with the declared species and assembly'
                   if isinstance(declared, FragmentsDeclaration) else 'A qualified BAM reference compatible with the declared species and assembly'
                   if isinstance(declared, (BamDeclaration, FragmentsDeclaration)) else
                   'A qualified FASTQ reference and barcode whitelist compatible with the declared species')
@@ -608,19 +502,9 @@ def _resolve_resource(declared, choices, evidence, pinned=None):
     # Stable ID order is an explicit tie policy for these equivalent aliases only.
     def equivalence(choice):
         values = choice.inputs()
-        if isinstance(declared, AnnotationDeclaration) and declared.uploaded is not None:
-            # Uploaded roles supersede only those dependencies. Two catalog
-            # entries with identical remaining dependencies are exact aliases.
-            raw = evidence[choice.input_set_id]
-            retained = {k: raw.get(k) for k in ('species', 'assembly', 'contig_scope')}
-            for role in ('gene', 'signature'):
-                if getattr(declared.uploaded, role + '_source') is None:
-                    retained[role + '_resource'] = raw.get(role + '_resource')
-            retained['count_slot'] = values.get('count_slot')
-            return digest(retained)
         # The same pinned manifest at another locator is the same dependency.
         # All other scientific arguments and provenance remain significant.
-        values.pop('annotation_spec_path' if isinstance(declared, AnnotationDeclaration) else 'reference_bundle_path')
+        values.pop('reference_bundle_path')
         values.setdefault('species', evidence[choice.input_set_id]['species'])
         return digest(values), digest(_serialize(choice.fastq_whitelist))
     from .resource_continuation import distinct_choices
@@ -806,37 +690,7 @@ def _completion(interaction, origin, source, addition, arguments, rows, registry
         from .epizoo_handoff import requirements as epizoo_requirements
         declared, missing, selected = epizoo_requirements(binding, declared, resources(choices, field), evidence, source_evidence, pinned)
     elif field == 'annotation':
-        declared, values, missing = _annotation_requirements(binding, declared, values, source_evidence)
-        questions, selected = _resolve_resource(declared, resources(choices, field), evidence, pinned)
-        if (selected is not None and 'annotation_spec_path' in selected.inputs()
-                and 'count_slot' not in values and 'count_slot' in selected.inputs()):
-            values['count_slot'] = selected.inputs()['count_slot']
-            declared, values, missing = _annotation_requirements(binding, declared, values, source_evidence)
-        missing += questions
-        if declared.uploaded is not None:
-            from agent.tools.analysis.annotation_input import resource_specification
-            spec, problems = resource_specification(evidence[selected.input_set_id] if selected else None,
-                declared, binding.members)
-            missing += problems
-            if resource_observation is not None:
-                if (set(resource_observation) != {'specification_sha256', 'qualification', 'problem'}
-                        or resource_observation['specification_sha256'] != digest(spec)
-                        or type(resource_observation['problem']) is not str):
-                    raise ValueError('Uploaded reference observation changed its captured specification.')
-                qualification = resource_observation['qualification']
-                if not resource_observation['problem'] and (type(qualification) is not dict
-                        or set(qualification) not in (
-                            {'gene_sha256', 'signature_sha256', 'gene_count', 'primary_transcripts', 'candidate_count', 'interpretation'},
-                            {'gene_sha256', 'signature_sha256', 'gene_count', 'transcript_count', 'candidate_count', 'interpretation'})
-                        or any(qualification[role + '_sha256'] != spec[role + '_resource']['sha256'] for role in ('gene', 'signature'))
-                        or any(type(qualification[key]) is not int or qualification[key] <= 0
-                               for key in ('gene_count', 'candidate_count', 'primary_transcripts' if 'primary_transcripts' in qualification else 'transcript_count'))
-                        or qualification['interpretation'] != 'declared_provenance_and_applicability;not_independent_biological_validation'):
-                    raise ValueError('Invalid uploaded reference qualification observation.')
-                if resource_observation['problem'] and qualification is not None:
-                    raise ValueError('Failed resource qualification cannot carry a success observation.')
-                if resource_observation['problem']:
-                    missing.append(resource_observation['problem'])
+        raise ValueError('Annotation uses its current selected production preparation owner.')
     elif native and field in ('fastq', 'fragments', 'bam'):
         from .native_raw_handoff import requirements as native_requirements
         missing, selected = native_requirements(binding, declared, choices, evidence)
@@ -1164,7 +1018,7 @@ def validate(interaction, preceding):
             from .epizoo_handoff import validate_completion
             validate_completion(admitted, binding, declared, selected, values)
         elif field == 'annotation':
-            _validate_annotation_completion(admitted, binding, declared, selected, values)
+            raise ValueError('Annotation uses its current selected production preparation owner.')
         elif (admitted.get(field + '_context') or {}).get('adapter') in ('native-files.v1', 'native-inputs.v1'):
             from .native_raw_handoff import validate as validate_native
             validate_native(admitted, binding, declared, selected, values, field)
@@ -1242,131 +1096,10 @@ def validate(interaction, preceding):
         raise SessionError('Invalid task-scoped raw handoff.') from exc
 
 
-def _annotation_requirements(binding, declared, arguments, observation):
-    """Resolve exact source declarations; never classify groups by their names."""
-    from agent.tools.analysis import annotation_contract as c
-    values = dict(arguments)
-    missing = []
-    if any(int(h.split('.')[1]) >= len(binding.members) for h in source_handles(declared)):
-        raise ValueError('Annotation source is outside the captured attachments.')
-    if declared.source is None:
-        if observation is not None:
-            raise ValueError('Unexpected annotation source observation.')
-        return declared, values, ['Identify the uploaded peak-count H5AD.']
-    member = binding.members[int(declared.source.split('.')[1])]
-    if (not isinstance(observation, dict) or set(observation) - {
-            'accepted_groups', 'interface_version', 'group_projection_problem'} != {
-            'source_sha256', 'declarations', 'grouping_columns', 'qualified_groupings'}
-            or observation['source_sha256'] != member['source_sha256']):
-        raise ValueError('Annotation observation is not bound to the captured source.')
-    additions = {k: v for k, v in observation['declarations'].items() if k != 'count_slot'}
-    metadata_slot = observation['declarations'].get('count_slot', 'X')
-    selected_slot = values.get('count_slot', metadata_slot)
-    if observation.get('interface_version', 2) >= 3 and selected_slot != metadata_slot:
-        additions.pop('measurement', None)
-    declared = merge(declared, AnnotationDeclaration(**additions))
-    for key, question in (
-            ('species', 'Specify the source species.'), ('assembly', 'Specify the genome assembly.'),
-            ('measurement', 'Describe the actual region measurement: raw peak counts, fragment-overlap counts or binary accessibility.'),
-            ('context', 'Specify the tissue context for the marker resource.')):
-        if getattr(declared, key) is None:
-            missing.append(question)
-    missing.extend(c.input_problems(declared.species, declared.assembly, declared.measurement))
-    if 'count_slot' not in values and 'count_slot' in observation['declarations']:
-        values['count_slot'] = observation['declarations']['count_slot']
-    # Historical clarification text is immutable. Only old captured observations
-    # retain the retired mandatory-slot question; new owner defaults use X.
-    if 'count_slot' not in values and 'interface_version' not in observation:
-        missing.append('Identify the raw-count slot: X or layers/name.')
-    if observation.get('interface_version', 2) not in (2, 3, 4):
-        raise ValueError('Unsupported annotation handoff version.')
-    if declared.groups_result is not None:
-        offered = [r for r in observation.get('accepted_groups', ()) if r['handle'] == declared.groups_result]
-        if len(offered) != 1 or 'group_column' in values:
-            raise ValueError('Select one offered accepted clustering result without an obs-column override.')
-        declared = replace(declared, grouping_provenance='Accepted independent Leiden result ' + declared.groups_result)
-        if observation.get('group_projection_problem'):
-            missing.append(observation['group_projection_problem'])
-    elif declared.groups_source is not None:
-        if 'group_column' in values:
-            raise ValueError('Select an obs grouping column or an ordered group TSV, not both.')
-    elif 'group_column' not in values:
-        qualified = observation['qualified_groupings']
-        if len(qualified) == 1:
-            values['group_column'] = qualified[0]['column']
-            if declared.grouping_provenance is None:
-                declared = replace(declared, grouping_provenance=qualified[0]['provenance'])
-        elif observation.get('interface_version') == 4 and not qualified and declared.grouping_strategy != 'reuse_only':
-            # Planning owns computing missing groups. This is a prerequisite
-            # declaration, never a claim that clustering has already succeeded.
-            declared = replace(declared, grouping_provenance='Exact-source independent clustering selected by the scientific plan')
-        else:
-            columns = observation['grouping_columns']
-            missing.append('Choose the independently derived clustering column in obs'
-                + (': ' + ', '.join(columns) if columns else ', or attach an exact ordered cell_id/group TSV')
-                + '. Sample, batch and condition columns are not automatically treated as clusters.')
-    if 'group_column' in values:
-        if values['group_column'] not in observation['grouping_columns']:
-            missing.append('The selected obs column is absent or is not a valid complete grouping; it cannot be replaced automatically.')
-        for row in observation['qualified_groupings']:
-            if row['column'] == values['group_column'] and declared.grouping_provenance is None:
-                declared = replace(declared, grouping_provenance=row['provenance'])
-    if declared.grouping_provenance is None:
-        missing.append('Describe how the chosen groups were derived and whether they were independent of marker/signature inspection.')
-    return declared, values, missing
 
 
-def _historical_annotation_binding(candidates, declared, selected, arguments, pointer, projection=None):
-    from .local_resources import RegisteredInputGroup, group_role_inputs
-    from agent.orchestration.registry import build_default_tool_registry
-    from agent.tools.analysis.annotation_contract import EXTERNAL_PRIMARY, EXTERNAL_SEMANTICS, REGION_PRIMARY
-    roles = [dict(tool='annotate_scATAC_cell_types', port='source', source=declared.source)]
-    if declared.groups_source is not None:
-        roles.append(dict(tool='annotate_scATAC_cell_types', port='groups', source=declared.groups_source))
-    members = list(candidates.members)
-    if projection is not None:
-        if declared.groups_result != projection['selection']['handle']:
-            raise ValueError('Grouping projection differs from the explicit selection')
-        roles.append(dict(tool='annotate_scATAC_cell_types', port='groups', source=f'source.{len(members)}'))
-        members.append(projection['member'])
-    values = dict(arguments, annotation_method=EXTERNAL_PRIMARY if declared.measurement == EXTERNAL_SEMANTICS else REGION_PRIMARY,
-                  annotation_spec_path=pointer['path'], annotation_spec_sha256=pointer['sha256'])
-    bound = RegisteredInputGroup(members, values, roles,
-        resource_choice=None if selected is None else selected.resource_choice(), attachment_candidates=True)
-    return replace(bound, execution_inputs=group_role_inputs(bound, roles, build_default_tool_registry()))
 
 
-def _validate_annotation_completion(admitted, candidates, declared, selected, arguments):
-    """Replay the captured source/resource binding without scientific IO."""
-    from .session_state import sha
-    from agent.tools.analysis import annotation_contract as c
-    receipt = admitted['annotation_context']
-    if (set(receipt) != {'identity', 'specification', 'resource',
-                        *(['group_projection'] if declared.groups_result is not None else [])}
-            or receipt['identity'] != _context_identity(candidates, declared, selected)
-            or admitted['kind'] != 'execute' or admitted.get('operation') != 'plan'):
-        raise ValueError('Invalid annotation handoff receipt.')
-    from agent.tools.analysis.annotation_input import resource_specification
-    spec, problems = resource_specification(admitted['raw_resource_evidence'][selected.input_set_id] if selected else None, declared, candidates.members)
-    if problems or declared.uploaded is not None and (not admitted.get('annotation_resource_observation')
-            or not admitted['annotation_resource_observation']['qualification']
-            or admitted['annotation_resource_observation']['problem']):
-        raise ValueError('Missing uploaded resource qualification.')
-    pointer = receipt['resource']; path = Path(pointer['path'])
-    sha(pointer['sha256'])
-    if (receipt['specification'] != spec or set(pointer) != {'path', 'sha256'}
-            or not path.is_absolute() or '..' in path.parts or path.name != 'resources.json'
-            or path.parent.name != receipt['identity'] or path.parent.parent.name != 'annotation_handoffs'):
-        raise ValueError('Annotation resource derivation changed.')
-    import hashlib
-    if hashlib.sha256(c.matrix.canonical(spec)).hexdigest() != pointer['sha256']:
-        raise ValueError('Derived annotation resource digest changed.')
-    projection = receipt.get('group_projection')
-    if projection is not None and projection['selection'] not in admitted['annotation_source_evidence'].get('accepted_groups', ()):
-        raise ValueError('Grouping projection is outside captured accepted results')
-    bound = _historical_annotation_binding(candidates, declared, selected, arguments, pointer, projection)
-    if _serialize(admitted['inputs']) != _serialize(bound.execution_inputs) or admitted['registered_input'] != bound.attribution():
-        raise ValueError('Annotation binding changed.')
 
 
 def _candidate_view(interaction):

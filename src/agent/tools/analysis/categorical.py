@@ -34,7 +34,7 @@ def require_same_cells(left, right, *, left_source=None, right_source=None):
 
 def coordinates(path, sha, field='X_umap'):
     """Read only a pinned two-dimensional UMAP and its exact ordered obs axis."""
-    from agent.tools.analysis.marker_annotation import checked_file
+    from agent.tools._file_identity import checked_file
     with h5py.File(checked_file(path, sha), 'r') as handle:
         from .peak_h5ad import inspect
         inspect(handle, require_matrix=False, observation_fields=())
@@ -221,7 +221,7 @@ def selected_observations(handle, fields, *, max_logical_bytes=128 * 1024**2):
 
 
 def observations(path, sha, field):
-    from .marker_annotation import checked_file
+    from agent.tools._file_identity import checked_file
     path = checked_file(path, sha)
     with h5py.File(path, 'r') as handle:
         frame = selected_observations(handle, (field,))
@@ -234,7 +234,7 @@ def observations(path, sha, field):
 
 
 def axis(path, sha):
-    from .marker_annotation import checked_file
+    from agent.tools._file_identity import checked_file
     with h5py.File(checked_file(path, sha), 'r') as handle:
         from .peak_h5ad import inspect
         inspect(handle, require_matrix=False, observation_fields=())

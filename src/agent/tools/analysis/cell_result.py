@@ -33,7 +33,7 @@ def describe(tool, result):
         return None
     if tool == 'annotate_scATAC_cell_types':
         return dict(path_field='annotated_h5ad_path', sha_field='annotated_h5ad_sha256',
-                    coordinates=None, grouping=None, preserves_counts=True, input_argument='source_path')
+                    coordinates=None, grouping=None, preserves_counts=True, input_argument='input_path')
     package = tool.removeprefix('run_')
     if result.get('contract_version') != 'native-' + package + '-matrix.v1' or not result.get('matrix_path'):
         return None

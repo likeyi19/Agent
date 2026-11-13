@@ -82,7 +82,9 @@ def bind_output(store, registry, run_id, step_id, port_name):
     from .verification_authority import _accepted, _accepted_step
     state = store.load(run_id)
     if state.lifecycle_status is not RunLifecycleStatus.SUCCEEDED:
-        raise AuthorityError('Historical source run is not terminal successful.')
+        from .annotation_runs import allows_prerequisite
+        if not allows_prerequisite(store, run_id, step_id, _LOADING.get()):
+            raise AuthorityError('Historical source run is not terminal successful.')
     stored, _, _ = _accepted_step(store, run_id, step_id)
     port = source_port(registry, stored.tool_name, port_name)
     if any(stored.result.get(member.field_name) is None for member in port.members):

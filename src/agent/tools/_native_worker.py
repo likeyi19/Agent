@@ -55,18 +55,9 @@ def dispatch(operation, args):
         from agent.tools._native_process import run
         args['log_path'] = Path(args['log_path'])
         return run(**args)
-    if operation == 'annotation':
-        from agent.tools.analysis.scatac_annotation import execute_annotation
-        return execute_annotation(**args)
     if operation == 'annotation_observe':
         from agent.tools.analysis.annotation_input import observe
         return observe(**args)
-    if operation == 'annotation_resources':
-        from agent.tools.analysis.annotation_input import qualify_resources
-        return qualify_resources(**args)
-    if operation == 'annotation_verify':
-        from agent.tools.analysis.scatac_annotation import verify_annotation
-        return verify_annotation(**args)
     if operation == 'matrix':
         from agent.tools.analysis import native_matrix
         owner = {p.package: p for p in (native_matrix.SCANPY, native_matrix.EPISCANPY,

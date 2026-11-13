@@ -49,5 +49,5 @@ def test_researcher_summary_selects_only_existing_reviewed_facts():
         assert len(fields) == len(set(fields))
         assert set(fields) <= set(report_fact_fields(tool, dict.fromkeys(fields)))
         assert not any(f.endswith(('_path', '_sha256')) for f in fields)
-    assert {'assigned_cells', 'unassigned_cells', 'ambiguous_cells', 'groups_omitted',
-            'validation_state', 'group_summary'} <= set(RESULT_SUMMARY_FIELDS['annotate_scATAC_cell_types'])
+    assert {'population_summary', 'levels_reached', 'terminal_populations', 'branches_omitted',
+            'inherited_label_cells', 'branch_summary'} <= set(RESULT_SUMMARY_FIELDS['annotate_scATAC_cell_types'])

@@ -401,11 +401,11 @@ _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
             _ArtifactProjection("manifest_path", "sequence_evaluation_manifest_json", ("matched_observation_identity", "full_artifact_sha256"), digest_field="manifest_sha256"),
             _ArtifactProjection("metrics_path", "sequence_evaluation_metrics_json", ("compatible_measurement_metrics", "full_artifact_sha256"), digest_field="metrics_sha256"))),
     "annotate_scATAC_cell_types": _ToolProjection(
-        _ANNOTATION_FIELDS, _ANNOTATION_FACT_FIELDS, "annotate-scatac-cell-types-v1",
+        _ANNOTATION_FIELDS, _ANNOTATION_FACT_FIELDS, "hierarchical-annotation-v1",
         (_ArtifactProjection("manifest_path", "scatac_cell_type_annotation_manifest_json",
-            ("pinned_annotation_backend_replay", "accepted_matrix_authority_lineage", "exact_execution_receipt"), digest_field="manifest_sha256"),
+            ("native_child_completion", "accepted_source_authority_lineage", "exact_hierarchical_publication"), digest_field="manifest_sha256"),
          _ArtifactProjection("annotated_h5ad_path", "scatac_annotated_h5ad",
-            ("exact_canonical_matrix_preservation", "exact_primary_annotation_propagation", "full_artifact_sha256"), digest_field="annotated_h5ad_sha256")),
+            ("exact_canonical_matrix_preservation", "exact_hierarchical_annotation_propagation", "full_artifact_sha256"), digest_field="annotated_h5ad_sha256")),
     ),
     "adopt_scATAC_cell_by_ccre": _ToolProjection(
         _ADOPTED_MATRIX_FIELDS, _ADOPTED_MATRIX_FACT_FIELDS, "adopt-scatac-cell-by-ccre-v1",
@@ -1164,6 +1164,9 @@ def _prepare_evidence(
             field: _plain_json(step_result.result[field], f"{step.step_id}.{field}")
             for field in projection.fact_fields
         }
+        if step.tool_name == 'annotate_scATAC_cell_types':
+            from .annotation import method_facts
+            facts.update(_plain_json(method_facts(step_result.result), 'annotation_methods'))
         if step.tool_name == 'run_macs3' and 'result_files' in step_result.result:
             facts['result_files'] = _plain_json(step_result.result['result_files'], f'{step.step_id}.result_files')
         if step.tool_name == 'run_motifmatchr' and 'n_positions' in step_result.result:

@@ -68,6 +68,7 @@ def tool_spec(owner):
             conversational_choice=True, planner_choice=True)
     raw_fields = set()
     if owner.package == 'scanpy':
+        optional['group_column'] = arg((str,), 'Explicit source obs grouping for the existing Gene Activity projection; user-supplied, not an accepted clustering claim.', scientific_parameter=True)
         optional['grouping_path'] = arg((str, Path),
             'Accepted native grouping for rank_genes_groups on reused Gene Activity; exact common source ancestry required.',
             source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT)
@@ -83,8 +84,7 @@ def tool_spec(owner):
         optional['counting_strategy'] = arg((str,),
             'Native pp.make_peak_matrix/pp.add_tile_matrix/pp.make_gene_matrix counting strategy. For research tasks select a representation compatible '
             'with the current objective and stated downstream method: fragment gives fragment-body overlaps, '
-            'insertion gives endpoints, paired-insertion gives paired endpoints. MAESTRO region-count annotation '
-            'accepts fragment counts, not insertion counts. Preserve explicit kwargs; for explicit native calls '
+            'insertion gives endpoints, paired-insertion gives paired endpoints. Preserve explicit kwargs; for explicit native calls '
             'omit an unrequested choice and retain native defaults.',
             choices=('fragment', 'insertion', 'paired-insertion'), scientific_parameter=True,
             conversational_choice=True, planner_choice=True)
@@ -119,12 +119,13 @@ def tool_spec(owner):
     scalar = lambda k, **kw: scalar_port(owner.TOOL, tuple(owner.FUNCTIONS), k, **kw) if ({**required, **optional}[k].planning.scientific_parameter) else base_scalar(k, **kw)
     ports = [Consumer('dataset', (member('dataset', 'input_path'),), True,
         request_sources=(request('input_path', rm('dataset', 'input_path')),),
-        accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1', 'native_matrix_h5ad.v1', 'cell_embedding_h5ad.v1')
+        accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1', 'native_matrix_h5ad.v1', 'cell_embedding_h5ad.v1', 'hierarchical_annotation_h5ad.v1')
             + (('native_fragments_file.v1',) if owner.package == 'snapatac2' else ())),
         *(scalar(k, required=k in required) for k in (*required, *optional)
             if k not in {'input_path', 'second_path', 'grouping_path', *raw_fields})]
     if owner.package == 'scanpy':
         ports.append(Consumer('grouping', (member('dataset', 'grouping_path'),), False,
+            request_sources=(request('grouping_path', rm('dataset', 'grouping_path')),),
             accepted_upstream_types=('native_matrix_h5ad.v1',)))
     if owner.package == 'snapatac2':
         from .native_parameters import input_name
@@ -137,7 +138,7 @@ def tool_spec(owner):
     if owner.package == 'Signac':
         ports.append(Consumer('second', (member('dataset', 'second_path'),), False,
             request_sources=(request('second_path', rm('dataset', 'second_path')),),
-            accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1', 'native_matrix_h5ad.v1')))
+            accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1','hierarchical_annotation_h5ad.v1', 'native_matrix_h5ad.v1')))
     if owner.package == 'episcanpy':
         from .native_parameters import input_name
         ports.append(Consumer('gene_anno', (member('path', 'gene_anno_path'), member('sha256', 'gene_anno_sha256')), False,

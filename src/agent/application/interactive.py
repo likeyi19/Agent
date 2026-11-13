@@ -784,11 +784,14 @@ class InteractiveAgentApplication:
             if run is not None:
                 status, state_revision = run.lifecycle_status.value.lower(), run.revision
                 from agent.tools.models.native_posttraining import training_notice
+                from agent.orchestration.annotation_runs import progress_view
                 steps = tuple(StepView(s.step_id, s.tool_name, s.status.value, s.attempt_count,
                     training_notice(s.resolved_arguments) if s.tool_name in ('adapt_epizoo_species','posttrain_epizoo_model')
                         and s.status.value == 'RUNNING' and s.resolved_arguments else None,
                     function_name=_step_function(s, run),
-                    error_message=public_error_message(s.error) if s.error else None) for s in run.steps)
+                    error_message=public_error_message(s.error) if s.error else None,
+                    annotation_progress=progress_view(self._application.run_store,run,s.step_id)
+                        if s.tool_name=='annotate_scATAC_cell_types' else None) for s in run.steps)
                 if status == 'succeeded' and (turn is None or turn.status in {'linked','run_succeeded','ready'}):
                     status = 'finalizing'
                 elif status == 'succeeded' and turn.status == 'failed':
@@ -1331,8 +1334,11 @@ class InteractiveAgentApplication:
                         'Accepted verification checks: ' + ', '.join(source['verification_checks'])])
                 if source is not None and source['tool_name'] == 'annotate_scATAC_cell_types':
                     from agent.report.analysis_report import render_annotation_facts
-                    lines.extend(['', render_annotation_facts({f['field']:f['value'] for f in view['facts']
-                        if f['status'] == 'available'}), ''])
+                    from .dialogue_evidence import annotation_report_methods
+                    facts = {f['field']:f['value'] for f in view['facts'] if f['status'] == 'available'}
+                    facts.update(annotation_report_methods(self._application.sessions,
+                        session_id, revision_id, group['canonical_output']))
+                    lines.extend(['', render_annotation_facts(facts, technical=True), ''])
                 for fact in view['facts']:
                     rendered = (json.dumps(_serialize(fact['value']), ensure_ascii=False, allow_nan=False)
                                 if fact['status'] == 'available' else fact['reason'] or fact['status'])

@@ -51,7 +51,7 @@ def completed(matrix_source,tmp_path):
 def simulated_process_boundary(monkeypatch):
     """These owner/application tests simulate native science in this process.
 
-    Genuine OS isolation and native MAESTRO run in the separate native_execution
+    Genuine OS isolation and iterative native annotation run in the separate native_execution
     suite/evidence; monkeypatched scientific functions cannot cross an exec.
     """
     from agent.tools import _native_process

@@ -13,7 +13,7 @@ from test_dialogue_evidence import app, accepted, forbid_work, files
 from test_scientific_dialogue import Model, question, ask
 
 
-def publication(app, *, qc=False, candidates=2, huge=False, current_contract=True, annotation_version=1):
+def publication(app, *, qc=False, candidates=2, huge=False):
     root = app.workspace_root / 'published'
     root.mkdir(exist_ok=True)
     def write(name, value, raw=False):
@@ -31,43 +31,38 @@ def publication(app, *, qc=False, candidates=2, huge=False, current_contract=Tru
         tool = 'compute_scATAC_qc'
         values = {}
     else:
-        from agent.tools.analysis.annotation_contract import CONTRACT, ARTIFACT, profile_sha
-        groups = [dict(group=g, n_cells=3, primary_annotation='B', status='assigned',
-            reason='unique_positive_maximum', top_score=2.0, top_candidates=['B']) for g in ('3','7')]
-        rows = [dict(group=g, candidate='B' if n == 0 else f'C{n}', score=2.0,
-            matched_entries=1, positive=['MS4A1'] if not huge else ['X'*20000], negative=[],
-            unobserved_marker_genes=[]) for g in ('3','7') for n in range(candidates)]
-        coverage = [dict(candidate='B' if n == 0 else f'C{n}', entries=3,
-            measured_entries=2, duplicate_entries=0, missing_genes=['CD19']) for n in range(candidates)]
-        manifest = dict(contract_version=CONTRACT, artifact_type=ARTIFACT, schema_version=annotation_version,
-            profile_sha256=profile_sha({}, annotation_version), sidecars={
-                'primary/groups.json':write('primary/groups.json',groups),
-                'primary/candidate_evidence.json':write('primary/candidate_evidence.json',rows),
-                'primary/signature_coverage.json':write('primary/signature_coverage.json',coverage)})
+        from agent.tools.analysis.hierarchical_annotation import CONTRACT
+        ARTIFACT = 'hierarchical_annotation'
+        groups = [dict(branch_id=g, parent=None, level=1, cluster=g, annotation_round='initial', n_cells=3,
+            annotation=dict(status='assigned', preferred=[dict(cell_name='B',species='Human')]),
+            stopping_reason='maximum_levels') for g in ('3','7')]
+        clusters = [dict(cluster=g, tests=[dict(candidate=dict(cell_name='B' if n==0 else f'C{n}',species='Human'),
+            pvalue=.001,pvalue_adj=.01,significant=True,matched_genes=['MS4A1'] if not huge else ['X'*20000])
+            for n in range(candidates)], markers=[dict(feature='MS4A1',positive=True,pvalue_adj=.01)]) for g in ('3','7')]
+        pins = [dict(path=str(root/name),**write(name,value)) for name,value in (
+            ('hierarchy.json',dict(branches=groups)),('annotations.json',dict(initial=dict(clusters=clusters))))]
+        manifest = dict(contract_version=CONTRACT,files=pins,schema_version=1)
         tool = 'annotate_scATAC_cell_types'
-        values = dict(group_summary=[{k:g[k] for k in ('group','n_cells','primary_annotation','status')} for g in groups], groups_omitted=0)
-    if current_contract:
-        manifest['arguments'] = {}  # Explicit legacy method identity for this new fixture.
+        values = dict(branch_summary=[dict(branch_id=g['branch_id'],n_cells=3,label='B',status='assigned') for g in groups],branches_omitted=0)
     binding = write('manifest.json',manifest)
     rid = accepted(app, tool, overrides=dict(values, manifest_path=str(root/'manifest.json'),
         manifest_sha256=binding['sha256'], contract_version=CONTRACT, artifact_type=ARTIFACT, artifact_schema_version=manifest['schema_version']))[0]
     return rid, root
 
 
-@pytest.mark.parametrize('annotation_version', [1, 2])
-def test_annotation_exact_detail_and_no_work(app, monkeypatch, annotation_version):
-    rid, root = publication(app, annotation_version=annotation_version)
+def test_annotation_exact_detail_and_no_work(app, monkeypatch):
+    rid, root = publication(app)
     guarded = forbid_work(app, monkeypatch)
     before = files(app)
     view = guarded.sessions.evidence('session',rid,'output0', detail=DetailRequest('annotation_rationale','3',1))
     assert view.status == 'available', view
     facts = {f.field:f for f in view.detail}
-    assert facts['assignment.0'].value['reason'] == 'unique_positive_maximum'
-    assert facts['candidate.0'].value['positive'] == ('MS4A1',)
-    assert facts['candidate.records_omitted'].value == 1
-    assert facts['signature_coverage.records_omitted'].value == 1
-    assert facts['candidate.0'].artifact_sha256 == hashlib.sha256((root/'primary/candidate_evidence.json').read_bytes()).hexdigest()
-    assert facts['candidate.0'].source_pointer == '/0'
+    assert facts['assignment.0'].value['annotation']['status'] == 'assigned'
+    assert facts['candidate.0'].value['matched_genes'] == ('MS4A1',)
+    assert facts['candidate.records_omitted.0'].value == 1
+    assert facts['marker.0'].value['feature'] == 'MS4A1'
+    assert facts['candidate.0'].artifact_sha256 == hashlib.sha256((root/'annotations.json').read_bytes()).hexdigest()
+    assert facts['candidate.0'].source_pointer == '/initial/clusters/0/tests/0'
     assert files(app) == before
 
 
@@ -75,7 +70,7 @@ def test_annotation_exact_detail_and_no_work(app, monkeypatch, annotation_versio
 def test_detail_fails_closed(app, monkeypatch, attack):
     rid, root = publication(app)
     request = DetailRequest('annotation_rationale','3')
-    path = root/'primary/candidate_evidence.json'
+    path = root/'annotations.json'
     if attack == 'missing': path.unlink()
     if attack == 'corrupt': path.write_bytes(path.read_bytes()+b' ')
     if attack == 'manifest': (root/'manifest.json').write_text('{}')
@@ -93,7 +88,7 @@ def test_oversized_record_is_explicitly_omitted(app):
     rid, _ = publication(app, huge=True)
     view = app.sessions.evidence('session',rid,'output0',detail=DetailRequest('annotation_rationale','3'))
     assert view.status == 'available'
-    assert all(f.status=='omitted' and f.reason=='field_size_limit' for f in view.detail if f.field.startswith('candidate.') and f.field != 'candidate.records_omitted')
+    assert all(f.status=='omitted' and f.reason=='field_size_limit' for f in view.detail if f.field.startswith('candidate.') and not f.field.startswith('candidate.records_omitted'))
 
 
 def test_non_annotation_histogram_shape(app, monkeypatch):
@@ -177,15 +172,15 @@ def test_no_file_discovery_and_exact_candidate_selection(app,monkeypatch):
     view=app.sessions.evidence('session',rid,'output0',detail=DetailRequest('annotation_rationale','3',candidate='C3'))
     assert view.status=='available',view
     candidates=[f for f in view.detail if f.field=='candidate.0']
-    assert len(candidates)==1 and candidates[0].value['candidate']=='C3'
-    assert candidates[0].source_pointer=='/3'
+    assert len(candidates)==1 and candidates[0].value['candidate']['cell_name']=='C3'
+    assert candidates[0].source_pointer=='/initial/clusters/0/tests/3'
 
 
 def test_changed_detail_during_generation_is_rejected(app):
     _,root=publication(app)
     def reply(payload):
         c=next(c for c in payload['evidence']['claims'] if c['field']=='detail.candidate.0')
-        path=root/'primary/candidate_evidence.json'
+        path=root/'annotations.json'
         path.write_bytes(path.read_bytes()+b' ')
         return dict(support='supported',paragraphs=[dict(text='The accepted detail is recorded.', kind='finding', citations=[c['claim_id']], comparisons=[])])
     result=ask(app,'a','Why cluster 3?',Model(question(subject='3'),response=reply))
@@ -193,24 +188,24 @@ def test_changed_detail_during_generation_is_rejected(app):
 
 
 def test_whole_annotation_rationale_preserves_group_marker_correspondence(app, monkeypatch):
-    rid, root = publication(app, candidates=3, current_contract=True)
+    rid, root = publication(app, candidates=3)
     guarded = forbid_work(app, monkeypatch)
     before = files(app)
     view = guarded.sessions.evidence('session',rid,'output0',
         detail=DetailRequest('annotation_rationale',limit=1))
     assert view.status == 'available', view
     facts = {f.field:f for f in view.detail}
-    assert facts['assignment.0'].value['group'] == '3'
+    assert facts['assignment.0'].value['branch_id'] == '3'
     assert facts['assignment.records_omitted'].value == 1
-    assert facts['candidate.0'].value['group'] == '3'
-    assert facts['candidate.0'].value['candidate'] == 'B'
-    assert facts['candidate.0'].value['positive'] == ('MS4A1',)
-    assert facts['signature_coverage.0'].value['candidate'] == 'B'
-    assert any('primary candidate' in text for text in view.limitations)
+    assert facts['candidate.0'].value['branch_id'] == '3'
+    assert facts['candidate.0'].value['candidate']['cell_name'] == 'B'
+    assert facts['candidate.0'].value['matched_genes'] == ('MS4A1',)
+    assert facts['marker.0'].value['feature'] == 'MS4A1'
+    assert any('bounded by branch' in text for text in view.limitations)
     response = ask(guarded,'whole','Which groups were annotated as B cells, and what markers supported those assignments?',
-        Model(question(subject=None),['detail.assignment.0','detail.assignment.1','detail.candidate.0','detail.candidate.1']))
+        Model(question(subject=None),['detail.assignment.0','detail.assignment.1','detail.candidate.0','detail.candidate.8']))
     assert response.status == 'answered',response
-    assert {c.value['group'] for c in response.scientific.claims} == {'3','7'}
+    assert {c.value['branch_id'] for c in response.scientific.claims} == {'3','7'}
     assert all(c.source['artifact_sha256'] for c in response.scientific.claims)
     assert all(c.source['revision_id'] == rid for c in response.scientific.claims)
     # Science is forbidden; only the ordinary answer Session envelope is written.

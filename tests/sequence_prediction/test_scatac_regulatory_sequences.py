@@ -203,15 +203,15 @@ def test_nonhuman_accepted_source_not_human_model(source):
 
 
 def test_annotation_group_binding_requires_exact_source_and_order(source,tmp_path,monkeypatch):
-    from agent.tools.analysis import scatac_annotation,annotation_contract
+    from agent.tools.analysis import hierarchical_annotation
     args,data,_,_=source;pin=owner._pin(args['input_path'])
-    root=tmp_path/'annotation';(root/'primary').mkdir(parents=True)
-    cells=[dict(cell_id=c,primary_annotation='B') for c in data.obs_names]
-    sha=shared.write(root/'primary/cells.json',cells)
-    manifest=dict(matrix_binding=dict(source_sha256=pin['sha256']),sidecars={'primary/cells.json':dict(sha256=sha)})
-    msha=shared.write(root/'manifest.json',manifest)
-    monkeypatch.setattr(scatac_annotation,'verify_annotation',lambda *a,**k:None)
-    monkeypatch.setattr(annotation_contract,'load_manifest',lambda *a:manifest)
+    root=tmp_path/'annotation';root.mkdir()
+    data=data.copy();data.obs['cell_type_final']='B';data.write_h5ad(root/'annotated.h5ad')
+    hsha=shared.write(root/'hierarchy.json',dict(source=pin))
+    msha=shared.write(root/'manifest.json',{})
+    result=dict(hierarchy_path=str(root/'hierarchy.json'),hierarchy_sha256=hsha,
+                annotated_h5ad_path=str(root/'annotated.h5ad'),annotated_h5ad_sha256=owner._pin(root/'annotated.h5ad')['sha256'])
+    monkeypatch.setattr(hierarchical_annotation.publication,'verify_publication',lambda *a,**k:result)
     a=dict(annotation_manifest_path=str(root/'manifest.json'),annotation_manifest_sha256=msha)
     labels,_=owner._annotation_groups(a,data.obs_names,pin)
     assert labels.tolist()==['B']*4

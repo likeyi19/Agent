@@ -159,19 +159,14 @@ separate. Native scientific defaults are described without being treated as user
 instructions. The linked record owns validation status and remaining limitations;
 older milestone descriptions of the replaced mechanisms are historical.
 
-[UA3.6.5-R6](docs/architecture/ua3.6.5-r6-agent-scientific-tools-integration-redesign.md)
-simplifies the scientific handoff while retaining R5 planning and answers.
-AnnData owns peak-H5AD parsing; bounded HDF5 storage safety remains, while
-download privacy is handled at delivery. MAESTRO runs once and publishes a
-versioned completion contract with exact input association, group-to-cell
-propagation, source preservation and artifact integrity checks. Ordinary
-execution and recovery no longer replay MAESTRO. Explicitly selected accepted
-PCA-derived Leiden groups can feed annotation of the exact original counts
-without download/re-upload. Omitted direct-annotation `count_slot` uses `X`;
-effective defaults are recorded by the owner. Existing accepted v1 annotation
-records retain their historical profiles and downloads. R6 has passed final
-engineering review; its record distinguishes live Web/native acceptance,
-simulated tests, remaining limits and Git closeout evidence.
+[ICTA-4B](../agent-data/acceptance/iterative-cell-type-annotation/icta-4b/REPORT.md)
+replaces the single production annotation operation with deterministic iterative
+native science and hierarchical H5AD publication. See the
+[cell-type annotation guide](docs/guides/cell-type-annotation.md) for exact source
+binding, Gene Activity and CellMarker evidence, figures, downloads, child progress
+and result-scoped editing. Runtime, RunStore, Revision and native scientific
+owners remain shared. The MAESTRO executable route is retired; historical R6
+acceptance records retain their original meanings and files.
 
 The cross-tool R6 review also removes filename-extension gates from generic
 H5AD/embedding consumers and admits bounded dense count aggregation. Feature
@@ -191,13 +186,9 @@ remains a separate model-based capability. The [native scATAC guide](docs/guides
 records exact methods and input populations. Dedicated PCA execution is retired;
 [native PCA functions](docs/guides/pca-analysis.md) remain available.
 
-[UA3.6.5-R3](docs/history/ua3.6.5-r3-native-tool-first-simplification.md) removes the
-primary-nuclear-only restriction from direct MAESTRO annotation. Supplied peaks,
-counts and names stay exact; native zero-weight and unmatched-contig participation
-is recorded in annotation details and exported H5AD provenance. Complete annotation
-references no longer require a QC catalog. This does not change primary-nuclear
-preprocessing or establish biological annotation accuracy. R4 below supplies the
-subsequent normal laboratory resource deployment.
+[UA3.6.5-R3](docs/history/ua3.6.5-r3-native-tool-first-simplification.md)
+records historical annotation-contig behavior. Its MAESTRO route has since been
+retired by ICTA-4B; the record does not advertise current execution.
 
 [UA3.6.5-R4](docs/architecture/ua3.6.5-r4-unified-scientific-resource-library.md) uses one
 persistent scientific library, configured with `scientific_resource_root` outside

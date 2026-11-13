@@ -411,25 +411,10 @@ def _source_record(path, sha256, root):
 
 
 def _annotation_source(artifact):
-    """Read the annotation owner's recorded original measurement binding."""
-    from .matrix_delivery import _open_matrix_source
-    from agent.tools.analysis import annotation_contract
-    if annotation_contract.external(artifact.manifest):
-        binding = artifact.manifest['matrix_binding']
-        return dict(path=binding['source_path'], sha256=binding['source_sha256'])
-    import hashlib
-    from agent.tools.data import scatac_matrix_contract
-    binding = artifact.manifest['matrix_binding']
-    path = Path(binding['manifest_path'])
-    with _open_matrix_source(path, path.parent) as stream:
-        raw = stream.read(scatac_matrix_contract.MAX_MANIFEST_BYTES + 1)
-    if (len(raw) > scatac_matrix_contract.MAX_MANIFEST_BYTES
-            or hashlib.sha256(raw).hexdigest() != binding['manifest_sha256']):
-        raise ValueError('The recorded annotation measurement manifest changed.')
-    manifest = scatac_matrix_contract.load_manifest_bytes(raw)
-    if manifest['matrix']['sha256'] != binding['matrix_sha256']:
-        raise ValueError('The recorded annotation measurement identity changed.')
-    return dict(path=str(path.parent / manifest['matrix']['path']), sha256=binding['matrix_sha256'])
+    from agent.tools.analysis.sequence_prediction import read
+    pin = next(p for p in artifact.manifest['files'] if Path(p['path']).name == 'hierarchy.json')
+    source = read(pin['path'], pin['sha256'])['source']
+    return {k:source[k] for k in ('path','sha256')}
 
 
 def _component(sessions, session_id, state, locator):
@@ -452,11 +437,10 @@ def _component(sessions, session_id, state, locator):
 def _component_methods(artifact, handle):
     if artifact.role == ROLE:
         return _methods(handle, artifact.manifest)
-    # Annotation retains its distinct policy and accepted method identity.
-    args = artifact.manifest['arguments']
-    return dict(annotation=dict(method=artifact.manifest['profile']['primary_profile'],
-        parameters={k: args[k] for k in ('annotation_method', 'count_slot', 'group_column') if k in args},
-        validation_state='not_assessed'))
+    return dict(annotation=dict(method='iterative Gene Activity / CellMarker ORA / differential peak hierarchy',
+        parameters={k: artifact.manifest['arguments'][k] for k in
+            ('maximum_levels','marker_alpha','ora_alpha','adjusted_p_threshold','minimum_peak_features')
+            if k in artifact.manifest['arguments']}, validation_state='not_assessed'))
 
 
 @contextmanager
@@ -678,8 +662,8 @@ def composed_analysis(sessions, session_id, resolved_export, *, turn_id):
                 elif artifact.role == ROLE:
                     row['observation_role'] = 'computational_assignment'
                 else:
-                    from agent.tools.analysis.annotation_contract import OBS_COLUMNS
-                    row['observation_role'] = ('computational_assignment' if field.split(':', 1)[1] in OBS_COLUMNS
+                    from agent.tools.analysis.hierarchical_annotation import annotation_column
+                    row['observation_role'] = ('computational_assignment' if annotation_column(field.split(':', 1)[1])
                         else 'copied_supplied_source_observation; biological validity not assessed')
             public[name].append(row)
             spec = base if field.startswith('source:') else sources[source_index]

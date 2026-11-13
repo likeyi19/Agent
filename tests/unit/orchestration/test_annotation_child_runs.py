@@ -447,12 +447,12 @@ def test_failed_progress_checkpoint_stops_before_child_creation(harness):
     assert not h.calls and not reservations(h.store.load('parent-1:run'))
 
 
-def test_ordinary_registry_has_no_annotation_coordinator_opt_in():
+def test_production_registry_has_one_annotation_coordinator():
     # The fixture's inventory is not used by this test.
     from agent.orchestration.registry import build_default_tool_registry
     registry = build_default_tool_registry()
-    assert not any(registry.get(n).annotation_children for n in registry.names())
-    assert registry.get('annotate_scATAC_cell_types').durable_hooks.execute.__module__ == 'agent.tools.analysis.scatac_annotation'
+    assert [n for n in registry.names() if registry.get(n).annotation_children] == ['annotate_scATAC_cell_types']
+    assert registry.get('annotate_scATAC_cell_types').durable_hooks.execute.__module__ == 'agent.tools.analysis.iterative_annotation'
 
 
 def test_one_session_turn_and_no_child_revision(harness, tmp_path):

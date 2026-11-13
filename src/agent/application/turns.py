@@ -523,8 +523,12 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 admitted, prerequisite, choices = admit_role_request(sessions, interaction, pending_request, epizoo_resources)
                 _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
                 return TurnOutcome('clarify', 'clarification', Clarify('missing_input_roles', choices, True))
-            admitted = admit_execution(sessions, interaction, decision, execution_inputs,
-                                       epizoo_resources=epizoo_resources)
+            if decision.target == 'annotate_scATAC_cell_types':
+                from .annotation_preparation import admit as admit_annotation
+                admitted, _ = admit_annotation(sessions, interaction, decision, input_sets)
+            else:
+                admitted = admit_execution(sessions, interaction, decision, execution_inputs,
+                                           epizoo_resources=epizoo_resources)
             selected_tool = sessions._application.registry.get(admitted['tool'])
             from .shared_resources import scientific_resource_scope
             from agent.orchestration.native_parameters import prerequisite_inputs

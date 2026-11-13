@@ -18,7 +18,7 @@ def tool_spec(spec, output):
         'candidate_manifest_sha256': argument((str,), 'Accepted region publication checksum.', source=S.UPSTREAM_RESULT_ONLY),
     }
     ports = [Consumer('dataset',(member('dataset','input_path'),),False,
-        request_sources=(request('input_path',rm('dataset','input_path')),), accepted_upstream_types=('scatac_matrix_h5ad.v1','native_matrix_h5ad.v1')),
+        request_sources=(request('input_path',rm('dataset','input_path')),), accepted_upstream_types=('scatac_matrix_h5ad.v1','hierarchical_annotation_h5ad.v1','native_matrix_h5ad.v1')),
         Consumer('differential_accessibility',(member('artifact','da_path'),),False,accepted_upstream_types=('differential_accessibility.v1',)),
         Consumer('annotation',(member('manifest_path','annotation_manifest_path'),member('manifest_sha256','annotation_manifest_sha256')),False,
             accepted_upstream_types=('scatac_cell_type_annotation.v1',)), scalar('input_sha256',required=False)]

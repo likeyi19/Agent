@@ -31,18 +31,18 @@ def publication(app, name='initial', *, source=None, ids=None, labels=None):
             categories=['vehicle','drug','unused'])), index=ids)
         ad.AnnData(sparse.eye(5, format='csr'), obs=obs).write_h5ad(source)
     path = root/(name+'-labels.h5ad')
-    obs = pd.DataFrame(dict(primary_annotation=pd.Categorical(labels or ['A','A','B','B',None],
-        categories=['A','B','unused']), annotation_group=['g1' if i<2 else 'g2' if i<4 else 'g3'
+    obs = pd.DataFrame(dict(cell_type_final=pd.Categorical(labels or ['A','A','B','B',None],
+        categories=['A','B','unused']), annotation_branch_id=['g1' if i<2 else 'g2' if i<4 else 'g3'
                                                        for i in range(len(ids))]), index=ids)
     ad.AnnData(obs=obs).write_h5ad(path)
     rid = accepted(app, 'annotate_scATAC_cell_types', name=name,
-        arguments=dict(source_path=str(source), source_sha256=sha(source)),
+        arguments=dict(input_path=str(source), input_sha256=sha(source)),
         overrides=dict(annotated_h5ad_path=str(path), annotated_h5ad_sha256=sha(path),
-            group_summary=[], groups_omitted=0, n_cells=len(ids)))[0]
+            branch_summary=[], branches_omitted=0, n_cells=len(ids)))[0]
     return rid, path, source
 
 
-def detail(app, rid, section='category_counts', field='result:primary_annotation', **kwargs):
+def detail(app, rid, section='category_counts', field='result:cell_type_final', **kwargs):
     return app.sessions.evidence('session',rid,'output0',fields=(),
         detail=DetailRequest(section, field=field, **kwargs))
 
@@ -114,7 +114,7 @@ def test_association_requires_actual_source_and_axis(app, failure):
     if failure == 'changed_source': source.write_bytes(source.read_bytes()+b'changed')
     if failure == 'missing_source': source.unlink()
     view=detail(app,first,'category_association',other_field=(
-        'source:treatment' if failure in ('changed_source','missing_source') else 'result:primary_annotation'), comparison=peer)
+        'source:treatment' if failure in ('changed_source','missing_source') else 'result:cell_type_final'), comparison=peer)
     assert view.status == 'unavailable' and not view.detail
     if failure=='different_source': assert view.reason=='categorical_source_mismatch'
     if failure=='reordered_axis': assert view.reason=='categorical_axis_mismatch'
@@ -127,7 +127,7 @@ def test_two_accepted_revisions_and_same_source_field_association(app, monkeypat
     output=app.sessions.load('session').revisions[-1].outputs[0]
     peer=dict(revision_id=second,output_name='output0',accepted_step_sha256=output.accepted_step_sha256)
     guarded=forbid_work(app,monkeypatch);before=files(app)
-    pair=detail(guarded,first,'category_association',other_field='result:primary_annotation',comparison=peer)
+    pair=detail(guarded,first,'category_association',other_field='result:cell_type_final',comparison=peer)
     assert pair.status=='available',pair
     value=pair.detail[0].value
     assert value['n_paired']==4 and sum(r['count'] for r in value['records'])==4
@@ -170,7 +170,7 @@ def test_r5_qualified_association_and_independent_fallback(app, monkeypatch):
     def decision(payload):
         groups=payload['dialogue']['result_groups']
         return dict(question(groups[0]['handle'], comparison=dict(output=groups[1]['handle'],subject=None)),
-            detail=selected('category_association','result:primary_annotation','source:treatment'))
+            detail=selected('category_association','result:cell_type_final','source:treatment'))
     def reply(payload):
         c=next(c for c in payload['evidence']['claims'] if c['field']=='detail.category_association')
         return dict(support='supported',paragraphs=[dict(kind='finding',text='The descriptive table covers three jointly labeled entities; supplied treatment labels are not biological validation.',citations=[c['claim_id']],comparisons=[])])
@@ -195,7 +195,7 @@ def test_independent_sources_keep_counts_without_correspondence(app, monkeypatch
     def decision(payload):
         groups=payload['dialogue']['result_groups']
         return dict(question(groups[0]['handle'],comparison=dict(output=groups[1]['handle'],subject=None)),
-            detail=selected('category_association','result:primary_annotation','result:primary_annotation'))
+            detail=selected('category_association','result:cell_type_final','result:cell_type_final'))
     # Use a third accepted source with a different experimental observation.
     root=app.workspace_root/'fixture';source=root/'third-source.h5ad'
     data=ad.read_h5ad(root/'initial-source.h5ad');data.obs['treatment']=pd.Categorical(['other']*5)
@@ -231,10 +231,10 @@ def test_selected_observation_rejects_indirect_storage_and_bounds(app):
     rid,path,source=publication(app)
     # New simulated accepted identity deliberately contains an indirect field.
     with h5py.File(path,'a') as f:
-        del f['obs/primary_annotation']
-        f['obs/primary_annotation']=h5py.ExternalLink(str(source),'/obs/treatment')
+        del f['obs/cell_type_final']
+        f['obs/cell_type_final']=h5py.ExternalLink(str(source),'/obs/treatment')
     with pytest.raises(ValueError,match='Indirect'):
-        owner.observations(path,sha(path),'primary_annotation')
+        owner.observations(path,sha(path),'cell_type_final')
 
 
 def test_native_legacy_anndata_categories_are_read_without_rewriting(tmp_path):

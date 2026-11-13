@@ -64,19 +64,19 @@ def _metadata(path):
 
 
 def _annotation_groups(args, cells, source_pin):
-    from . import scatac_annotation, annotation_contract
+    from .hierarchical_annotation import publication
     path, sha = args['annotation_manifest_path'], args['annotation_manifest_sha256']
-    scatac_annotation.verify_annotation(path, expected_sha256=sha)
-    manifest = annotation_contract.load_manifest(path, sha)
-    binding = manifest['matrix_binding']
-    if binding.get('source_sha256', binding.get('matrix_sha256')) != source_pin['sha256']:
+    result = publication.verify_publication(path, expected_sha256=sha)
+    hierarchy = shared.read(result['hierarchy_path'], result['hierarchy_sha256'])
+    if hierarchy['source']['sha256'] != source_pin['sha256']:
         raise ValueError('Accepted annotation does not identify this exact original matrix')
-    rows_path = Path(path).parent / 'primary/cells.json'
-    rows = shared.read(rows_path, manifest['sidecars']['primary/cells.json']['sha256'])
-    if [r['cell_id'] for r in rows] != list(cells):
+    with h5py.File(result['annotated_h5ad_path'], 'r') as handle:
+        obs = read_elem(handle['obs'])
+    if obs.index.tolist() != list(cells):
         raise ValueError('Annotation and source ordered cell identities differ')
-    return np.asarray([r['primary_annotation'] for r in rows], dtype=object), [
-        _pin(path, sha), _pin(rows_path, manifest['sidecars']['primary/cells.json']['sha256'])]
+    return np.asarray(obs['cell_type_final'].astype(object).where(obs['cell_type_final'].notna(), None)), [
+        _pin(path, sha), _pin(result['hierarchy_path'], result['hierarchy_sha256']),
+        _pin(result['annotated_h5ad_path'], result['annotated_h5ad_sha256'])]
 
 
 def _descriptive(args, obs, var, source_pin):

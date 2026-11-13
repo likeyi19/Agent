@@ -1,5 +1,15 @@
 # Native scATAC QC and dimensionality reduction
 
+Current annotation integration is ICTA-4B: the sole public annotation operation
+uses the ICTA-4A coordinator and hierarchical publication. See the
+[cell-type annotation guide](cell-type-annotation.md) and
+[ICTA-4B report](../../../agent-data/acceptance/iterative-cell-type-annotation/icta-4b/REPORT.md).
+Dated ICTA-1 through ICTA-4A sections below describe their original phase boundaries;
+statements that production remains MAESTRO-backed or orchestration is future work
+are historical and superseded by ICTA-4B. Native science and its thresholds remain
+unchanged. No ICTA-4C browser or large biological evaluation is authorized here.
+
+
 For a SnapATAC2 workflow, use the existing `run_snapatac2` interface:
 prepare a native tile or region matrix when needed, `pp.select_features`,
 `tl.spectral`, `pp.knn`, and `tl.leiden`. `tl.umap` is a separate downstream

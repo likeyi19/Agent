@@ -31,10 +31,8 @@ def current_scientific_library():
 def redistribution_files(files):
     """Exclude exact implementation identities, never a filename extension."""
     from agent.tools.data import regulatory_feature_reference, scatac_reference, chromap_reference_index, scatac_qc_reference
-    from agent.tools.analysis import annotation_input, annotation_contract, marker_annotation, external_marker_annotation
     implementations = {m.__file__ for m in (regulatory_feature_reference, scatac_reference,
-        chromap_reference_index, scatac_qc_reference, annotation_input, annotation_contract,
-        marker_annotation, external_marker_annotation)}
+        chromap_reference_index, scatac_qc_reference)}
     return [row for row in files if row['path'] not in implementations]
 
 
@@ -96,59 +94,9 @@ def _raw_reference_choices(inputs, identity, label, files):
 
 def persist(resources, inputs, *, session_id, origin_turn_id, label, qualification=None, publication_source=None):
     """Publish one private owner-qualified reference in the existing catalog."""
-    from agent.tools.analysis import annotation_input, annotation_contract
     from agent.tools.data.authority_context import VerificationContext
     inputs = _serialize(inputs)
-    if set(inputs) == {'annotation_spec_path', 'annotation_spec_sha256'}:
-        profile = annotation_contract.EXTERNAL_SPEC
-        spec = annotation_contract.specification(inputs['annotation_spec_path'], inputs['annotation_spec_sha256'])
-        if spec['schema'] != profile: _fail('Unsupported annotation resource version.')
-        qualification = qualification or annotation_input.qualify_resources(spec)
-        # Grouping is a task declaration, never a reusable reference property.
-        spec['grouping_provenance'] = 'Grouping must be supplied by each consuming task'
-        # The annotation owner consumes the already-qualified chromosome scope,
-        # not a legacy cCRE vocabulary or FASTA. Do not recreate that old gate.
-        pins = {}
-        if 'contig_scope' in spec:
-            scope = spec['contig_scope']
-            pins[scope['path']] = scope['sha256']
-        pins.update({spec[k]['path']: spec[k]['sha256'] for k in ('gene_resource', 'signature_resource')})
-        payload = canonical(spec)
-        roots = [root for root in resources._approved if root.is_relative_to(resources._workspace.root)]
-        if publication_source is not None:
-            if publication_source not in pins: _fail('Publication source is not a bound reference component.')
-            roots = [root for root in roots if Path(publication_source).is_relative_to(root)]
-            # Roots containing one exact file form a nested chain. Use the
-            # narrowest approved location, not a scientific-resource tie policy.
-            roots = [max(roots, key=lambda root: len(root.parts))] if roots else []
-        if len(roots) != 1:
-            _fail('Reference publication requires an explicitly bound workspace attachment root.')
-        directory = resources._workspace._ensure_directory(roots[0] / 'qualified_references')
-        target = directory / (digest(spec) + '.json')
-        # Registration and immutable publication share the existing resource lock.
-        with resources._lock(resources.registration_id('reference-publication:' + digest(spec))):
-            if target.exists():
-                if target.read_bytes() != payload: _fail('Published reference changed.')
-            else:
-                import os, tempfile
-                fd, temporary = tempfile.mkstemp(dir=directory, prefix='.reference-')
-                try:
-                    with os.fdopen(fd, 'wb') as stream:
-                        stream.write(payload); stream.flush(); os.fsync(stream.fileno())
-                    os.link(temporary, target)
-                    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-                    try: os.fsync(descriptor)
-                    finally: os.close(descriptor)
-                finally:
-                    Path(temporary).unlink(missing_ok=True)
-        inputs = dict(annotation_spec_path=str(target), annotation_spec_sha256=digest(spec))
-        source = target
-        pins[str(target)] = digest(spec)
-        # A resource qualification establishes facts about these pinned bytes.
-        # Current method compatibility belongs to the consuming owner, not the
-        # incidental source-file hash of the implementation that admitted it.
-        paths = []
-    elif set(inputs) == {'qc_reference_manifest_path', 'qc_reference_manifest_sha256'}:
+    if set(inputs) == {'qc_reference_manifest_path', 'qc_reference_manifest_sha256'}:
         source = inputs['qc_reference_manifest_path']
         bundle, pins = _qc_closure(source, inputs['qc_reference_manifest_sha256'])
         from agent.tools.data._barcode_qc_binding import resource_qualification
@@ -159,7 +107,7 @@ def persist(resources, inputs, *, session_id, origin_turn_id, label, qualificati
         profile = bundle.contract_version
         paths = []
     else:
-        _fail('Only existing annotation and QC reference contracts are supported.')
+        _fail('Only the existing QC reference contract is supported.')
     files = VerificationContext().files([*pins, *paths])
     if any(row['sha256'] != pins[row['path']] for row in files if row['path'] in pins):
         _fail('Scientific source bytes differ from the qualified resource pins.')
@@ -358,21 +306,7 @@ class ScientificResourceLibrary:
         if own_files:
             resource = self._own_files(kind, resource)
         qualifier = None
-        if kind == 'annotation':
-            from agent.tools.analysis import annotation_contract as c, annotation_input
-            # Retain the owner's scientific specification, not task grouping.
-            resource = dict(resource, grouping_provenance='Grouping must be supplied by each consuming task')
-            target = self.root / 'annotations' / (digest(resource) + '.json')
-            target.parent.mkdir(exist_ok=True)
-            self._publish(target, canonical(resource))
-            resource = c.specification(target, digest(resource))
-            if resource['schema'] != c.EXTERNAL_SPEC: _fail('Direct annotation references required.')
-            pins = {r['path']: r['sha256'] for r in (resource['gene_resource'], resource['signature_resource'])}
-            if 'contig_scope' in resource:
-                pins[resource['contig_scope']['path']] = resource['contig_scope']['sha256']
-            pins[str(target)] = digest(resource)
-            qualifier = lambda: annotation_input.qualify_resources(resource)
-        elif kind == 'cellmarker':
+        if kind == 'cellmarker':
             from agent.tools.data import cellmarker
             pins = cellmarker.resource_files(resource)
             qualifier = lambda: cellmarker.qualify_resource(resource)
@@ -571,16 +505,6 @@ class ScientificResourceLibrary:
             if path.parent.resolve() != path.parent: _fail('Library manifest directory changed.')
             self._publish(path, raw)
             return dict(path=str(path), sha256=sha, size_bytes=len(raw))
-        if kind == 'annotation':
-            result = dict(resource, gene_resource=copy(resource['gene_resource']),
-                          signature_resource=copy(resource['signature_resource']))
-            if 'contig_scope' in resource:
-                scope = resource['contig_scope']
-                relocated = self._own_files('qc', dict(qc_reference_manifest_path=scope['path'],
-                    qc_reference_manifest_sha256=scope['sha256']))
-                result['contig_scope'] = dict(path=relocated['qc_reference_manifest_path'],
-                    sha256=relocated['qc_reference_manifest_sha256'])
-            return result
         if kind in ('regions', 'gene_annotation'):
             return dict(resource, file=copy(resource['file']))
         if kind == 'genome':
@@ -608,7 +532,7 @@ class ScientificResourceLibrary:
             result = replace(result, resource_identity_sha256=qc._identity(result))
             output = manifest(qc.canonical_qc_reference_bundle_bytes(result))
             return dict(qc_reference_manifest_path=output['path'], qc_reference_manifest_sha256=output['sha256'])
-        _fail('Only annotation, genome, QC and chain references support library-owned copying.')
+        _fail('Only genome, QC and chain references support library-owned copying.')
 
     def install_genome(self, fasta_path, fai_path, *, species, assembly, label, version, provenance, usage):
         """Install external FASTA/FAI directly, without an experimental dataset or Run."""
@@ -626,10 +550,7 @@ class ScientificResourceLibrary:
     def input_set(self, entry):
         from .input_sets import ScientificInputSet
         kind, resource = entry['kind'], entry['resource']
-        if kind == 'annotation':
-            inputs = dict(annotation_spec_path=str(self.root / 'annotations' / (digest(resource) + '.json')),
-                          annotation_spec_sha256=digest(resource))
-        elif kind == 'qc': inputs = resource
+        if kind == 'qc': inputs = resource
         elif kind == 'genome': inputs = dict(library_genome=entry)
         elif kind in ('regions', 'gene_annotation'):
             port = 'peaks' if kind == 'regions' else 'gene_anno'
@@ -642,7 +563,7 @@ class ScientificResourceLibrary:
     def choices(self):
         result = []
         for row in self.entries():
-            if row['kind'] in ('epizoo', 'liftover_chain', 'sequence_predictor', 'sequence_generator', 'motif_collection', 'cellmarker'): continue
+            if row['kind'] in ('annotation', 'epizoo', 'liftover_chain', 'sequence_predictor', 'sequence_generator', 'motif_collection', 'cellmarker'): continue
             result.append(self.input_set(row))
         return tuple(result)
 
@@ -668,9 +589,8 @@ def install_private(resources, session_id, resource_id, *, shared_use):
     value = refs.check_record(resources, record)
     if record.input_type == 'scientific_reference':
         if 'annotation_spec_path' in value:
-            from agent.tools.analysis.annotation_contract import specification
-            kind, resource = 'annotation', specification(value['annotation_spec_path'], value['annotation_spec_sha256'])
-        else: kind, resource = 'qc', value
+            _fail('Retired annotation references remain historical records; install native gene annotation and CellMarker evidence separately.')
+        kind, resource = 'qc', value
     elif record.input_type in ('regulatory_reference', 'genome_reference'):
         from dataclasses import asdict
         kind = 'genome'

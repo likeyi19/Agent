@@ -4,6 +4,7 @@ Accepted facts are projected with exact attribution. Natural statements undergo
 reference checks and semantic review; model-authored explanation is not authority.
 """
 from dataclasses import asdict, dataclass, replace
+from collections.abc import Mapping
 import json
 import logging
 import re
@@ -373,13 +374,13 @@ def _subjects(view):
     if view.source.tool_name != 'annotate_scATAC_cell_types':
         return {}, False
     facts = {f.field:f for f in view.facts}
-    rows, omitted = facts.get('group_summary'), facts.get('groups_omitted')
+    rows, omitted = facts.get('branch_summary'), facts.get('branches_omitted')
     if rows is None or rows.status != 'available' or omitted is None or omitted.status != 'available':
         return {}, False
     subjects = {}
     for index, row in enumerate(rows.value):
-        if row['group'] in subjects: raise IntentError('ambiguous_subject')
-        subjects[row['group']] = (index, row)
+        if row['branch_id'] in subjects: raise IntentError('ambiguous_subject')
+        subjects[row['branch_id']] = (index, row)
     return subjects, omitted.value == 0
 
 
@@ -663,7 +664,7 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
             if target['subject'] not in subjects:
                 raise IntentError('subject_not_in_summary')
             row_index, row = subjects[target['subject']]
-            base = next(f.source_pointer for f in view.facts if f.field == 'group_summary')
+            base = next(f.source_pointer for f in view.facts if f.field == 'branch_summary')
             values = [(k,v,f'{base}/{row_index}/{k}') for k,v in row.items() if k != 'group']
         from .dialogue_evidence import DetailRequest, detail_request
         selected = selected_detail if index < 2 else None
@@ -825,8 +826,9 @@ def context(sessions, session_id, admitted, *, evidence_targets=None):
                 return False
             if not a.field.startswith('detail.'):
                 return a.field == b.field
-            if a.field.startswith(('detail.candidate.', 'detail.signature_coverage.')):
-                return b.field.startswith(a.field.rsplit('.', 1)[0] + '.') and a.value.get('candidate') == b.value.get('candidate')
+            if a.field.startswith('detail.candidate.') and isinstance(a.value, Mapping):
+                return (b.field.startswith('detail.candidate.') and isinstance(b.value, Mapping)
+                    and a.value.get('candidate') == b.value.get('candidate'))
             return a.field == b.field
         public['comparison'] = dict(mode='source_qualified_categorical_association' if association_available else 'independent_accepted_facts' if independent else
             'descriptive_accepted_operands' if descriptive else 'direct_accepted_operands', ranking_available=False,

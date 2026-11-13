@@ -1,196 +1,114 @@
-# Cell-type annotation
+# Iterative scATAC cell-type annotation
 
-Researchers can upload scATAC H5AD or select accepted count results and request native cell-type annotation through the ordinary conversation. MAESTRO Enhanced RP is one supported method; native reference-to-query label transfer remains available separately. The Registry and scientific owners select appropriate supported operations. Native scores are computational evidence, not calibrated biological confidence.
+`annotate_scATAC_cell_types` is the single AI Research annotation operation. It
+uses the ICTA-4A deterministic coordinator and hierarchical NativePublication
+owner. The former MAESTRO execution, preparation, contracts, RP projections and
+delivery implementation are deleted. Native reference-to-query label transfer
+remains a separate supported operation. Native Functions keeps direct structured
+calls and never implicitly starts this coordinator or a provider.
 
-## Inputs and native method
+## Inputs and planning
 
-`annotate_scATAC_cell_types` reuses pinned MAESTRO Enhanced regulatory potential
-(RP), native group-marker calculation and signature scoring. Its direct region
-method `maestro-enhanced-region-counts.v2` accepts explicitly identified raw peak
-counts, fragment-overlap counts and binary accessibility for human/hg38 or
-mouse/mm10 with compatible transcript/exon and signature resources. The original
-human Cell Ranger cut-site method and accepted canonical-matrix method retain
-their identities and historical readers. This extension does not reinterpret old
-publications or binarize supplied fragment counts.
+Ask the Agent to annotate the selected scATAC cells. The ordinary AI Research
+planner selects the original accessibility source. An explicitly supplied original
+`obs` column (`group_column`) is reused directly at level one, without an initial
+Leiden execution or synthetic clustering publication. Multiple plausible source
+columns are offered by their observed names through the existing clickable choice;
+an explicit column needs no confirmation. The selected grouping is recorded as
+`user_supplied`: its biological identity and derivation are not validated, and no
+`uns.grouping` record is required. Exact accepted native grouping reuse remains
+available. If groups are absent, ordinary planning selects registered native
+clustering prerequisites. An explicit reuse-only request never permits recomputing
+initial groups. Subsequent branches always compute the approved native local
+clustering and differential evidence; they do not reuse the original groups as
+local subdivisions. Equal filenames, dimensions or cell names do not establish source
+correspondence. An unresolved required identity uses the existing scoped question.
 
-The accepted PBMC10k Gate 1 run used MAESTRO Enhanced RP on the original,
-non-binarized `fragment_counts` in `X` under `maestro-enhanced-region-counts.v2`,
-followed by native group-marker calculation and signed marker-signature scoring.
-This is the recorded count-weighted execution profile. The
-[original MAESTRO paper](https://link.springer.com/article/10.1186/s13059-020-02116-x)
-describes its RP formulation with a binary peak-occurrence matrix; the accepted
-count-weighted run must not be described as reproducing that binary-input method.
-Its scores and marker evidence remain computational, dependent annotation evidence.
-MAESTRO is a supported method whose suitability depends on the inputs and references,
-not an exclusive or universally preferred annotation method.
+The ScientificResourceLibrary selects installed CellMarker 3.0 evidence and pins
+its identity. Compatible accepted Gene Activity is reused. Otherwise, the chosen
+native construction receives its actual source and gene annotation reference:
 
-The [MAESTRO implementation](https://raw.githubusercontent.com/liulab-dfci/MAESTRO/74f10babf4125b98ef005df4186b14ab02e13bfd/MAESTRO/scATAC_Genescore.py)
-weights region measurements by transcript/exon and distance relationships.
-[MAESTRO documentation](https://liulab-dfci.github.io/MAESTRO/) describes raw and
-binary peak input. Numerical admissibility alone does not establish the best
-biological representation, reference relevance or cell identity.
+- Default SnapATAC2 `pp.make_gene_matrix` receives accepted fragment/insertion storage.
+- Explicit `use_x=True` retains the chosen X and supplied parameters.
+- epiScanpy `tl.geneactivity` uses its appropriate peak input.
 
-Required scientific information is the measurement history, species/assembly,
-exact zero-based `chrom:start-end` feature identities, compatible references, and
-independent cell groups. Groups may come from an explicitly selected `obs` column,
-exact ordered TSV, or an accepted dedicated or native Leiden result whose recorded ancestry
-identifies the exact original source bytes. Names, equal cell counts and categorical
-values do not establish lineage or independent clustering. Explicit `uns.grouping`
-role/provenance metadata can qualify a unique grouping automatically.
+Native packages own scientific input legality. No extra genome whitelist, alias
+mapping or inferred gene-identity equivalence is introduced. Gene-only inputs may
+support current-level annotation but cannot establish peak-space subdivision.
 
-The default count slot is `X`. `layers/name` selects an original measurement layer
-without changing transformed `X`. New source observations scope global measurement
-metadata to `uns.count_slot` (default `X`); another selected layer needs its own
-explicit measurement declaration. Historical observations remain readable with
-their original interpretation. No integer-valued matrix is automatically labelled
-raw counts. `raw.X` with an independent feature axis and standalone gene-activity
-matrices do not have a direct annotation execution route in this integration;
-provide a suitable original region-count slot and exact coordinates. No automatic
-feature mapping, alias correction, normalization reversal or classifier is added.
+## Scientific execution
 
-Pending conversational measurement declarations may remain unknown while Agent
-asks for clarification. A resolved execution specification must declare a supported
-measurement before input preparation; nullable resource metadata alone does not
-authorize scientific execution. The [owner-contract closeout](../../../agent-data/acceptance/scientific-workflow-completion/swc-2/finalization/owner-contract-closeout/REPORT.md)
-records this admission correction and its focused verification.
+The coordinator uses accepted native Scanpy Wilcoxon markers with BH correction,
+exact CellMarker gene matching, and SciPy hypergeometric ORA with BH correction.
+Each eligible branch uses original peak space with native SnapATAC2 feature
+selection, Spectral, KNN and Leiden. The existing bounded ASW scan applies to
+unspecified resolution; explicit researcher values prevail. Native `tl.diff_test`
+compares candidate children with parent-rest, and ICTA-3C evidence decides retention.
+There is no LLM planning call inside the iteration.
 
-Storage support includes canonical CSR/CSC and ordinary dense arrays converted
-to sparse. Complete sparse matrices are never densified. Nonempty unique axes,
-exact source identity, supported HDF5 encoding, exact integral counts and native
-method applicability remain required. Native zero-weight and unmatched-contig
-participation is reported. Agent no longer imposes cell/feature, NNZ, encoded-file,
-decoded-matrix or dense-conversion size caps on this scientific invocation.
+Default depth is five, including initial level one. Current-level marker and ORA
+thresholds remain 0.05; subdivision retains the reviewed adjusted-p threshold 0.01
+and five qualifying peak features. Configured values, actual ASW selections and
+native execution identities are retained. Native failures are failed work, never
+successful biological stopping reasons.
 
-Python preparation, native MAESTRO RP, its R child processes and publication
-validation run inside the [shared native execution boundary](native-execution.md).
-The operator must configure `AGENT_NATIVE_MEMORY_BYTES`; there is no universal
-memory default or dataset-based admission estimate. Kernel cgroup v2 limits cover
-the aggregate task, with swap disabled. Missing containment fails operationally
-before expensive scientific reads. The obsolete `AGENT_ANNOTATION_SOURCE_BYTES`,
-`AGENT_ANNOTATION_LOGICAL_BYTES` and `AGENT_ANNOTATION_NONZEROS` policy is removed.
-The existing optional R timeout remains finite, nested within the whole-task
-operator timeout. Browser upload and scientific delivery budgets remain separate.
+## Results and presentation
 
-## Selected-method input preparation
+The accepted H5AD preserves original X, layers, raw, cells, features and scientific
+metadata. It adds `cell_type_level_N`, `annotation_branch_level_N`,
+`cell_type_final`, `annotation_status`, `annotation_branch_id` and
+`annotation_depth`. Unreached levels remain missing. Broad ancestor labels may
+remain as final labels when a finer round has insufficient or ambiguous evidence;
+this is distinguished from a newly assigned finer label. Cluster IDs never become
+biological labels. The compact `uns` hierarchy contains no copied native results.
 
-The normal Planner selects annotation and its scientific source before the
-application resolves method-specific inputs. A scoped compiler callback in
-`annotation_preparation` binds the existing ScientificResourceLibrary base
-reference using `annotation_input.resource_specification`. It specializes the
-actual declared measurement and biological context; the template's historical
-Cell Ranger measurement does not override current fragment counts. Explicit
-source, count slot, method, grouping and reference choices retain precedence.
-Missing biology or ambiguous references require clarification. Internal spec paths
-and checksums are application products, not researcher prerequisites.
+Summary facts show actual reached levels, branch and terminal-population counts,
+evidence statuses, inherited-label cells and bounded stopping outcomes. Complete
+hierarchy, markers/ORA and differential evidence remain in `hierarchy.json`,
+`annotations.json` and `subdivisions.json`.
 
-An explicit accepted grouping is a scientific input selection, independently of
-the Interpreter's coarse `context` field. Its exact accepted ancestry is lowered
-to the shared captured-result input selection. The existing planning projection
-exposes qualified prior-output ports only for those selected results; unrelated
-current outputs and figure references grant no additional scientific inputs.
-Preparation and execution use the same selection owner and captured Revision.
-An already planned grouping binding is accepted when its authenticated grouping
-identity agrees with the explicit selection; a conflicting grouping still fails.
+The existing scientific gallery provides composition, branch relationships,
+representative-marker dot plots and heatmaps. Values come from accepted Gene
+Activity X, with clearly labeled display-only `log1p`. This is accessibility-derived
+activity, not measured RNA expression. Marker selection follows accepted positive
+native marker order: at most two per displayed branch, twelve distinct genes and
+thirty branches. The hierarchy view shows at most sixty branches; omissions are
+explicit. No positive evidence means no invented marker plot.
 
-Selected-method admission v3 retains attachment candidates separately from the
-uploaded datasets this task consumes. An accepted-result-only task has no upload
-consumption guard. Selecting a previous upload establishes its new consumer role
-without another upload; a pending task retains its exact selected sources/roles.
-Uploaded reference-only files retain their exact registration and byte checks,
-and the existing scientific resource owner checks their pinned method inputs.
-Unselected historical files impose no current consumption requirement. Older
-admissions remain readable with their original attribution and saved responses.
+Qualified accepted global UMAP can be colored by final annotation or reached levels
+(up to five displayed levels), and by at most six representative markers. The
+annotation-level control only selects existing presentation artifacts; it creates
+no scientific Run. A compatible UMAP must already exist. No coordinates are
+fabricated or fitted by reporting, and a cropped global plot is not a local UMAP.
 
-Uploads and accepted sources use this same owner. Private task specifications are
-immutable adapter bytes, never registered as fake uploads. The existing scientific
-grouping owner consumes exact accepted analysis files and any required ordered TSV
-adaptation; native groups retain their accepted dependency proofs.
-Accepted group association requires exact count ancestry and ordered cells. Native
-function identity, actual written slots and accepted dependencies distinguish newly
-computed groups from inherited fields and independent returns. The old attachment-only
-annotation preparation writer is removed; narrowly scoped replay readers preserve
-saved historical declarations and accepted results.
+Downloads & reports exposes the primary hierarchical H5AD, all three evidence
+sidecars, source-bound figures and the technical report. Download privacy and
+integrity use the shared native delivery owner. Reports record native operations,
+parameters, producing identities and interpretation limits without rerunning science.
 
-One invocation-local prepared input serves native execution and immediate
-publication checks. Independent derivative checks compare exact arrays in bounded
-chunks and preserve axes, metadata, layers and ancillary scientific slots. Recovery
-may qualify the source again, but never reruns native RP, markers or scoring.
+## Progress, editing and continuation
 
-## Completing grouping prerequisites
+The existing annotation progress trace supplies current level, branch, native
+function, actual completed/running child steps and known pending branches. Future
+branch work has no invented fixed total. Cancellation and recovery retain Runtime,
+RunStore and accepted-child ownership.
 
-A researcher may request cell-type annotation without naming tools,
-parameters, grouping columns or reference IDs. New source observations (interface
-version 4) distinguish a missing computed grouping from missing biological
-information. Species, assembly, actual measurement history and tissue context
-still require source evidence or a meaningful user declaration. Older captured
-observations and displayed clarifications retain their exact historical meaning.
+Adjust parameters projects actual recorded child operations, including exact branch
+and operation identities for repeated native calls. A selected edit creates a new
+Run and preserves the old result. Matching accepted upstream operations can be
+reused; changed operations and dependent work get new native producing identities.
+Owned marker method/comparison/correction and differential population bindings are
+not editable. ORA/differential interpretation settings and depth belong to the
+coordinator. Failed-work exact continuation remains distinct from result editing.
 
-A unique explicitly qualified supplied grouping is reused. An explicitly selected
-accepted Leiden result retains the existing exact-source TSV projection. When no
-qualified grouping exists, the ordinary Planner can compose existing inspection,
-representation, neighbor and clustering operations and bind the clustered artifact
-directly to annotation. This is not a fixed annotation pipeline. A request to use
-existing groups only is preserved as `grouping_strategy=reuse_only` and does not
-authorize computing replacements. Multiple qualified groupings still require an
-unambiguous selection. UMAP is not required to annotate groups.
+Conversational responses retain the existing user-input language policy. Fixed UI,
+plots, H5AD fields and technical reports use English. No translation subsystem is
+added.
 
-Ordinary compatible region-count or binary-accessibility inputs use native
-SnapATAC2 feature selection, Spectral, KNN and Leiden with native defaults.
-Explicitly supplied choices take precedence. This is a recorded method selection,
-not an inferred user instruction or biological proof. EpiZoo remains a separate
-model-based capability, and explicit PCA uses the native-function interface.
+## Qualification boundary
 
-The annotation owner accepts exact clustered-analysis path/checksum ports and
-native count-preserving H5AD results. It verifies exact original-file identity
-and ordered cells through accepted lineage, and retains the clustering
-artifact in the annotation publication's integrity closure. Original measurements
-remain in the original count slot. Legacy embedding results without exact source
-identity cannot establish this correspondence. The existing annotation publication
-and native completion verification remain authoritative; no new grouping tool,
-workflow engine or scientific result catalog is added.
-
-## Native activity figures and reporting
-
-SRV-1B adds automatic composition, positive-native-marker RP dot plots and genuine
-per-cell RP distributions through the existing verified visualization owner.
-Accessibility-derived regulatory potential is not measured RNA expression, and
-markers used in annotation are dependent evidence. Accepted compatible UMAP
-coordinates can be recolored without refitting. Omitted groups/genes are explicit;
-no additional annotation or marker test runs in the renderer.
-
-Marker Activity UMAP adds up to six panels of `log1p(raw native MAESTRO RP)` on
-the exact accepted UMAP, without additional normalization or removal of low/zero
-activity cells. It first takes one gene per recorded group from the existing
-positive native representative-marker selection, then fills from that selection
-in published order, deduplicating genes. Selection never uses visual agreement
-with UMAP or predictions. The existing selection prefers positive markers in the
-assigned candidate signature, then positive group markers; these are dependent
-annotation evidence. Raw RP remains sensitive to library depth.
-
-The saved native RP matrix stays sparse; only the bounded selected marker columns
-are decoded to dense values. Exact original-source qualification permits separate
-accepted branches; unique cell IDs align those columns to the unchanged coordinate
-order. Different populations or unrelated sources cannot provide this plot. A
-read-only request can select accepted UMAP and annotation results through the
-existing Interaction figure publication, without changing their Run or Revision.
-Historical figure bundles retain their exact inventories; new eligible workflows
-also publish this complementary figure automatically. The figure can help inspect
-candidate annotations and within-cluster heterogeneity, and provides no measured
-RNA, calibrated identity probability or independent biological validation.
-The [bounded visualization closeout](../../../agent-data/acceptance/scientific-results/visualization-refinement-2026-11-09/REPORT.md)
-records source, browser and preservation verification; PBMC10k remains CONDITIONAL GO.
-
-The accepted factual report displays data context, method, group/label counts and assigned/unresolved populations independently of optional generated prose. Native RP, marker and signature details, effective parameters and source identities remain available in evidence and methods; source matrix and analysis sections own their feature counts and preprocessing/clustering facts. Download the annotated H5AD and useful scientific figures.
-
-`Downloads & reports` also offers accepted native annotation evidence: per-cell
-and per-group JSON, candidate signature evidence, marker statistics TSV, and the
-CSR RP matrix (`native-rp.npz`) with its ordered cell, gene and group companions.
-Keep these companions together: matrix rows follow the cell axis and columns
-follow the gene axis. The group TSV retains native cell/group associations.
-These files support inspection of the existing annotation; downloading them
-does not rerun RP, marker tests or scoring. Text exports use the shared privacy
-projection, while the numeric NPZ retains its exact accepted bytes. Download
-descriptions establish eligibility for preparation, not completed browser transfer.
-RP is accessibility-derived activity, not measured RNA or independent validation.
-
-Agent ends this workflow at its own native annotations and supporting evidence. Label renaming, ontology alignment and predicted-versus-reference label benchmarks are external research tasks. They are not Agent execution modes or resource requirements. The independent Gate 2 evidence remains outside the product.
+The [ICTA-4B report](../../../agent-data/acceptance/iterative-cell-type-annotation/icta-4b/REPORT.md)
+owns exact execution, regression, preservation and remaining acceptance limits.
+Small synthetic native fixtures establish mechanics, not biological validation or
+production-scale performance. ICTA-4C browser qualification, paid evaluations and
+large PBMC/GLUE benchmarking are outside this phase.

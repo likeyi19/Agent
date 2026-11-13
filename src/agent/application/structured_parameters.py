@@ -283,6 +283,16 @@ def bind_plan(plan, rows, inputs, registry, admitted):
 
 def check_plan(plan, rows, inputs, registry, admitted):
     for row in rows:
+        edited = [s.arguments.get('operation_overrides',{}).get(row.get('step_id')) for s in plan.steps
+                  if s.tool_name=='annotate_scATAC_cell_types' and row.get('step_id') in s.arguments.get('operation_overrides',{})]
+        if edited:
+            if len(edited)!=1 or edited[0]['tool_name']!=row['tool'] or edited[0]['function_name']!=row.get('native_function'):
+                raise IntentError('invalid_reference')
+            actual=_serialize(edited[0]['arguments'].get(row['argument']))
+            if (row['argument']=='kwargs' and (not isinstance(actual,dict) or any(actual.get(k)!=v for k,v in row['value'].items()))
+                    or row['argument']!='kwargs' and actual!=row['value']):
+                raise IntentError('planning_failed')
+            continue
         selected = matches(plan, row, registry, admitted)
         if len(selected) != 1:
             raise IntentError('ambiguous_parameter')
@@ -433,11 +443,35 @@ def recorded_native_kwargs(step):
     return {**_serialize(step.resolved_arguments.get('kwargs', {})), **effective}
 
 
+
+def annotation_operations(run, store, registry):
+    """Actual accepted children of this selected result, keyed by branch and operation."""
+    from agent.tools.analysis.sequence_prediction import read
+    from agent.schemas.prior_output import PriorOutputBinding
+    from agent.orchestration.prior_outputs import validate_binding
+    from .session_state import digest
+    result = {}
+    for parent in run.steps:
+        if parent.tool_name != 'annotate_scATAC_cell_types' or parent.result is None or not parent.verification or not parent.verification.passed:
+            continue
+        hierarchy = read(parent.result['hierarchy_path'], parent.result['hierarchy_sha256'])
+        for operation in hierarchy['operations']:
+            binding = PriorOutputBinding(**operation['binding'])
+            child = validate_binding(binding, store=store, registry=registry)
+            if _serialize(child.result) != operation['native_result']:
+                raise ValueError('Selected annotation child differs from accepted evidence')
+            handle = parent.step_id + '.child.' + digest(dict(branch=operation['branch_id'],operation=operation['operation_id']))[:32]
+            result[handle] = dict(parent_step_id=parent.step_id, branch_id=operation['branch_id'],
+                operation_id=operation['operation_id'], run_id=binding.run_id, step=child)
+    return result
+
 def result_parameters(sessions, session_id, revision_id):
     state, revision, run = accepted_analysis(sessions, session_id, revision_id)
     registry = sessions._application.registry
     steps = []
-    for step in run.steps:
+    children = annotation_operations(run, sessions._application.run_store, registry)
+    executed = list(run.steps) + [replace(row['step'],step_id=handle) for handle,row in children.items()]
+    for step in executed:
         if step.result is None or step.verification is None or not step.verification.passed:
             continue
         function = step.resolved_arguments.get('function_name')
@@ -452,6 +486,12 @@ def result_parameters(sessions, session_id, revision_id):
                           else {**_serialize(step.resolved_arguments),
                                 **{k:v for k,v in recorded.items() if k == name and k != 'parameter_selection'},
                                 **{k:_serialize(v) for k,v in step.result.items() if k == name}})
+                if step.tool_name == 'annotate_scATAC_cell_types':
+                    if name not in {'maximum_levels','marker_alpha','ora_alpha','adjusted_p_threshold','minimum_peak_features','species','identity_kind','identity_column'}:
+                        continue
+                    from agent.tools.analysis.sequence_prediction import read
+                    hierarchy=read(step.result['hierarchy_path'],step.result['hierarchy_sha256'])
+                    values.update(hierarchy['interpretation'])
                 if function and not kwarg and name not in values:
                     continue
                 # Current installed defaults are not evidence of a past execution.
@@ -460,10 +500,15 @@ def result_parameters(sessions, session_id, revision_id):
                 editable = value is None or isinstance(value, (str, int, float, bool)) or (
                     isinstance(value, list) and (all(isinstance(v, str) for v in value) or
                     all(type(v) in (int, float) for v in value)))
+                if step.step_id in children:
+                    operation=children[step.step_id]['operation_id']
+                    locked = {'groupby','groups','reference','method','corr_method','use_raw','layer','n_genes'} if operation=='markers' else {'cell_group1','cell_group2','direction'} if operation.startswith('diff-') else set()
+                    editable = editable and (name not in locked if kwarg else name in {'count_slot','parameter_selection'})
                 fields.append(dict(field, kwarg=kwarg, recorded=name in values,
                     value=value, editable=editable))
         steps.append(dict(step_id=step.step_id, tool=step.tool_name, native_function=function,
-            parameters=fields, recorded=recorded))
+            parameters=fields, recorded=recorded,
+            **({k:v for k,v in children[step.step_id].items() if k!='step'} if step.step_id in children else {})))
     return dict(revision_id=revision_id, generation=state.generation, steps=steps)
 
 
@@ -513,12 +558,33 @@ def prepare_result_edit(sessions, interaction):
                 args['kwargs'] = {**_serialize(args.get('kwargs', {})), parameter: _serialize(effective[parameter])}
         baseline.append(replace(step, arguments=args))
     baseline = replace(run.plan, steps=tuple(baseline))
-    plan = bind_plan(baseline, rows, values, registry, {})
+    children = annotation_operations(run, sessions._application.run_store, registry)
+    ordinary = [row for row in rows if row['step_id'] not in children]
+    plan = bind_plan(baseline, ordinary, values, registry, {})
+    for row in rows:
+        if row['step_id'] not in children:
+            continue
+        child = children[row['step_id']]
+        steps = []
+        for step in plan.steps:
+            if step.step_id == child['parent_step_id']:
+                overrides = _serialize(step.arguments.get('operation_overrides', {}))
+                change = overrides.setdefault(row['step_id'],dict(branch_id=child['branch_id'],
+                    operation_id=child['operation_id'],tool_name=row['tool'],function_name=row['native_function'],arguments={}))
+                if row['argument']=='kwargs':
+                    change['arguments']['kwargs']={**change['arguments'].get('kwargs',{}),**row['value']}
+                else:
+                    change['arguments'][row['argument']]=row['value']
+                step=replace(step,arguments=dict(step.arguments,operation_overrides=overrides))
+            steps.append(step)
+        plan=replace(plan,steps=tuple(steps))
     # An explicit selection-policy edit requests a new selection/default, rather
     # than merely changing a sibling kwarg. A simultaneous numeric edit prevails.
     for row in rows:
         if row['argument'] != 'parameter_selection':
             continue
+        if row['step_id'] in children:
+            continue  # Branch override explicitly controls its native child selection.
         selected = stored[row['step_id']].result['parameters'].get('parameter_selection')
         if selected is None:
             continue
@@ -554,6 +620,9 @@ def prepare_result_edit(sessions, interaction):
         if step.step_id not in affected:
             continue
         args = dict(step.arguments)
+        if step.tool_name == 'annotate_scATAC_cell_types':
+            prior = bind_output(sessions._application.run_store,registry,run.run_id,step.step_id,'annotation')
+            args['previous_annotation_path']=PriorOutputRef(prior,'manifest_path')
         semantic = registry.get(step.tool_name).semantic_planning
         for name, value in args.items():
             if isinstance(value, StepOutputRef) and value.step_id not in affected:

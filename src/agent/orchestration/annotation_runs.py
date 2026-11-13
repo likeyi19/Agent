@@ -210,7 +210,7 @@ def tool_scope(plan, step, arguments, run_id, emit, *, required=False):
 
 class _AnnotationInvocation:
     def __init__(self, runtime, plan, step, arguments, run_id, emit):
-        self._runtime, self._step = runtime, step
+        self._runtime, self._step, self._plan = runtime, step, plan
         self._arguments, self._run_id, self._emit = arguments, run_id, emit
         self._store = runtime._required_run_store()
         self._spec = runtime.registry.get(step.tool_name)
@@ -218,6 +218,7 @@ class _AnnotationInvocation:
         self._active = True
         self._busy = False
         self._completed = {}
+        self._reuse = {}
         self._reservations, ancestors = _reservation_history(self._store, self._store.load(run_id), step.step_id)
         for state in ancestors:
             # A failed parent DAG can contain accepted prerequisite steps. Its
@@ -226,6 +227,29 @@ class _AnnotationInvocation:
             from .verification_authority import _load_context
             from .prior_outputs import merge_context
             merge_context(current(), _load_context(self._store, state.run_id, 'historical_verified_sources.v1'))
+
+    def progress(self, **details):
+        self.check_cancelled()
+        self._checkpoint('branch', **details)
+
+    def _editable_reservation(self, key, operation):
+        """Reuse only exact accepted native work from the explicitly selected old result."""
+        if 'previous_annotation_path' not in self._step.arguments:
+            return None
+        binding = self.input_binding('previous_annotation_path')
+        previous = self._store.load(binding.run_id)
+        if previous.lifecycle_status is not RunLifecycleStatus.SUCCEEDED:
+            raise AuthorityError('Editing requires a completed accepted annotation')
+        reservations, _ = _reservation_history(self._store, previous, binding.step_id)
+        reservation = reservations.get(key)
+        if reservation is None or reservation['operation_sha256'] != digest(operation):
+            return None
+        request, plan = _reserved_plan(reservation)
+        child = self._store.load(request.request_id + ':run')
+        if child.request != request or child.plan != plan:
+            raise AuthorityError('Selected old child changed')
+        _verified_child_anchor(self._runtime, child, plan)
+        return reservation
 
     def _checkpoint(self, event, **details):
         try:
@@ -260,8 +284,19 @@ class _AnnotationInvocation:
         """Return an exact captured historical input, never infer one from a path."""
         self.check_cancelled()
         reference = self._step.arguments.get(name)
+        from agent.schemas import StepOutputRef
+        if isinstance(reference, StepOutputRef):
+            if reference.step_id not in self._step.depends_on:
+                raise AuthorityError('Annotation prerequisite dependency is not declared')
+            producer = next(s for s in self._plan.steps if s.step_id == reference.step_id)
+            semantic = self._runtime.registry.get(producer.tool_name).semantic_planning
+            ports = [p for p in semantic.producer_ports if any(m.field_name == reference.output_key for m in p.members)]
+            if len(ports) != 1:
+                raise AuthorityError('Annotation prerequisite must select an exact published port')
+            binding = bind_output(self._store, self._runtime.registry, self._run_id, reference.step_id, ports[0].name)
+            reference = PriorOutputRef(binding, reference.output_key)
         if not isinstance(reference, PriorOutputRef):
-            raise AuthorityError('Annotation input requires an accepted PriorOutputRef: ' + name)
+            raise AuthorityError('Annotation input requires an accepted scientific output: ' + name)
         validate_binding(reference.binding, **self.evidence_context(), integrity=True)
         return reference.binding
 
@@ -286,7 +321,9 @@ class _AnnotationInvocation:
         sources = dict(parent_inputs or {})
         if 'output_dir' in args or 'output_dir' in sources or set(args) & set(sources):
             raise ValueError('Child destination is managed; input bindings cannot overlap.')
-        allowed = {r.binding for r in self._step.arguments.values() if isinstance(r, PriorOutputRef)}
+        from agent.schemas import StepOutputRef
+        allowed = {self.input_binding(name) for name, r in self._step.arguments.items()
+                   if isinstance(r, (PriorOutputRef, StepOutputRef))}
         dependencies = []
         for name, value in args.items():
             if isinstance(value, PriorOutputRef):
@@ -319,6 +356,13 @@ class _AnnotationInvocation:
         key = (branch_id, operation_id)
         reservation = self._reservations.get(key)
         if reservation is None:
+            reservation = self._editable_reservation(key, operation)
+            if reservation is not None:
+                self._checkpoint('reserved', **{k:v for k,v in reservation.items() if k not in ('schema','event')})
+                self._reservations[key] = reservation
+                self._checkpoint('reused', branch_id=branch_id, operation_id=operation_id,
+                    child_run_id=reservation['request']['request_id']+':run')
+        if reservation is None:
             token = digest(dict(parent_execution=self._identity, branch_id=branch_id,
                                 operation_id=operation_id, operation=operation))
             output = Path(self._arguments['output_dir'])
@@ -344,7 +388,7 @@ class _AnnotationInvocation:
         request, plan = _reserved_plan(reservation)
         run_id = request.request_id + ':run'
         self._busy = True
-        child_token = _CHILD.set((self._run_id, current()))
+        child_token = _CHILD.set((self._run_id, current(), self))
         try:
             # Neither child execution nor recovery may borrow the parent's mutable
             # execution field. The normal authority decorators restore child proofs.
@@ -375,3 +419,70 @@ class _AnnotationInvocation:
             raise RuntimeError('Annotation child did not succeed: ' + saved.lifecycle_status.value)
         self._completed[key] = (run_id, anchor)
         return result
+
+
+def progress_view(store, state, step_id):
+    """Transient Web view of existing child trace and RunStore state; no counter store."""
+    events = [e.details for e in state.trace if e.event_type is TraceEventType.ANNOTATION_PROGRESS and e.step_id == step_id]
+    if not events:
+        return None
+    context = {}
+    children = {}
+    for row in events:
+        if row.get('event') == 'branch':
+            context.update({k:v for k,v in row.items() if k not in ('schema','event')})
+        if row.get('event') == 'reserved':
+            rid = row['request']['request_id'] + ':run'
+            try:
+                child = store.load(rid)
+                status = child.lifecycle_status.value
+            except RunNotFoundError:
+                status = 'PENDING'
+            children[rid] = dict(branch_id=row['branch_id'],operation_id=row['operation_id'],
+                function_name=row['plan']['steps'][0]['arguments'].get('function_name'), status=status)
+    rows = list(children.values())
+    parent = next((s for s in state.steps if s.step_id==step_id),None)
+    if parent is not None and parent.status.value in ('FAILED','CANCELLED','INTERRUPTED'):
+        context['outcome'] = parent.status.value.lower()
+    return dict(context, completed_children=sum(r['status']=='SUCCEEDED' for r in rows),
+        known_children=len(rows), running=[r for r in rows if r['status']=='RUNNING'],
+        children=rows[-50:], children_omitted=max(0,len(rows)-50), future_total_known=False)
+
+
+def allows_prerequisite(store, run_id, step_id, loading=()):
+    """Only annotation-owned accepted prerequisites may cross an unfinished parent boundary.
+
+    Ordinary historical selections still require a successful Run. The exact parent
+    plan or persisted child reservation supplies scope; filenames never do.
+    """
+    from agent.schemas import StepOutputRef
+    def declared(parent, coordinator_id):
+        if parent.run_id != run_id or parent.plan is None:
+            return False
+        coordinator = next((s for s in parent.plan.steps if s.step_id==coordinator_id),None)
+        if coordinator is None or step_id not in coordinator.depends_on:
+            return False
+        return any(isinstance(r,StepOutputRef) and r.step_id==step_id for r in coordinator.arguments.values())
+    invocation=_INVOCATION.get()
+    child=_CHILD.get()
+    if invocation is None and child is not None:
+        invocation=child[2]
+    if invocation is not None and invocation._active and invocation._store is store:
+        if declared(store.load(invocation._run_id),invocation._step.step_id):
+            return True
+    for store_identity, child_id in loading:
+        if store_identity != id(store):
+            continue
+        state=store.load(child_id)
+        inputs=state.request.inputs
+        if inputs.get('parent_run_id') != run_id or not inputs.get('parent_step_id'):
+            continue
+        parent=store.load(run_id)
+        if not declared(parent,inputs['parent_step_id']):
+            continue
+        reservations,_=_reservation_history(store,parent,inputs['parent_step_id'])
+        for row in reservations.values():
+            request,plan=_reserved_plan(row)
+            if request==state.request and plan==state.plan:
+                return True
+    return False

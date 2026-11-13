@@ -97,8 +97,8 @@ def test_freshness_failure_has_distinct_stage(app, monkeypatch, caplog):
 
 def test_subject_correspondence_rejection_remains(app, monkeypatch, caplog):
     annotation(app)
-    accepted(app, 'annotate_scATAC_cell_types', name='next', overrides=dict(n_groups=1,
-        groups_omitted=0, group_summary=[dict(group='3', n_cells=4, primary_annotation='T', status='assigned')]))
+    accepted(app, 'annotate_scATAC_cell_types', name='next', overrides=dict(n_branches=1,
+        branches_omitted=0, branch_summary=[dict(branch_id='3', n_cells=4, label='T', status='assigned')]))
     result = ask(forbid_work(app, monkeypatch), 'subjects', 'Compare cluster 3 with cluster 3 in the parent.',
         Model(question('r0', '3', comparison=dict(output='r1', subject='3'))))
     assert result.status == 'unavailable'

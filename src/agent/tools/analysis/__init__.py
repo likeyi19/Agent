@@ -17,11 +17,8 @@ from .differential_accessibility_backend import (
     run_replicate_differential_accessibility,
 )
 
-from .scatac_annotation import CellTypeAnnotationResult, annotate_scATAC_cell_types
 
 __all__ = [
-    "CellTypeAnnotationResult",
-    "annotate_scATAC_cell_types",
     "CellClusteringEvaluationToolResult",
     "CellLabelTransferToolResult",
     "EpiZooEmbeddingToolResult",

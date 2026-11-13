@@ -15,9 +15,9 @@ from agent.report.visualization import build_cell_overlay_visualizations, _png_d
 
 def inputs():
     data=dict(cells=['c','a','b'], genes=[f'G{i}' for i in range(1,9)],
-        per_cell_rp=np.arange(24).reshape(3,8).tolist(),
+        per_cell_activity=np.arange(24).reshape(3,8).tolist(),
         selected_marker_sources=[dict(group=str(i//2),gene=f'G{i+1}',basis='positive_native_group_marker') for i in range(8)],
-        measurement='native MAESTRO Enhanced RP; accessibility-derived activity, not measured RNA expression')
+        measurement='accepted native Gene Activity; accessibility-derived activity, not measured RNA expression')
     ids=('a','b','c');xy=np.array([[1.,2.],[3.,4.],[5.,6.]])
     source=dict(producing_step_id='annotation',tool_name='annotate_scATAC_cell_types',
         artifact_kind='native_annotation_sidecar',artifact_path='/accepted/rp.npz',integrity=dict(sha256='a'*64))
@@ -28,7 +28,7 @@ def test_exact_alignment_and_general_marker_rule_preserve_all_cells():
     data,ids,xy,sources=inputs();original=copy.deepcopy(data);coordinates=xy.copy()
     value=annotation.marker_activity_input(data,ids,xy,sources,basis='exact_original_source')
     assert value['genes']==['G1','G3','G5','G7','G2','G4']
-    np.testing.assert_array_equal(value['values'],np.asarray(data['per_cell_rp'])[[1,2,0]][:,[0,2,4,6,1,3]])
+    np.testing.assert_array_equal(value['values'],np.asarray(data['per_cell_activity'])[[1,2,0]][:,[0,2,4,6,1,3]])
     np.testing.assert_array_equal(value['coordinates'],coordinates)
     assert value['cell_ids']==list(ids) and value['values'][-1][0]==0
     assert data==original and value['correspondence']['n_cells']==3
@@ -39,7 +39,7 @@ def test_exact_alignment_and_general_marker_rule_preserve_all_cells():
         annotation.marker_activity_input(dict(data,genes=[],selected_marker_sources=[]),ids,xy,sources,basis='exact_original_source')
 
 
-def test_each_panel_uses_same_coordinates_and_actual_log_rp_including_zero(monkeypatch):
+def test_each_panel_uses_same_coordinates_and_actual_log_gene_activity_including_zero(monkeypatch):
     data,ids,xy,sources=inputs()
     value=annotation.marker_activity_input(data,ids,xy,sources,basis='exact_original_source')
     projection,=annotation.marker_activity_projection(lambda:value)
@@ -74,7 +74,7 @@ def test_marker_bundle_is_an_existing_interaction_publication(tmp_path):
 
 def test_accepted_distinct_branches_require_common_source_and_exact_cells(monkeypatch):
     from agent.application import result_reading as reader
-    from agent.tools.analysis import scatac_annotation
+    from agent.tools.analysis import hierarchical_annotation
     data,ids,xy,sources=inputs();data['source_sha256']='a'*64
     data['sources']=[dict(path='/accepted/annotation.json',sha256='b'*64)]
     identity=dict(source_sha256='a'*64,artifact_sha256='c'*64,
@@ -84,8 +84,7 @@ def test_accepted_distinct_branches_require_common_source_and_exact_cells(monkey
         result=dict(manifest_path='/accepted/annotation.json',manifest_sha256='b'*64))
     monkeypatch.setattr(reader,'_accepted_step',lambda *a:(step,None,N(run_id='different-run')))
     monkeypatch.setattr(reader,'accepted_step_digest',lambda s:'e'*64)
-    monkeypatch.setattr(scatac_annotation,'presentation_data',lambda *a:data)
-    monkeypatch.setattr(scatac_annotation,'execute_annotation',lambda *a,**k:pytest.fail('No native rerun'))
+    monkeypatch.setattr(hierarchical_annotation,'presentation_data',lambda *a:data)
     sessions=N(_application=N(run_store=object()))
     activity=dict(run_id='different-run',step_id='annotation',output_key='manifest_path',accepted_step_sha256='e'*64)
     value=reader.marker_activity_overlay(sessions,{},activity)

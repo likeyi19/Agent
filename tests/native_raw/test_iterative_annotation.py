@@ -1,6 +1,6 @@
 """Opt-in ICTA-4A: real Runtime/RunStore and installed native child packages.
 
-The internal ToolSpec is confined to this harness. Production MAESTRO is intact.
+Exercises the real production annotation ToolSpec.
 """
 from dataclasses import replace
 from collections.abc import Mapping
@@ -33,33 +33,7 @@ from agent.tools.analysis.sequence_prediction import library
 
 
 def registry(monkeypatch):
-    baseline = build_default_tool_registry()
-    pub = owner.publication
-    required = {k: ArgumentSpec((str,)) for k in ('input_path', 'input_sha256', 'grouping_path', 'cellmarker_id', 'output_dir')}
-    optional = {k: ArgumentSpec((Mapping,) if t == (dict,) else t) for k, t in dict(activity_path=(str,), activity_source_path=(str,), activity_method=(str,),
-        gene_anno_path=(str,), gene_anno_sha256=(str,), activity_kwargs=(dict,), activity_count_slot=(str,),
-        cellmarker_identity=(dict,), maximum_levels=(int,), local_kwargs=(dict,), differential_kwargs=(dict,),
-        parameter_selection=(str,), species=(str,), marker_alpha=(float,), ora_alpha=(float,),
-        adjusted_p_threshold=(float,), minimum_peak_features=(int,), marker_context=(dict,),
-        identity_kind=(str,), identity_column=(str,)).items()}
-    def validate(result):
-        assert pub.verify_publication(result['manifest_path'], expected_sha256=result['manifest_sha256']) == dict(result)
-    spec = ToolSpec(owner.TOOL, lambda **a: pytest.fail('requires durable coordinator'), required, optional,
-        ResultContract('HierarchicalAnnotation', {k:(str,) for k in ('manifest_path','manifest_sha256','annotated_h5ad_path','annotated_h5ad_sha256')}, validator=validate),
-        classify, durable_hooks=DurableToolHooks(coordinator.coordinate, owner.recover),
-        scientific_authority=ScientificAuthorityHooks(owner.KIND, ('dataset',), pub.describe,
-            pub.publication_record, pub.reuse_result, pub.proof_metadata),
-        semantic_planning=SemanticToolSpec(consumer_ports=(
-            *(SemanticConsumerPortSpec(k, (SemanticPortMember('dataset', k + '_path'),), k == 'grouping',
-                accepted_upstream_types=('native_matrix_h5ad.v1',)) for k in ('grouping', 'activity', 'activity_source')),
-            next(p for p in baseline.get('run_episcanpy').semantic_planning.consumer_ports if p.name == 'gene_anno')),
-            producer_ports=(SemanticProducerPortSpec('dataset', 'hierarchical_annotation_h5ad.v1',
-                (SemanticPortMember('dataset','annotated_h5ad_path'), SemanticPortMember('sha256','annotated_h5ad_sha256'))),)),
-        annotation_children=coordinator.CHILDREN)
-    result = ToolRegistry(tuple(baseline.get(n) for n in baseline.names()) + (spec,))
-    monkeypatch.setattr('agent.orchestration.registry.build_default_tool_registry', lambda: result)
-    monkeypatch.setattr('agent.orchestration.verification_authority.build_default_tool_registry', lambda: result)
-    return result
+    return build_default_tool_registry()
 
 
 def prepare(name, root, args):

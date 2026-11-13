@@ -42,7 +42,7 @@ def tool_spec():
         ('background_iterations',(int,),'Native matched-background iterations, default 50; execution bound 2 to 1000.'),
         ('p_cutoff',(float,int),'Native motifmatchr scan probability cutoff, default 0.00005. This is not motif-accessibility significance.')):
         optional[name]=arg(types,description,scientific_parameter=True)
-    ports=[Consumer('dataset',(member('dataset','input_path'),),True,request_sources=(request('input_path',rm('dataset','input_path')),),accepted_upstream_types=('scatac_matrix_h5ad.v1','native_matrix_h5ad.v1')),
+    ports=[Consumer('dataset',(member('dataset','input_path'),),True,request_sources=(request('input_path',rm('dataset','input_path')),),accepted_upstream_types=('scatac_matrix_h5ad.v1','hierarchical_annotation_h5ad.v1','native_matrix_h5ad.v1')),
         Consumer('genome',(member('path','genome_path'),member('sha256','genome_sha256')),False,
             request_sources=(request('genome_path',rm('path','genome_path'),rm('sha256','genome_sha256')),)),
         scalar('output_dir',required=True),*(scalar(k,required=False) for k in optional if k not in ('genome_path','genome_sha256'))]

@@ -1,3 +1,17 @@
+# ICTA-4B production annotation integration (2026-11-12)
+
+The current request replaces the sole `annotate_scATAC_cell_types` operation with
+ICTA-4A deterministic coordination and hierarchical publication. Approved native
+science and thresholds remain unchanged. Retire the executable MAESTRO route,
+reuse existing planning, source binding, Runtime/RunStore, scientific delivery,
+Web and result-scoped parameter owners. Native Functions remains direct and
+zero-provider. Preserve original data/resources and historical acceptance evidence.
+The [annotation guide](docs/guides/cell-type-annotation.md) describes current behavior;
+the [report](../agent-data/acceptance/iterative-cell-type-annotation/icta-4b/REPORT.md)
+owns verification and incomplete boundaries. This request supersedes older
+no-iteration wording only for ICTA-4B. No ICTA-4C, paid/browser or large PBMC/GLUE
+campaign, staging, commit or push is authorized.
+
 # ASW Scientific Clustering Parameter Selection (2026-11-11)
 
 The current request authorizes one bounded shared ASW scan for native SnapATAC2,

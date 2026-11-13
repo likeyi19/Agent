@@ -62,7 +62,7 @@ within the existing supported bounds before raw FASTQ UAT.
 | --- | --- |
 | H5AD inspection, generic PCA, neighbors, Leiden and UMAP | Existing Python numerical stack and ordinary compatible inputs; no pretrained checkpoint required |
 | Human/mouse EpiZoo | Qualified checkpoint plus exact species vocabulary/frequency files and the managed `third_party/epizoo/` backend/runtime |
-| MAESTRO annotation | Qualified gene/signature references, pinned MAESTRO code, relocated R packages and the existing `agent-edger` R runtime |
+| Iterative annotation | Installed CellMarker 3.0 static evidence, native gene references and existing SnapATAC2/Scanpy/epiScanpy runtimes |
 | FASTQ preprocessing | Qualified Chromap binary/index, matching reference and explicit assay/library/barcode declarations |
 | QC and feature matrices | Method-appropriate qualified references, exact scientific inputs and the pinned BEDTools runtime where required |
 | Species adaptation | Explicit source/SEAM bundles, backend configuration, target genome/features and method-specific mapping resources |
@@ -71,8 +71,7 @@ within the existing supported bounds before raw FASTQ UAT.
 The older CellMarker source/table closure remains independent research evidence;
 its former post-annotation corroboration operation stays retired. ICTA-3A adds a
 separate internal CellMarker 3.0 static evidence resource from
-[Zenodo 22808257](https://zenodo.org/records/22808257). Native MAESTRO continues
-to use its own compatible gene/signature resources. Cell Ontology resources and
+[Zenodo 22808257](https://zenodo.org/records/22808257). The former MAESTRO runtime/resources remain preserved historical assets; current annotation does not execute them. Cell Ontology resources and
 optional mapping dependencies are not required by Agent.
 
 The five verified original ZIPs and derived `cellmarker3.sqlite` live under
@@ -141,7 +140,7 @@ these variables. Checkpoint shapes, token order, filtering, inference settings
 and scientific algorithms are unchanged.
 
 The other existing operator bindings remain
-`AGENT_ANNOTATION_{MAESTRO_ROOT,RSCRIPT,R_LIBRARY}`,
+(retired historical annotation runtime settings),
 `AGENT_CHROMAP_{BIN,INDEX_ROOT}`, `AGENT_QC_BEDTOOLS` and
 `AGENT_MATRIX_BEDTOOLS`. OS executables and the existing Conda R installation
 remain in their qualified installation locations. Relocating that entire

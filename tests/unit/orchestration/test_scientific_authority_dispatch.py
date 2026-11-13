@@ -229,7 +229,7 @@ def test_raw_proof_metadata_and_source_snapshot_policies_are_preserved():
                          ('bam_fragment_production', producer),
                          ('external_fragment_adoption', producer)):
         assert shared.proof_metadata(kind, result, None, registry=registry) == {'contigs': contigs}
-    for kind in ('matrix', 'annotation', 'epizoo_adaptation'):
+    for kind in ('matrix', 'epizoo_adaptation'):
         result = {'scientific': 'metadata'}
         assert shared.proof_metadata(kind, result, None, registry=registry) is result
     for kind in ('qc', 'selection', 'explicit_cells'):
@@ -255,3 +255,12 @@ def test_raw_proof_metadata_and_source_snapshot_policies_are_preserved():
     assert shared.proof_metadata('fastq_fragment_production', {}, context,
                                 description=description, registry=registry) == {'contigs': contigs}
     assert locators == [('generic_fragments', Path('/exact/manifest.json'), 'b' * 64)] * 2
+
+
+def test_retired_annotation_kind_has_no_executable_authority_fallback():
+    registry=build_default_tool_registry()
+    assert shared.tool_kind('annotate_scATAC_cell_types',registry)=='hierarchical_annotation'
+    assert shared.qualified_port('annotate_scATAC_cell_types','dataset',registry)
+    assert shared.qualified_port('annotate_scATAC_cell_types','annotation',registry)
+    with pytest.raises(AuthorityError,match='Unsupported'):
+        shared.proof_metadata('annotation',{},None,registry=registry)

@@ -483,7 +483,7 @@ def _project(sessions, state, revision, output, fields, detail):
     selected = tuple(sorted(set(facts) | set(parameters))) if fields is None else fields
     # Preserve the existing annotation coverage counter even for field-selected
     # access. No group lookup or annotation semantics are implemented here.
-    coverage = (fact('groups_omitted'),) if step.tool_name == 'annotate_scATAC_cell_types' else ()
+    coverage = (fact('branches_omitted'),) if step.tool_name == 'annotate_scATAC_cell_types' else ()
     result = DialogueEvidence(state.session_id, revision.revision_id, output.name, 'available',
         generation=state.generation, is_active=state.active_revision_id == revision.revision_id,
         source=source, facts=tuple(fact(k) for k in selected), coverage=coverage,
@@ -497,9 +497,6 @@ def _project(sessions, state, revision, output, fields, detail):
             'It is not the actual motifmatchr cutoff and must not be described as the executed threshold. '
             'The actual cutoff cannot be recovered from this accepted summary field. '
             'The recorded value and accepted scientific arrays remain unchanged; do not invent a corrected historical record.',))
-    if step.tool_name == 'annotate_scATAC_cell_types' and step.resolved_arguments.get('source_path'):
-        result = replace(result, limitations=result.limitations + (
-            'Native MAESTRO uses exact supplied contig names. Peaks without native transcript weights do not contribute; this is not biological absence. No alias correction is performed. Feature participation, when recorded, is available in annotation details. Annotation is a computational result, not independent biological validation.',))
     if detail is not None:
         from .result_reading import read
         if detail.section not in detail_sections(step.tool_name):
@@ -514,7 +511,7 @@ def _project(sessions, state, revision, output, fields, detail):
                 'Detail is a bounded owner-order subset, not a ranking; omissions are not scientific absence.',) + (
                 ('Categorical metadata and statistics are read after acceptance; derived statistics were not part of the original historical publication.',)
                 if categorical else ()) + (
-                ('Whole-result annotation support includes only the published primary candidate for each displayed group; other candidates require a group-specific question.',)
+                ('Annotation detail is bounded by branch, native marker order and recorded ORA test order. Complete tests and source evidence remain in the accepted sidecars.',)
                 if detail.section == 'annotation_rationale' and detail.subject is None else ()))
     if len(_bytes(result)) > MAX_VIEW_BYTES:
         raise _Unavailable('evidence_view_size_limit')
@@ -535,8 +532,8 @@ def detail_request(view, subject):
     if view.source.tool_name == 'annotate_scATAC_cell_types':
         if subject is None:
             return DetailRequest('annotation_rationale')
-        rows = next((f.value for f in view.facts if f.field == 'group_summary' and f.status == 'available'), ())
-        labels = [row.get('primary_annotation') for row in rows if row['group'] == subject]
+        rows = next((f.value for f in view.facts if f.field == 'branch_summary' and f.status == 'available'), ())
+        labels = [row.get('label') for row in rows if row['branch_id'] == subject]
         return DetailRequest('annotation_rationale', subject, candidate=labels[0] if len(labels) == 1 else None)
     if view.source.tool_name == 'compute_scATAC_qc' and subject is None:
         return DetailRequest('length_histogram')
@@ -580,7 +577,7 @@ def _detail(sessions, step, request):
                 or authority['artifact_contract'] != result['contract_version']):
             raise _Unavailable('detail_authority_binding_mismatch')
     manifest = parse(read(path, result['manifest_sha256']))
-    if (type(manifest['schema_version']) is not int
+    if request.section != 'annotation_rationale' and (type(manifest['schema_version']) is not int
             or manifest['contract_version'] != result['contract_version']
             or manifest['artifact_type'] != result['artifact_type']
             or manifest['schema_version'] != result['artifact_schema_version']):
@@ -617,35 +614,44 @@ def _detail(sessions, step, request):
         return selected
 
     if request.section == 'annotation_rationale':
-        from agent.tools.analysis.annotation_contract import CONTRACT, profile_sha
-        if (manifest['contract_version'] != CONTRACT or manifest['profile_sha256'] !=
-                profile_sha(manifest['arguments'], manifest['schema_version'])):
+        from agent.tools.analysis.hierarchical_annotation import CONTRACT
+        if manifest['contract_version'] != CONTRACT:
             raise _Unsupported('unsupported_detail_profile')
-        name = 'primary/result.json'
-        if 'primary/feature-participation.tsv' in manifest['sidecars']:
-            binding = manifest['sidecars'][name]
-            primary = parse(sidecar(name, binding))
-            for key, value in primary['feature_participation'].items():
-                emit('feature_participation.' + key, value, name, binding['sha256'], '/feature_participation/' + key)
-        groups = records('primary/groups.json', lambda row: request.subject is None or row['group'] == request.subject, 'assignment')
-        if request.subject is not None and len(groups) != 1:
+        pins = {Path(p['path']).name:p for p in manifest['files']}
+        hierarchy = parse(sidecar('hierarchy.json', pins['hierarchy.json']))
+        annotations = parse(sidecar('annotations.json', pins['annotations.json']))
+        rows = [(i,r) for i,r in enumerate(hierarchy['branches'])
+                if request.subject is None or r['branch_id'] == request.subject]
+        if request.subject is not None and len(rows) != 1:
             raise _Unavailable('unknown_or_ambiguous_detail_subject')
-        # Whole-result questions receive published primary-candidate support for
-        # the same bounded groups, never inferred labels or a new ranking.
-        selected = {row['group']: row['primary_annotation'] for _, row in groups[:request.limit]}
-        candidates = records('primary/candidate_evidence.json', lambda row:
-            (row['group'] in selected and row['candidate'] == selected[row['group']]) if request.subject is None else
-            (row['group'] == request.subject and (request.candidate is None or row['candidate'] == request.candidate)), 'candidate')
-        if request.candidate is not None and len(candidates) != 1:
-            raise _Unavailable('unknown_or_ambiguous_detail_candidate')
-        coverage = records('primary/signature_coverage.json', lambda row:
-            row['candidate'] in set(selected.values()) if request.subject is None else
-            (request.candidate is None or row['candidate'] == request.candidate), 'signature_coverage')
-        if request.candidate is not None and len(coverage) != 1:
-            raise _Unavailable('unknown_or_ambiguous_detail_candidate')
-        if request.candidate is not None:
-            facts.append(EvidenceFact('candidate.selection', 'available', request.candidate,
-                reason='presentation_selection'))
+        for index, (position, row) in enumerate(rows[:request.limit]):
+            value = {k:row[k] for k in ('branch_id','parent','level','n_cells','annotation','stopping_reason')}
+            emit('assignment.' + str(index), value, 'hierarchy.json', pins['hierarchy.json']['sha256'],
+                 '/branches/' + str(position))
+            round_id = row['annotation_round']
+            clusters = annotations[round_id]['clusters']
+            matches = [(i,c) for i,c in enumerate(clusters) if c['cluster']==row['cluster']]
+            if not matches:
+                continue  # Native unassigned group has no marker comparison.
+            ci, cluster = _one(matches)
+            prefix = '/' + round_id.replace('~','~0').replace('/','~1') + '/clusters/' + str(ci)
+            tests = [(i,t) for i,t in enumerate(cluster['tests']) if request.candidate is None
+                     or t['candidate']['cell_name'] == request.candidate]
+            if request.candidate is not None and len(tests)!=1:
+                raise _Unavailable('unknown_or_ambiguous_detail_candidate')
+            for n,(i,test) in enumerate(tests[:request.limit]):
+                emit(f'candidate.{index * request.limit+n}', dict(branch_id=row['branch_id'], **test),
+                    'annotations.json', pins['annotations.json']['sha256'],prefix+'/tests/'+str(i))
+            emit(f'candidate.records_omitted.{index}', max(0,len(tests)-request.limit),
+                'annotations.json', pins['annotations.json']['sha256'],prefix+'/tests')
+            markers = [(i,m) for i,m in enumerate(cluster['markers']) if m['positive']]
+            for n,(i,marker) in enumerate(markers[:request.limit]):
+                emit(f'marker.{index * request.limit+n}', dict(branch_id=row['branch_id'], **marker),
+                    'annotations.json', pins['annotations.json']['sha256'],prefix+'/markers/'+str(i))
+            emit(f'marker.records_omitted.{index}', max(0,len(markers)-request.limit),
+                'annotations.json', pins['annotations.json']['sha256'],prefix+'/markers')
+        emit('assignment.records_omitted', max(0,len(rows)-request.limit), 'hierarchy.json', pins['hierarchy.json']['sha256'], '/branches')
+
     else:
         from agent.tools.data._barcode_qc_contract import CONTRACT
         from agent.tools.data.scatac_qc_profile import PROFILE_SHA256
@@ -708,22 +714,60 @@ def read_evidence(sessions, session_id, revision_id, output_name, *, fields=None
         return DialogueEvidence(session_id, revision_id, output_name, 'unavailable', 'invalid_accepted_evidence')
 
 
+def annotation_report_methods(sessions, session_id, revision_id, output_name):
+    """Pinned technical methods under the report byte bound, not the chat fact bound.
+
+    This is the same accepted evidence reader. It neither reconstructs methods
+    from current defaults nor changes the bounded conversational projection.
+    """
+    from agent.report.annotation import METHOD_FIELDS
+    state = sessions.load(session_id)
+    revision = _one([r for r in state.revisions if r.revision_id == revision_id])
+    output = _one([o for o in revision.outputs if o.name == output_name])
+    run, step, planned, value, _ = _accepted(sessions, state, revision, output)
+    if step.tool_name != 'annotate_scATAC_cell_types':
+        raise ValueError('Technical annotation methods require an accepted annotation.')
+    _, _, _, evidence = _step_summary(sessions, run, step, planned, value)
+    facts = {key: evidence['facts'][key] for key in METHOD_FIELDS if key in evidence['facts']}
+    if len(_bytes(facts)) > 1_048_576:
+        raise ValueError('Technical annotation methods exceed the report byte bound.')
+    # Project recorded method fields individually, so a private source path in
+    # grouping provenance does not hide every native function and parameter.
+    # Scientific values are retained exactly or explicitly omitted.
+    methods = []
+    for recorded in facts.get('native_methods', ()):
+        row = dict(recorded)
+        parameters = row.get('parameters', {})
+        omitted = [key for key, value in parameters.items()
+                   if _unsafe_fact_field(key) or _unsafe_fact_value(value)]
+        row['parameters'] = {key: value for key, value in parameters.items() if key not in omitted}
+        if omitted:
+            row['privacy_omitted_parameter_fields'] = omitted
+        if not _unsafe_fact_value(row):
+            methods.append(row)
+    if 'native_methods' in facts:
+        facts['native_methods_omitted'] = facts.get('native_methods_omitted', 0) + len(facts['native_methods']) - len(methods)
+        facts['native_methods'] = methods
+    return {key: value for key, value in facts.items() if not _unsafe_fact_value(value)}
+
+
 def annotation_field_semantics(field):
     """Reviewed native summary meanings; no values or duplicate result authority."""
-    return {
-        'contract_version': dict(kind='artifact_contract', label='Annotation contract',
-            description='Version of the accepted annotation publication contract.'),
-        'n_groups': dict(kind='scientific_result', unit='input groups', label='Supplied annotation groups',
-            description='Number of independently supplied groups annotated by the computational method; not proof of distinct biological cell types.'),
-        'groups_omitted': dict(kind='summary_coverage', unit='group records',
-            description='Number of group records omitted from the bounded display summary: max(0, n_groups - 50). This is not a count of unidentified or unsuccessfully annotated groups.'),
-        'assigned_cells': dict(kind='scientific_result', unit='cells',
-            description='Number of cells assigned a label by the computational annotation method; not independently validated biological identities.'),
-        'unassigned_cells': dict(kind='scientific_result', unit='cells',
-            description='Number of cells without a computationally assigned annotation; distinct from omitted display records.'),
-        'validation_state': dict(kind='interpretation_limit', unit=None,
-            description='Independent validation status. not_assessed means computational annotations have not established independently validated biological cell identities.'),
-    }.get(field)
+    descriptions = {
+        'n_cells': 'Original cells retained in the hierarchical result; not a count of independently validated labels.',
+        'n_branches': 'All actual hierarchy branches, including internal branches.',
+        'levels_reached': 'Maximum annotation level actually reached; distinct from the configured depth budget.',
+        'terminal_populations': 'Populations with residual final cells, including residual parents after partial subdivision.',
+        'population_summary': 'Final population and cell counts by current-round evidence status; assigned, ambiguous, unresolved, insufficient evidence and native unassigned are distinct.',
+        'inherited_label_cells': 'Cells retaining an assigned ancestor label without a newly assigned finer label at their final depth.',
+        'branch_summary': 'Bounded branch membership, current-round candidate label, evidence status and actual stopping outcome. Labels are computational candidates, not biological validation.',
+        'branches_omitted': 'Branch records omitted from the bounded display; complete evidence remains downloadable.',
+        'maximum_levels': 'Configured maximum hierarchy depth, including the initial annotation level.',
+        'limitations': 'Recorded scientific interpretation limits.',
+    }
+    description = descriptions.get(field)
+    return None if description is None else dict(kind='summary_coverage' if field=='branches_omitted' else 'scientific_result', description=description)
+
 
 
 # Recorded method/settings fields in the reviewed accepted projections. These
@@ -849,8 +893,8 @@ RESULT_SUMMARY_FIELDS = {
 
 
 
-    'annotate_scATAC_cell_types': ('n_cells', 'n_groups', 'assigned_cells',
-        'unassigned_cells', 'ambiguous_cells', 'group_summary', 'groups_omitted', 'validation_state'),
+    'annotate_scATAC_cell_types': ('n_cells', 'levels_reached', 'n_branches', 'terminal_populations',
+        'population_summary', 'inherited_label_cells', 'branch_summary', 'branches_omitted', 'limitations'),
 }
 
 
@@ -886,6 +930,11 @@ def figure_metadata(record, *, manifest_sha256, run_id=None, revision=None, publ
     public = dict(kind=record['figure_kind'], figure_id=record['figure_id'], manifest_sha256=manifest_sha256,
         revision_id=None if revision is None else revision.revision_id,
         step_ids=record['source_step_ids'], output_names=names, sources=sources)
+    if 'compatible_umap_available' in record.get('presentation', {}):
+        public['compatible_umap_available'] = record['presentation']['compatible_umap_available']
+    if 'annotation_level' in record.get('presentation', {}):
+        public['annotation_level'] = record['presentation']['annotation_level']
+        public['levels_omitted'] = record['presentation']['levels_omitted']
     if run_id is not None:
         public['run_id'] = run_id
     if publisher is not None:

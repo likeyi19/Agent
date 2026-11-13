@@ -222,7 +222,7 @@ def test_http_categorical_tables_preserve_owner_denominators_and_partial_coverag
     before = files(app)
     with TestClient(create_app(facade)) as client:
         path = f'/api/v1/sessions/session/revisions/{rid}/evidence'
-        query = dict(output_name='output0', detail_section='category_counts', field='result:primary_annotation', limit=1, offset=1)
+        query = dict(output_name='output0', detail_section='category_counts', field='result:cell_type_final', limit=1, offset=1)
         response = client.get(path, params=query)
         assert response.status_code == 200, response.text
         fact = response.json()['detail'][0]

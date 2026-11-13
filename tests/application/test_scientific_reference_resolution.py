@@ -52,7 +52,7 @@ def test_distinct_categorical_operands_can_share_one_accepted_artifact(app, monk
     rid, _, _ = publication(app)
     guarded = forbid_work(app, monkeypatch)
     before = guarded.sessions.load('session')
-    fields = ['result:primary_annotation', 'source:treatment']
+    fields = ['result:cell_type_final', 'source:treatment']
     if reverse:
         fields.reverse()
     detail = selected(section, fields[0], fields[1])
@@ -88,7 +88,7 @@ def test_invalid_reference_operands_reject_before_generation_without_science(app
     else:
         choice['comparison'] = dict(output='r0', subject=None)
         if failure == 'same_field':
-            choice['detail'] = selected('category_association', 'result:primary_annotation', 'result:primary_annotation')
+            choice['detail'] = selected('category_association', 'result:cell_type_final', 'result:cell_type_final')
     guarded = forbid_work(app, monkeypatch)
     before = guarded.sessions.load('session')
     model = Model(choice)

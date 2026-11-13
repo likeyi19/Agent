@@ -35,7 +35,7 @@ CAPABILITY_DESCRIPTIONS = MappingProxyType({
         "Adopt an external exact canonical cell-by-cCRE matrix; ordinary cell-by-peak projection is unsupported."
     ),
     "marker_annotation": (
-        "MAESTRO cell-type annotation of independent supplied or Agent-computed groups from human hg38 or mouse mm10 raw genomic-region counts or binary-accessibility H5AD, using compatible gene and marker-signature references and explicit tissue context. Accepts an obs grouping column or exact ordered groups TSV. Historical accepted canonical matrices remain supported. The annotation owner does not cluster; the Planner may compose existing representation, neighbors and clustering tools when groups are absent, or reuse compatible accepted prerequisites. No labelled reference-cell dataset is required."
+        "Automatic hierarchical scATAC annotation using accepted native clustering, Gene Activity, Scanpy Wilcoxon/BH, CellMarker 3.0 exact matching and ORA, local peak-space SnapATAC2 subdivision and differential peak evidence. Reuse compatible accepted sources; the Planner arranges missing registered prerequisites. Gene-only sources can annotate current groups without peak subdivision. Computational labels are not biological validation."
     ),
 })
 

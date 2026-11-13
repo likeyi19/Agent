@@ -631,7 +631,7 @@ class MatrixDownloadPreparer:
         """Pin accepted bytes and apply the closed role's reviewed delivery policy."""
         matrix = artifact.contract in _CREATED_CONTRACTS | _ADOPTED_CONTRACTS
         from agent.tools.analysis import h5ad_delivery
-        from . import annotation_delivery, analysis_delivery, model_delivery, statistical_delivery
+        from . import analysis_delivery, model_delivery, statistical_delivery
         from . import sequence_delivery, native_delivery
         native = native_delivery.for_artifact(artifact)
         native_h5ad = native is not None and artifact.role in native.h5ad_roles
@@ -641,19 +641,13 @@ class MatrixDownloadPreparer:
         model_role = getattr(artifact, 'role', None)
         model = artifact.contract == model_delivery.CONTRACT and model_role in model_delivery.FILES
         model_metadata = model and model_role == model_delivery.METADATA
-        annotation = (artifact.contract == annotation_delivery.CONTRACT
-                      and getattr(artifact, 'role', None) == annotation_delivery.ROLE)
-        annotation_evidence = (artifact.contract == annotation_delivery.CONTRACT
-                               and getattr(artifact, 'role', None) in annotation_delivery.EVIDENCE_FILES)
-        annotation_projection = annotation_evidence and artifact.role.endswith(('.json', '.tsv'))
         compact = (artifact.contract == analysis_delivery.CONTRACT
                    and getattr(artifact, 'role', None) == analysis_delivery.ROLE)
         integrated = (artifact.contract == analysis_delivery.CONTRACT
                       and getattr(artifact, 'role', None) == analysis_delivery.INTEGRATED_ROLE)
         composed = (artifact.contract == analysis_delivery.COMPOSED_CONTRACT
                     and getattr(artifact, 'role', None) == analysis_delivery.COMPOSED_ROLE)
-        export = annotation or compact or integrated or composed or statistical or native_h5ad
-        exporter = analysis_delivery if compact else annotation_delivery
+        export = compact or integrated or composed or statistical or native_h5ad
         prefix = 'MATRIX' if matrix else 'SCIENTIFIC'
         if matrix:
             if getattr(artifact, 'role', 'matrix') != 'matrix':
@@ -661,8 +655,6 @@ class MatrixDownloadPreparer:
             filename, content_type = 'matrix.h5ad', 'application/octet-stream'
         elif native is not None:
             filename, content_type = artifact.role, native.file_definitions(artifact.manifest)[artifact.role][1]
-        elif annotation_evidence:
-            filename, content_type = artifact.role, annotation_delivery.EVIDENCE_FILES[artifact.role][2]
         elif sequence:
             filename, content_type = artifact.role, sequence_delivery.FILES[artifact.role][1]
         elif model:
@@ -671,7 +663,7 @@ class MatrixDownloadPreparer:
         elif export:
             filename = (artifact.reference.filename if integrated or composed or statistical else
                         analysis_delivery.FILENAMES.get(artifact.manifest.get('stage', 'umap'))
-                        if compact else exporter.FILENAME)
+                        if compact else None)
             if filename is None:
                 raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_UNAVAILABLE')
             content_type = 'application/octet-stream'
@@ -773,7 +765,7 @@ class MatrixDownloadPreparer:
                 else:
                     create_export = (statistical_delivery.create_statistical_export if statistical or native_h5ad else
                                      analysis_delivery.create_analysis_export if compact else
-                                     annotation_delivery.create_annotation_export)
+                                     statistical_delivery.create_statistical_export)
                     create_export(snapshot, derivative, artifact.manifest,
                         source_sha256=artifact.sha256, source_size_bytes=size,
                         manifest_sha256=artifact.manifest_sha256, max_bytes=delivered_limit)
@@ -789,11 +781,11 @@ class MatrixDownloadPreparer:
                     raise ValueError('Empty scientific export.')
                 snapshot.close()
                 snapshot, derivative = derivative, None
-            elif sequence or native_projection or annotation_projection:
-                data = (native_delivery if annotation_evidence else native if native is not None else sequence_delivery).prepare(snapshot, artifact.role)
+            elif sequence or native_projection:
+                data = (native if native is not None else sequence_delivery).prepare(snapshot, artifact.role)
                 if len(data) > self.policy.delivered_bytes:
                     raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT')
-                if native_projection or annotation_projection:
+                if native_projection:
                     # The source snapshot is overwritten, not duplicated. Admit
                     # only actual growth before writing, including short-label
                     # redaction and row-dependent CSV expansion. Keep its slot.
@@ -803,15 +795,15 @@ class MatrixDownloadPreparer:
                         reservation += growth
                 snapshot.seek(0); snapshot.truncate(); snapshot.write(data); snapshot.flush()
                 delivered_size = len(data); checksum = hashlib.sha256(data)
-            elif native is not None or annotation_evidence:
+            elif native is not None:
                 pass  # Exact accepted binary bytes already pinned in the private snapshot.
             else:
                 from .table_delivery import validate_scientific_table
                 validate_scientific_table(snapshot, artifact.contract, artifact.role, artifact.manifest)
             snapshot.seek(0)
             resource = VerifiedMatrixSnapshot(snapshot,
-                size_bytes=delivered_size if export or model_metadata or sequence or native_projection or annotation_projection else size,
-                sha256=checksum.hexdigest() if export or model_metadata or sequence or native_projection or annotation_projection else artifact.sha256,
+                size_bytes=delivered_size if export or model_metadata or sequence or native_projection else size,
+                sha256=checksum.hexdigest() if export or model_metadata or sequence or native_projection else artifact.sha256,
                 source_sha256=artifact.sha256, release=lambda: self._release(reservation),
                 filename=filename, content_type=content_type)
             snapshot, reserved = None, False

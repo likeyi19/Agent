@@ -818,7 +818,7 @@ def _qc_projection(read_sources):
     """Descriptive plots from pinned obs/uns only; X and fragment arrays stay unread."""
     import h5py
     from anndata.io import read_elem
-    from agent.tools.analysis.marker_annotation import checked_file
+    from agent.tools._file_identity import checked_file
     from agent.tools.analysis import peak_h5ad  # optional native HDF5 filters
     inputs = read_sources(); primary = inputs['primary']
     with h5py.File(checked_file(primary['path'], primary['sha256']), 'r') as handle:

@@ -1512,8 +1512,8 @@ def verify_step(
                     'Sequence verification failed.', 'SEQUENCE_VERIFICATION_FAILED')
         elif step.tool_name == "annotate_scATAC_cell_types":
             try:
-                from agent.tools.analysis.scatac_annotation import verify_public_result
-                verify_public_result(resolved_arguments, plain_result)
+                from agent.tools.analysis.hierarchical_annotation import publication
+                publication.verify_result(resolved_arguments, plain_result)
             except Exception as exc:
                 checks.add('annotation_publication_integrity', False,
                     'Native annotation completion, accepted source lineage and exact H5AD propagation.',

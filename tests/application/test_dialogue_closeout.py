@@ -17,7 +17,7 @@ def test_offered_subject_references_persist_canonical_identity(app, reference):
         candidates=prompt['dialogue']['outputs'][0]['subjects']['candidates']
         assert next(c for c in candidates if c['id']=='7')['references']==['7','cluster 7']
         return question('r0',reference)
-    result=ask(app,'canonical','What does cluster 7 show?',Model(decide,['primary_annotation']))
+    result=ask(app,'canonical','What does cluster 7 show?',Model(decide,['label']))
     assert result.status=='answered'
     assert {c.subject for c in result.scientific.claims}=={'7'}
     assert app.sessions.load('session').interactions[-1].admitted['target']['subject']=='7'
@@ -46,12 +46,12 @@ def test_subject_reference_forms_are_literal_bounded_and_domain_neutral():
 def test_new_claim_parts_bind_without_magic_text_or_duplicate_id_lists(app,monkeypatch):
     annotation(app)
     def response(prompt):
-        claim=next(c for c in prompt['evidence']['claims'] if c['field']=='primary_annotation')
+        claim=next(c for c in prompt['evidence']['claims'] if c['field']=='label')
         assert claim['subject']=='7'
         return dict(support='supported',paragraphs=[dict(text='The accepted assignment for group 7 is B cell.', kind='finding', citations=[claim['claim_id']], comparisons=[])])
     result=ask(forbid_work(app,monkeypatch),'parts','Explain cluster 7',Model(question(subject='cluster 7'),response=response))
     assert result.status=='answered' and 'group 7' in result.text and 'B cell' in result.text
-    assert result.scientific.claims[0].field=='primary_annotation'
+    assert result.scientific.claims[0].field=='label'
 
 
 def test_reviewed_semantics_transported_verbatim_missing_units_not_invented(app):
@@ -78,7 +78,7 @@ def test_generation_union_has_distinct_kinds_and_bounded_reference_enums(app):
                 assert fields['kind']['enum']==['finding','limitation','conditional']
                 assert fields['citations']['items']['enum']==[c['claim_id'] for c in p['evidence']['claims']]
             return super().complete(prompt=prompt,response_schema=response_schema)
-    assert ask(app,'schema','Explain cluster 7',Check(question(subject='7'),['primary_annotation'])).status=='answered'
+    assert ask(app,'schema','Explain cluster 7',Check(question(subject='7'),['label'])).status=='answered'
 
 
 def test_registry_field_description_is_reused_without_rephrasing(app):

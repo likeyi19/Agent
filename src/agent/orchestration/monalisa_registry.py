@@ -35,7 +35,7 @@ def tool_spec():
         optional[name] = arg((str,), 'Actual genomic coordinate declaration, never inferred from filenames.', choices=choices, scientific_parameter=True, conversational_choice=True)
     from .native_parameters import scalar_port
     ports = [Consumer('dataset', (member('dataset', 'input_path'),), True,
-        request_sources=(request('input_path', rm('dataset', 'input_path')),), accepted_upstream_types=('scatac_matrix_h5ad.v1', 'native_matrix_h5ad.v1')),
+        request_sources=(request('input_path', rm('dataset', 'input_path')),), accepted_upstream_types=('scatac_matrix_h5ad.v1','hierarchical_annotation_h5ad.v1', 'native_matrix_h5ad.v1')),
         Consumer('bins', (member('dataset', 'bins_path'),), False, request_sources=(request('bins_path', rm('dataset', 'bins_path')),)),
         Consumer('genome', (member('path', 'genome_path'), member('sha256', 'genome_sha256')), False,
             request_sources=(request('genome_path', rm('path', 'genome_path'), rm('sha256', 'genome_sha256')),))]

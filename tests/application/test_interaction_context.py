@@ -19,7 +19,7 @@ def cooutputs(app, monkeypatch, *, names=('zeta', 'alpha'), tool='inspect_scATAC
     original = AnalysisSessions.start_turn
     def select(self, session_id, turn_id, request, outputs, **options):
         step = outputs[0].step_id
-        keys = ('n_cells', 'input_path') if tool == 'inspect_scATAC' else ('n_cells', 'n_groups')
+        keys = ('n_cells', 'input_path') if tool == 'inspect_scATAC' else ('n_cells', 'n_branches')
         return original(self, session_id, turn_id, request,
             tuple(OutputSelection(name, step, key) for name, key in zip(names, keys)), **options)
     with monkeypatch.context() as patch:
@@ -190,24 +190,24 @@ def test_creation_scope_excludes_retained_old_run_outputs(app, monkeypatch):
 def test_previous_answer_preserves_subject_and_comparison_ambiguity(app, monkeypatch):
     annotation(app)
     app = forbid_work(app, monkeypatch)
-    assert ask(app, 'first', 'Explain cluster 3.', Model(question(subject='3'), ['primary_annotation'])).status == 'answered'
-    follow, _ = role_answer(app, 'previous', '@previous_turn_result', fields=('primary_annotation',))
+    assert ask(app, 'first', 'Explain cluster 3.', Model(question(subject='3'), ['label'])).status == 'answered'
+    follow, _ = role_answer(app, 'previous', '@previous_turn_result', fields=('label',))
     assert follow.scientific.claims[0].subject == '3'
     comparison = question('r0', '3', comparison=dict(output='r0', subject='7'))
-    assert ask(app, 'pair', 'Compare cluster 3 and cluster 7.', Model(comparison, ['primary_annotation'])).status == 'answered'
+    assert ask(app, 'pair', 'Compare cluster 3 and cluster 7.', Model(comparison, ['label'])).status == 'answered'
     result, model = role_answer(app, 'ambiguous', '@previous_turn_result')
     assert result.status == 'clarification' and len(model.calls) == 1
 
 
 def test_modern_canonical_alias_retains_focus_and_other_subject(app, monkeypatch):
-    values = dict(n_groups=2, groups_omitted=0, validation_state='not_assessed', group_summary=[
-        dict(group='3', n_cells=8, primary_annotation='CD8 T', status='assigned'),
-        dict(group='7', n_cells=5, primary_annotation='B cell', status='assigned')])
+    values = dict(n_branches=2, branches_omitted=0, branch_summary=[
+        dict(branch_id='3', n_cells=8, label='CD8 T', status='assigned'),
+        dict(branch_id='7', n_cells=5, label='B cell', status='assigned')])
     cooutputs(app, monkeypatch, tool='annotate_scATAC_cell_types', overrides=values)
     app = forbid_work(app, monkeypatch)
-    assert ask(app, 'legacy', 'Explain zeta for cluster 3.', Model(question('r0', '3'), ['primary_annotation'])).status == 'answered'
+    assert ask(app, 'legacy', 'Explain zeta for cluster 3.', Model(question('r0', '3'), ['label'])).status == 'answered'
     for turn, subject, expected in [('focus', '@focus', '3'), ('other', '@other', '7')]:
-        result = ask(app, turn, 'Continue this discussion.', Model(question('g0', subject), ['primary_annotation']))
+        result = ask(app, turn, 'Continue this discussion.', Model(question('g0', subject), ['label']))
         assert result.status == 'answered' and result.scientific.claims[0].subject == expected
         assert result.scientific.claims[0].source['output_locator']['name'] == 'alpha'
 

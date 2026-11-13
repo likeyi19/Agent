@@ -160,8 +160,8 @@ def test_empty_source_set_uses_existing_typed_resource_prerequisites(tmp_path, f
         ('run_snapatac2', 'counting_strategy', 'fragment', 'fragment'),
         ('build_cell_neighbors', 'n_neighbors', '5', 5))),
     ('annotation', 'annotate_scATAC_cell_types', (
-        ('annotate_scATAC_cell_types', 'count_slot', 'X', 'X'),
-        ('annotate_scATAC_cell_types', 'group_column', 'clusters', 'clusters'))),
+        ('annotate_scATAC_cell_types', 'activity_count_slot', 'X', 'X'),
+        ('annotate_scATAC_cell_types', 'identity_column', 'gene_name', 'gene_name'))),
     ('epizoo', 'epizoo_embed_cells', (
         ('cluster_cells', 'resolution', '0.5', .5),
         ('compute_cell_umap', 'min_dist', '0.1', .1))),

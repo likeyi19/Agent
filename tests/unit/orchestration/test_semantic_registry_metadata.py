@@ -500,7 +500,7 @@ def test_feature_space_semantic_authority_covers_the_full_execution_interface() 
         for channel in channels)
     for port in tool.semantic_planning.consumer_ports:
         assert port.required is (port.name in tool.required_arguments)
-        assert port.accepted_upstream_types == (('scatac_matrix_h5ad.v1','native_matrix_h5ad.v1') if port.name=='input_path' else ())
+        assert port.accepted_upstream_types == (('scatac_matrix_h5ad.v1','hierarchical_annotation_h5ad.v1','native_matrix_h5ad.v1') if port.name=='input_path' else ())
 
 
 def test_scoped_optional_selectors_are_registry_authoritative_and_isolated() -> None:

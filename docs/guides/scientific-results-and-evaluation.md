@@ -118,8 +118,7 @@ provenance and downloads use the existing artifact endpoints.
 The presentation does not add missing scientific steps. An accepted UMAP is needed
 for a UMAP figure. Recoloring requires an exact qualified cell correspondence.
 Missing UMAP, gene activity, QC observations or compatible reference labels cannot
-become figures or accuracy estimates by requesting a report. MAESTRO RP and ArchR gene
-scores are accessibility-derived activity estimates, not measured expression;
+become figures or accuracy estimates by requesting a report. Gene Activity and ArchR gene scores are accessibility-derived activity estimates, not measured expression;
 marker evidence used in annotation is dependent evidence. Existing native motif,
 peak and sequence figures retain their recorded meanings.
 
@@ -130,22 +129,12 @@ rewritten by the presentation. Download requests are not local delivery receipts
 
 ## Annotation figures and remaining coverage
 
-New native annotation result displays include group/cell-type composition and,
-when positive native marker evidence exists, an RP dot plot and per-cell activity
-distributions. These use the pinned sparse per-cell MAESTRO RP matrix, exact genes,
-cells, groups and candidate/marker sidecars. No annotation, RP fit or marker test is
-rerun. Selection prefers positive markers supporting the native assigned candidate,
-then positive native group markers in published order: up to two per group and
-twelve distinct genes. Dot color is `log1p(mean raw RP)`; size is fraction `RP > 0`.
-Distributions show per-cell `log1p(raw RP)` for up to four selected genes and twenty
-groups. Dot previews retain up to forty recorded groups. Limits are explicit.
-Raw RP is sensitive to library depth; it is accessibility-derived activity, not
-measured RNA expression. These markers are dependent annotation evidence.
-
-A source-compatible accepted UMAP in the same Run also receives native cell-type
-colors automatically. Explicit later accepted-result overlays retain the existing
-Interaction composer. A missing UMAP never causes hidden fitting. New annotation
-figure projections have an explicit version marker; retained scientific bundles keep their recorded figure sets and displayed prose.
+Current annotation figures are described in the
+[cell-type annotation guide](cell-type-annotation.md). They use accepted Gene
+Activity, recorded positive native markers and exact accepted global UMAP where
+available. Composition, marker dot/heatmap/feature panels and branch relationships
+have explicit bounds. Level selection is presentation-only. Old RP plots remain
+historical artifacts and are never relabeled as Gene Activity.
 
 SRV-1 remains open. Barcode QC already publishes length histograms and per-barcode
 metrics, but automatic QC distributions/scatter and selection-retention figures

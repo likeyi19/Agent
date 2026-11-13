@@ -41,7 +41,7 @@ def tool_spec():
     scalar = lambda k, **kw: scalar_port(owner.TOOL, tuple(owner.FUNCTIONS), k, **kw) if ({**required, **optional}[k].planning.scientific_parameter) else base_scalar(k, **kw)
     ports=[Consumer('dataset',(member('dataset','input_path'),),True,
         request_sources=(request('input_path',rm('dataset','input_path')),),
-        accepted_upstream_types=('scatac_matrix_h5ad.v1','chromvar_scores_h5ad.v1','native_matrix_h5ad.v1','raw_scatac_dataset.v1')),
+        accepted_upstream_types=('scatac_matrix_h5ad.v1','hierarchical_annotation_h5ad.v1','chromvar_scores_h5ad.v1','native_matrix_h5ad.v1','raw_scatac_dataset.v1')),
         *(scalar(k,required=k in required) for k in (*required,*optional) if k!='input_path')]
     pub=owner.publication
     return ToolSpec(native_functions=NativeFunctionCatalog('chromVAR', tuple((name, tuple(members)) for name, members in owner.FUNCTIONS.items())),name=owner.TOOL,function=owner.run_chromvar,required_arguments=required,optional_arguments=optional,

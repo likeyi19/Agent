@@ -33,25 +33,25 @@ class Model:
 
 def annotation_answer(e):
     facts = {c['field']: c for c in e['claims']}
-    for field in ('groups_omitted', 'assigned_cells', 'unassigned_cells', 'validation_state'):
+    for field in ('branches_omitted','n_cells','inherited_label_cells','levels_reached'):
         assert facts[field]['semantics']['description_source'] == 'reviewed_native_annotation_summary'
-    assert facts['groups_omitted']['semantics']['kind'] == 'summary_coverage'
-    assert facts['unassigned_cells']['semantics']['kind'] == 'scientific_result'
+    assert facts['branches_omitted']['semantics']['kind'] == 'summary_coverage'
     return dict(support='supported', paragraphs=[paragraph(
-        'MAESTRO computationally assigned 1004 cells; 0 cells were unassigned. '
-        'The 2 omitted groups are records excluded from the bounded display, not unidentified groups. '
-        'Validation is not_assessed, so the labels are not independently validated biological identities.',
-        [facts[f]['claim_id'] for f in ('assigned_cells','unassigned_cells','groups_omitted','validation_state')])])
+        'The hierarchical result retains 1004 cells and reaches 2 levels. '
+        'There are 12 cells with inherited ancestor labels. The 2 omitted branches are display records, not missing populations. '
+        'Computational labels do not establish independently validated biological identities.',
+        [facts[f]['claim_id'] for f in ('n_cells','levels_reached','inherited_label_cells','branches_omitted')])])
+
 
 
 def test_annotation_semantics_natural_numbers_categories_and_exact_identity(app, monkeypatch):
     rid, _, _ = accepted(app, 'annotate_scATAC_cell_types', overrides=dict(
-        n_groups=52, groups_omitted=2, assigned_cells=1004, unassigned_cells=0,
-        validation_state='not_assessed', group_summary=[]))
+        n_branches=52, branches_omitted=2, n_cells=1004, levels_reached=2,
+        inherited_label_cells=12, branch_summary=[]))
     model = Model(annotation_answer)
     outcome = ask(forbid_work(app, monkeypatch), 'answer', 'Explain annotation.', model)
     assert outcome.status == 'answered'
-    assert '1004' in outcome.text and 'not_assessed' in outcome.text
+    assert '1004' in outcome.text and 'inherited' in outcome.text
     assert all(c.source['revision_id'] == rid and c.source['evidence_sha256'] for c in outcome.scientific.claims)
     assert len(model.calls) == 3  # interpretation, explanation, distinct semantic review
 
@@ -315,3 +315,18 @@ def test_guidance_freshness_after_shared_review(app, monkeypatch):
     result = guide(guard(app, monkeypatch), model=Changed(tools=('inspect_scATAC', 'cluster_cells')))
     assert result.status == 'unavailable' and result.guidance is None
     assert app.sessions.load('session').interactions[-1].guidance_candidates is None
+
+
+@pytest.mark.parametrize('utterance,text', [
+    ('解释此结果。','此结果保留了 2 个细胞。'),
+    ('Explain this result.','This result retains 2 cells.'),
+])
+def test_existing_grounded_response_keeps_researcher_language(app,monkeypatch,utterance,text):
+    accepted(app,'inspect_scATAC',overrides={'n_cells':2})
+    def author(e):
+        claim=next(c for c in e['claims'] if c['field']=='n_cells')
+        return dict(support='supported',paragraphs=[paragraph(text,[claim['claim_id']])])
+    model=Model(author)
+    outcome=ask(forbid_work(app,monkeypatch),'language',utterance,model)
+    assert outcome.status=='answered' and outcome.text==text
+    assert len(model.calls)==3

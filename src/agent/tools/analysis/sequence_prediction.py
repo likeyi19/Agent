@@ -19,7 +19,8 @@ from agent.schemas.verification_authority import AuthorityError, VerifiedArtifac
 from agent.tools._cancellation import cancellation_checkpoint
 from agent.tools.data.authority_context import current, owned_verification
 from agent.tools._file_identity import file_closure
-from . import annotation_contract as io
+from agent.tools._file_identity import read_json
+from agent.tools.data import scatac_matrix_contract as matrix
 
 TOOL = 'predict_regulatory_sequences'
 EVALUATE = 'evaluate_regulatory_predictions'
@@ -54,11 +55,11 @@ TABLE_FIELDS = ('sequence_id', 'original_header', 'sequence_sha256', 'condition_
 
 
 def read(path, sha=None):
-    return io.read_json(path, sha, limit=64 * 1024**2)
+    return read_json(path, sha, limit=64 * 1024**2)
 
 
 def write(path, value):
-    data = io.matrix.canonical(value)
+    data = matrix.canonical(value)
     with Path(path).open('xb') as stream:
         stream.write(data); stream.flush(); os.fsync(stream.fileno())
     return hashlib.sha256(data).hexdigest()
@@ -107,9 +108,9 @@ def arguments(values):
     values = dict(values)
     for key, value in values.items():
         if key.endswith('_path') or key == 'output_dir':
-            values[key] = str(value); io.matrix.absolute_path(values[key])
+            values[key] = str(value); matrix.absolute_path(values[key])
         elif key.endswith('_sha256'):
-            io.matrix.sha(value)
+            matrix.sha(value)
     if 'output_dir' not in values:
         raise ValueError('Missing managed output directory')
     return values

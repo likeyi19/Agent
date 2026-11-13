@@ -285,7 +285,7 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
         "inspect_scATAC": "inspect-scatac-v2",
         "inspect_raw_scATAC": "inspect-raw-scatac-v1",
         "inspect_scATAC_fragments": "inspect-fragment-structure-v1",
-        "annotate_scATAC_cell_types": "annotate-scatac-cell-types-v1",
+        "annotate_scATAC_cell_types": "hierarchical-annotation-v1",
 
 
         "adopt_scATAC_cell_by_features": "adopt-scatac-cell-by-features-v1",

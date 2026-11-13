@@ -457,29 +457,52 @@ function resultFigureGallery(artifacts) {
   const captions = {
     qc_metrics: "Saved native QC measurements and recorded producer populations. Missing values are explicit; profiles are not recomputed after filtering. Thresholds describe the selected filtering result.",
     annotation_composition: "Native groups and predicted cell-type composition, including unassigned coverage. Candidate labels are computational annotations.",
-    marker_activity_dot: "Native MAESTRO Enhanced RP: color = log1p(mean raw RP), size = fraction RP > 0. Representative positive native markers; accessibility-derived activity, not measured RNA expression or independent validation.",
-    marker_activity_distribution: "Genuine per-cell log1p(raw MAESTRO RP) distributions for representative markers. Bounded groups/genes are named on the plot. Accessibility-derived activity is not RNA expression; raw RP is sensitive to library depth.",
-    marker_activity_umap: "Color = log1p(raw native MAESTRO RP), without additional normalization. All cells use the same accepted UMAP. Accessibility-derived activity is not measured RNA expression. Native markers can help inspect candidate annotations and within-cluster heterogeneity; they are dependent evidence, not independent biological validation.",
-    annotation_umap: "Accepted UMAP colored by MAESTRO predictions using exact original-source ancestry and ordered cells. Gray = unassigned. Coordinates were reused.",
+    marker_activity_dot: "Accepted Gene Activity: color = log1p(mean Gene Activity), size = fraction activity > 0. Representative positive native markers; accessibility-derived activity, not measured RNA expression or independent validation.",
+    marker_activity_heatmap: "Color = log1p(mean accepted Gene Activity). Representative positive native markers; accessibility-derived activity, not measured RNA expression. Bounded groups and genes are named on the plot.",
+    annotation_hierarchy: "Accepted branch relationships and actual stopping outcomes. Computational subdivisions are not independently validated cell types.",
+    marker_activity_umap: "Color = log1p(Gene Activity), without additional normalization. All cells use the same accepted UMAP. Accessibility-derived activity is not measured RNA expression. Native markers can help inspect candidate annotations and within-cluster heterogeneity; they are dependent evidence, not independent biological validation.",
+    annotation_umap: "Accepted UMAP colored by hierarchical annotations using exact original-source ancestry and ordered cells. Gray = unassigned. Coordinates were reused.",
     umap_leiden: "UMAP colored by accepted native clustering groups. Separation is descriptive, not independent validation of cell identity.",
     umap_coordinates: "Accepted UMAP coordinates. No cluster or cell-type assignment is implied by this coordinate plot.",
     umap_categorical: "Accepted UMAP coordinates colored by the recorded categorical field. Supplied or predicted labels are not independent validation.",
     clustering_metrics: "Clustering agreement with the recorded reference labels. Interpretation depends on the reference's provenance and independence.",
   };
+  const levels = [...new Set(artifacts.filter(a => a.figure.kind === "annotation_umap")
+    .map(a => String(a.figure.annotation_level)))];
+  const levelCards = [];
+  if (levels.length > 1) {
+    const label = document.createElement("label"); label.textContent = "Annotation level ";
+    const select = document.createElement("select"); select.setAttribute("aria-label", "Annotation level");
+    for (const level of levels) {
+      const option = document.createElement("option"); option.value = level;
+      option.textContent = level === "final" ? "Final annotation" : `Level ${level}`;
+      select.append(option);
+    }
+    select.value = "final";
+    select.addEventListener("change", () => {
+      for (const [card, level] of levelCards) card.hidden = level !== select.value;
+    });
+    label.append(select); section.append(label);
+  }
   // Bound image loading, not scientific availability. Every figure and full-size
   // PNG remains in the source-bound inventory below.
   for (const artifact of artifacts) {
     const card = document.createElement("figure");
-    const title = document.createElement("h4"); title.textContent = readableLabel(artifact.figure.kind);
+    const title = document.createElement("h4"); title.textContent = readableLabel(artifact.figure.kind) + (artifact.figure.annotation_level !== undefined ? ` · ${artifact.figure.annotation_level === 'final' ? 'Final annotation' : 'Level ' + artifact.figure.annotation_level}` : '');
     const image = document.createElement("img"); image.className = "analysis-figure";
     image.loading = "lazy"; image.alt = title.textContent;
     image.src = `/api/v1${artifactPath(state.session.session_id, artifact.revision_id, artifact.handle, artifact.turn_id)}`;
     const caption = document.createElement("figcaption"); caption.className = "small";
     caption.textContent = captions[artifact.figure.kind] || "Published scientific figure; exact sources are available below.";
+    if (artifact.figure.compatible_umap_available === false) caption.textContent += " No compatible accepted UMAP was available for this publication.";
     image.addEventListener("error", () => {
       image.hidden = true;
       caption.textContent = "Figure preview unavailable. Download the saved PNG to inspect it; no analysis was rerun.";
     });
+    if (artifact.figure.kind === "annotation_umap" && levels.length > 1) {
+      const level = String(artifact.figure.annotation_level);
+      levelCards.push([card, level]); card.hidden = level !== "final";
+    }
     card.append(title, image, caption); section.append(card);
   }
   return section;
@@ -586,12 +609,12 @@ function renderResultSelection() {
         const label = document.createElement("dt"); label.textContent = view.field_labels[fact.field] || readableLabel(fact.field);
         const value = document.createElement("dd");
         if (fact.status !== "available") value.textContent = `${fact.status}: ${fact.reason || "No accepted value"}`;
-        else if (["group_summary", "metrics"].includes(fact.field)) {
+        else if (["branch_summary", "population_summary", "metrics"].includes(fact.field)) {
           const preview = fact.value;
           value.append(evidenceValueNode(preview));
-          if (fact.field === "group_summary") {
+          if (fact.field === "branch_summary") {
             const note = document.createElement("p"); note.className = "muted small";
-            note.textContent = "Recorded group summary; omitted groups do not establish absence. Full results remain available in downloads.";
+            note.textContent = "Recorded branch summary; omitted branches do not establish absence. Full results remain available in downloads.";
             value.append(note);
           }
         } else if (fact.value !== null && typeof fact.value === "object") {
@@ -882,7 +905,7 @@ function readableLabel(value) {
     umap_categorical: "UMAP · categorical field", annotation_umap: "UMAP · cell-type annotation",
     qc_metrics: "QC measurements", annotation_composition: "Cell-type composition",
     marker_activity_umap: "UMAP · marker activity", marker_activity_dot: "Marker activity",
-    marker_activity_distribution: "Marker activity distributions"};
+    marker_activity_heatmap: "Marker activity heatmap", annotation_hierarchy: "Annotation hierarchy"};
   if (scientificLabels[value]) return scientificLabels[value];
   const label = String(value).replace(/_/g, " ");
   return label.charAt(0).toUpperCase() + label.slice(1);
@@ -996,7 +1019,7 @@ function evidenceFactNodes(facts, fieldLabels = {}) {
     const technical = fact.field.endsWith("_sha256") || fact.field.includes("contract");
     const item = document.createElement(technical ? "details" : "section");
     item.className = "scientific-fact";
-    if (fact.field === "group_summary") item.classList.add("annotation-groups");
+    if (fact.field === "branch_summary") item.classList.add("annotation-groups");
     const title = document.createElement(technical ? "summary" : "h4");
     title.textContent = `${fieldLabels[fact.field] || readableLabel(fact.field)}${fact.status === "available" ? "" : ` · ${fact.status}`}`;
     const content = fact.status === "available" ? evidenceValueNode(fact.value) : document.createElement("p");
@@ -1550,6 +1573,17 @@ function stepProgress(steps, status, expanded = false) {
     const item = document.createElement("li"); item.textContent = text;
     if (step.training_notice) item.textContent += ` — ${step.training_notice}`;
     if (step.error_message) { const error = document.createElement("p"); error.className = "turn-error"; error.textContent = step.error_message; item.append(error); }
+    if (step.annotation_progress) {
+      const progress = step.annotation_progress;
+      const note = document.createElement("p");
+      note.textContent = `Annotation: ${progress.completed_children} native child steps completed; ${progress.pending_branches ?? "unknown"} known pending branches. Future total is unknown.`;
+      if (progress.level) note.textContent += ` Level ${progress.level}.`;
+      if (progress.branch_id) note.textContent += ` Branch ${progress.branch_id}.`;
+      if (progress.function_name) note.textContent += ` Native function: ${progress.function_name}.`;
+      if (progress.outcome) note.textContent += ` Outcome: ${readableLabel(progress.outcome)}.`;
+      note.textContent += ` ${progress.running.length} native child steps running.`;
+      item.append(note);
+    }
     list.append(item);
   }
   details.append(title, list); section.append(summary, segments, details); return section;
@@ -2361,7 +2395,7 @@ function showParameters(editor) {
   element("parameter-error").textContent = "";
   element("parameter-steps").replaceChildren(...editor.steps.map((step) => {
     const section = document.createElement("section"), title = document.createElement("h3");
-    title.textContent = `${step.native_function || step.tool}${step.step_id ? " · " + step.step_id : ""}`;
+    title.textContent = `${step.native_function || step.tool}${step.branch_id ? " · Branch " + step.branch_id + " · " + step.operation_id : step.step_id ? " · " + step.step_id : ""}`;
     section.append(title);
     if (!editor.revisionId && step.functions?.length && !step.native_function) {
       const label = document.createElement("label"); label.textContent = "Requested native function";

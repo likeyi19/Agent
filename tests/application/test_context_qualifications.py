@@ -64,18 +64,18 @@ def test_result_limitations_are_projected_once_without_removing_qualified_meanin
 
 
 def test_annotation_rationale_context_keeps_exact_markers_and_consistent_computational_limits(app, monkeypatch):
-    revision_id, _ = publication(app, annotation_version=2)
+    revision_id, _ = publication(app)
     selected = target(app, revision_id)
     guarded = forbid_work(app, monkeypatch)
     before = files(app)
     public, claims = dialogue.context(guarded.sessions, 'session', dict(target=selected, comparison=None))
-    candidates = [c for c in claims if c.field.startswith('detail.candidate.')]
-    assert candidates and all(c.value['positive'] == ('MS4A1',) for c in candidates)
+    candidates = [c for c in claims if c.field.startswith('detail.candidate.') and '.records_omitted.' not in c.field]
+    assert candidates and all(c.value['matched_genes'] == ('MS4A1',) for c in candidates)
     assert all(c.source['revision_id'] == revision_id and c.source['artifact_sha256'] for c in candidates)
     assert any('Published annotation rationale' in value for value in public['meanings'].values())
     assert evidence.RESULT_LIMITATIONS['annotate_scATAC_cell_types'] in public['limitations']
     assert 'does not contain marker rationale' not in json.dumps(public)
-    assert 'not independently validated biological cell identities' in json.dumps(public)
+    assert 'not independently validated biological identities' in json.dumps(public)
     assert files(app) == before
 
 

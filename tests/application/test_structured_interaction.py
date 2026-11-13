@@ -291,30 +291,31 @@ def test_compiler_binds_settings_before_downstream_input_preparation(tmp_path):
         SemanticPlanCandidate, SemanticPlanStep, SemanticRegisteredChoiceSource as Choice,
         SemanticRequestInputSource as Input, SemanticStepOutputSource as Upstream)
     registry = build_default_tool_registry()
-    inputs = dict(input_path=str(tmp_path/'counts.h5ad'), input_sha256='a'*64, output_dir=str(tmp_path/'output'),
-        annotation_spec_path=str(tmp_path/'spec.json'), annotation_spec_sha256='b'*64,
-        count_slot='layers/counts', run_snapatac2__pp_add_tile_matrix__kwargs={'counting_strategy': 'fragment'})
+    inputs = dict(input_path=str(tmp_path/'counts.h5ad'), output_dir=str(tmp_path/'output'),
+        cellmarker_id='selected-cellmarker',
+        activity_count_slot='layers/counts', run_snapatac2__pp_add_tile_matrix__kwargs={'counting_strategy': 'fragment'})
     rows = [dict(tool='run_snapatac2', argument='kwargs', native_function='pp.add_tile_matrix',
                  input_name='run_snapatac2__pp_add_tile_matrix__kwargs', value={'counting_strategy': 'fragment'}),
-            dict(tool='annotate_scATAC_cell_types', argument='count_slot', input_name='count_slot', value='layers/counts')]
+            dict(tool='annotate_scATAC_cell_types', argument='activity_count_slot', input_name='activity_count_slot', value='layers/counts')]
     context = ActivePlanningContext('s', None, 0, (), task=dict(parameter_overrides=rows))
     candidate = SemanticPlanCandidate((
         SemanticPlanStep('tile', 'run_snapatac2', (Input('dataset', 'input_path'), Choice('function_name', 'pp.add_tile_matrix'),
             Choice('counting_strategy', 'insertion'))),
-        SemanticPlanStep('annotation', 'annotate_scATAC_cell_types', (Upstream('source', 'tile', 'dataset'),))))
+        SemanticPlanStep('groups', 'run_snapatac2', (Upstream('dataset','tile','dataset'),Choice('function_name','tl.leiden'))),
+        SemanticPlanStep('annotation', 'annotate_scATAC_cell_types', (Upstream('source', 'tile', 'dataset'),Upstream('groups','groups','dataset')))))
     observed = []
     def prepare(tool, arguments, selected):
         assert tool.name == 'annotate_scATAC_cell_types'
-        assert arguments['count_slot'] == 'layers/counts'
+        assert arguments['activity_count_slot'] == 'layers/counts'
         assert selected['tile'][1]['kwargs']['counting_strategy'] == 'fragment'
         assert 'counting_strategy' not in selected['tile'][1]
-        observed.append(arguments['count_slot'])
+        observed.append(arguments['activity_count_slot'])
         return arguments
     with planning_context(context), input_preparation(prepare):
         plan = compile_semantic_plan(AgentRequest('r', 'Build selected counts and annotate.', inputs), candidate,
                                      registry, build_semantic_compiler_contract(registry))
     assert observed == ['layers/counts']
-    assert plan.steps[1].arguments['count_slot'] == 'layers/counts'
+    assert plan.steps[-1].arguments['activity_count_slot'] == 'layers/counts'
 
 
 def test_candidate_settings_keep_captured_objective_and_normal_planning(tmp_path):

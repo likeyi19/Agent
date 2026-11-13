@@ -118,6 +118,11 @@ def selected_answer(interaction, preceding):
         return SpeciesAnswer('@species', selection['handle'].partition(':')[2])
     if reference['field'] == 'resources':
         return ResourceAnswer('@resources', selection['handle'])
+    if reference['field'] == 'annotation' and selection['handle'].startswith('annotation-column:'):
+        from .turn_decisions import ExplicitArgument
+        option = next(row for row in choices if row['handle'] == selection['handle'])
+        return RoleAnswer('@roles', (), arguments=(ExplicitArgument('annotate_scATAC_cell_types',
+            'group_column', option['value']),))
     from .raw_handoff import empty
     declared = replace(empty(reference['field']), resource=selection['handle'])
     return RoleAnswer('@roles', (), **{reference['field']: declared})

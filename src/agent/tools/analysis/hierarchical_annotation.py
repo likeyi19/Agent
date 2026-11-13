@@ -21,12 +21,20 @@ from agent.tools.data.authority_context import current
 from .native_publication import NativePublication
 from .sequence_prediction import arguments as path_arguments, read, write
 
-# Internal test opt-in only. ICTA-4B will bind this owner to the existing public
-# annotation operation while retiring its old science and delivery contracts.
-TOOL = 'icta_annotation_internal'
+TOOL = 'annotate_scATAC_cell_types'
 KIND = 'hierarchical_annotation'
 FILES = ('annotated.h5ad', 'hierarchy.json', 'annotations.json', 'subdivisions.json')
 UNS = 'agent_hierarchical_annotation'
+RESULT_FIELDS = dict(status=(str,), contract_version=(str,), n_cells=(int,), n_branches=(int,),
+    maximum_levels=(int,), levels_reached=(int,), terminal_populations=(int,),
+    population_summary=(list,), inherited_label_cells=(int,), branch_summary=(list,), branches_omitted=(int,), limitations=(str,),
+    **{name + suffix: (str,) for name in ('manifest','annotated_h5ad','hierarchy','annotations','subdivisions')
+       for suffix in ('_path','_sha256')})
+
+
+def annotation_column(name):
+    return name in {'cell_type_final','annotation_status','annotation_branch_id','annotation_depth'} or name.startswith(('cell_type_level_', 'annotation_branch_level_'))
+
 
 
 def arguments(values):
@@ -180,8 +188,17 @@ class HierarchicalPublication(NativePublication):
         with h5py.File(hierarchy['source']['path'], 'r') as source:
             obs = read_elem(source['obs'])
         if (result['n_cells'] != len(obs) or result['n_branches'] != len(hierarchy['branches'])
-                or result['maximum_levels'] != hierarchy['maximum_levels']):
+                or result['maximum_levels'] != hierarchy['maximum_levels']
+                or any(_serialize(result[k]) != v for k,v in summary(hierarchy).items())):
             raise AuthorityError('Publication summary differs from the complete hierarchy')
+        grouping = hierarchy['grouping']
+        if grouping.get('origin') == 'user_supplied':
+            if grouping['source'] != hierarchy['source'] or read(path, expected_sha256)['arguments'].get('group_column') != grouping['groupby']:
+                raise AuthorityError('Supplied grouping differs from the original source selection')
+            for row in hierarchy['branches']:
+                if row['parent'] is None and (row['grouping_binding'] is not None or
+                        row['positions'] != [i for i, label in enumerate(obs[grouping['groupby']]) if label == row['cluster']]):
+                    raise AuthorityError('Initial branch differs from the supplied observation grouping')
         for round_id, annotation in annotations.items():
             markers = [op for op in hierarchy['operations']
                        if op['branch_id'] == round_id and op['operation_id'] == 'markers']
@@ -205,7 +222,8 @@ class HierarchicalPublication(NativePublication):
                 selection = decision['parent_membership']
                 if (selection['cell_ids'] != obs.index[row['positions']].tolist()
                         or selection['groups'] != [row['cluster']]
-                        or decision['parent']['binding'] != row['grouping_binding']):
+                        or decision['parent']['binding'] != row['grouping_binding']
+                        or row['grouping_binding'] is None and decision['parent'].get('source_grouping') != hierarchy['grouping']):
                     raise AuthorityError('Subdivision does not describe the exact original parent cells')
                 positions = dict(zip(selection['positions'], row['positions']))
                 if row['residual_positions'] != [positions[i] for i in decision['residual_parent']['positions']]:
@@ -270,7 +288,8 @@ def publish(args, execution_identity, hierarchy, annotations, subdivisions, *, r
     value = dict(contract=publication.contract, profile=publication.profile, arguments=args,
         execution_identity=execution_identity, native_completion='succeeded',
         result=dict(status='success', contract_version=publication.contract, n_cells=sum(r['n_cells'] for r in hierarchy['branches'] if r['parent'] is None),
-                    n_branches=len(hierarchy['branches']), maximum_levels=hierarchy['maximum_levels'], limitations=hierarchy['limitations']),
+                    n_branches=len(hierarchy['branches']), maximum_levels=hierarchy['maximum_levels'], limitations=hierarchy['limitations'],
+                    **summary(hierarchy)),
         files=file_closure(root / name for name in FILES), sources=pins)
     sha = write(root / 'manifest.json', value)
     if current() is not None:
@@ -280,3 +299,121 @@ def publish(args, execution_identity, hierarchy, annotations, subdivisions, *, r
 
 def recover(arguments, execution_identity):
     return publication.recover(arguments, execution_identity)
+
+
+# Existing generic native delivery consumes the same authoritative publication.
+CONTRACT = publication.contract
+VERIFIER = publication.verifier
+DELIVERY_FILES = {
+    'annotated.h5ad': ('Hierarchical annotated cells (H5AD)', 'application/x-hdf5'),
+    'hierarchy.json': ('Complete annotation hierarchy', 'application/json'),
+    'annotations.json': ('Current-round marker and CellMarker ORA evidence', 'application/json'),
+    'subdivisions.json': ('Subdivision and differential peak evidence', 'application/json'),
+}
+load = publication.load
+result = publication.result
+
+
+def summary(hierarchy):
+    """Bounded actual hierarchy populations; final labels may be inherited."""
+    from collections import Counter
+    branches = hierarchy['branches']
+    parents = {row['branch_id']:row for row in branches}
+    cells, populations = Counter(), Counter()
+    inherited = 0
+    terminal = 0
+    rows = []
+    for row in branches:
+        annotation = row['annotation']
+        status = annotation['status'] if annotation else ('unassigned' if row['cluster']=='-1' else 'insufficient_evidence')
+        label = annotation['preferred'][0]['cell_name'] if annotation and status=='assigned' else None
+        n = len(row['residual_positions'])
+        if n:
+            terminal += 1
+            cells[status] += n
+            populations[status] += 1
+            if label is None:
+                parent = row['parent']
+                while parent is not None:
+                    ancestor = parents[parent]
+                    if ancestor['annotation'] and ancestor['annotation']['status']=='assigned':
+                        inherited += n
+                        break
+                    parent = ancestor['parent']
+        if len(rows) < 50:
+            rows.append(dict(branch_id=row['branch_id'], parent=row['parent'], level=row['level'],
+                n_cells=row['n_cells'], residual_cells=n, label=label, status=status, stopping_reason=row['stopping_reason']))
+    return dict(levels_reached=max((r['level'] for r in branches),default=0), terminal_populations=terminal,
+        population_summary=[dict(status=k,populations=populations[k],cells=cells[k]) for k in
+            ('assigned','ambiguous','unresolved','insufficient_evidence','unassigned')],
+        inherited_label_cells=inherited, branch_summary=rows, branches_omitted=max(0,len(branches)-len(rows)))
+
+
+def presentation_data(path, sha, *, level=None):
+    """Bounded activity columns from accepted evidence; no tests, rankings or fitting."""
+    from collections import Counter
+    import anndata as ad
+    from agent.tools._file_identity import checked_file
+    manifest, actual = publication.load(path, sha)
+    pins = {Path(p['path']).name:p for p in manifest['files']}
+    for pin in pins.values():
+        checked_file(pin['path'],pin['sha256'])
+    hierarchy = read(pins['hierarchy.json']['path'],pins['hierarchy.json']['sha256'])
+    annotations = read(pins['annotations.json']['path'],pins['annotations.json']['sha256'])
+    with h5py.File(pins['annotated.h5ad']['path'], 'r') as f:
+        obs = read_elem(f['obs'])
+    reached = max((r['level'] for r in hierarchy['branches']),default=0)
+    if level is not None and (type(level) is not int or not 1 <= level <= reached):
+        raise ValueError('Select a hierarchy level actually reached')
+    label_column = 'cell_type_final' if level is None else 'cell_type_level_' + str(level)
+    branch_column = 'annotation_branch_id' if level is None else 'annotation_branch_level_' + str(level)
+    labels = [None if pd.isna(x) else str(x) for x in obs[label_column]]
+    groups = [None if pd.isna(x) else str(x) for x in obs[branch_column]]
+    group_order = list(dict.fromkeys(g for g in groups if g is not None))[:30]
+    selected, genes = [], []
+    for row in hierarchy['branches']:
+        if row['branch_id'] not in group_order:
+            continue
+        annotation = annotations.get(row['annotation_round'], {})
+        cluster = next((r for r in annotation.get('clusters',[]) if r['cluster']==row['cluster']),None)
+        if cluster is None:
+            continue
+        # First positive accepted native markers, preserving recorded rank order.
+        for marker in [m for m in cluster['markers'] if m['positive'] and m['identity'] is not None][:2]:
+            gene = marker['feature']
+            if gene not in genes and len(genes) < 12:
+                genes.append(gene)
+            if gene in genes:
+                selected.append(dict(group=row['branch_id'],gene=gene,round=row['annotation_round'],
+                    native_cluster=row['cluster']))
+    activity = hierarchy['input_results'][-1]
+    checked_file(activity['matrix_path'],activity['matrix_sha256'])
+    matrix = ad.read_h5ad(activity['matrix_path'], backed='r')
+    try:
+        # Coordinator/marker handoff proved source correspondence; keep its exact order.
+        if matrix.obs_names.tolist() != obs.index.tolist():
+            raise AuthorityError('Accepted activity axis differs from the original ordered cell axis')
+        genes = [g for g in genes if matrix.var_names.tolist().count(g)==1]
+        selected = [r for r in selected if r['gene'] in genes]
+        values = matrix[:,genes].X if genes else np.empty((len(obs),0))
+        if hasattr(values,'toarray'): values=values.toarray()
+        values=np.asarray(values,dtype=float)
+    finally:
+        matrix.file.close()
+    mean, fraction = [], []
+    for group in group_order:
+        rows = values[np.asarray([g==group for g in groups])]
+        mean.append(rows.mean(axis=0).tolist());fraction.append((rows>0).mean(axis=0).tolist())
+    counts=Counter(labels)
+    sources=[dict(path=str(path),sha256=actual),*pins.values(),
+        dict(path=activity['matrix_path'],sha256=activity['matrix_sha256'])]
+    return dict(cells=obs.index.tolist(),labels=labels,groups=groups,group_order=group_order,
+        group_counts=[groups.count(g) for g in group_order],groups_omitted=max(0,len(set(groups)-{None})-len(group_order)),
+        genes=genes,mean_activity=mean,fraction_positive=fraction,per_cell_activity=values.tolist(),
+        selected_marker_sources=selected,marker_selection='First two positive accepted native markers per displayed branch in recorded rank order; at most 12 distinct genes and 30 branches.',
+        measurement='Accepted Gene Activity X; accessibility-derived, not measured RNA expression',
+        composition=[dict(label=k,n_cells=v) for k,v in counts.items()], source_sha256=hierarchy['source']['sha256'],
+        sources=sources,level=level,levels_reached=reached,
+        coordinate_source_sha256s=[hierarchy['source']['sha256'],*(r['matrix_sha256'] for r in hierarchy['input_results'][:-1])],
+        branches=[{k:r[k] for k in ('branch_id','parent','level','n_cells','stopping_reason')} for r in hierarchy['branches'][:60]],
+        branches_omitted=max(0,len(hierarchy['branches'])-60))

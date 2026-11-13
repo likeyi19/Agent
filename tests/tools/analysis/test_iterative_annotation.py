@@ -245,3 +245,30 @@ def test_structured_portable_hierarchy_roundtrip_and_integrity(controlled, tmp_p
     with h5py.File(path,'r+') as handle:write_elem(handle['uns'],p.UNS,metadata)
     with pytest.raises(AuthorityError,match='Portable hierarchy'):
         p.verify_h5ad(path,h)
+
+
+def test_branch_operation_override_is_local_and_preserves_owned_marker_contract(controlled):
+    f=controlled
+    chosen=c.branch_id(None,'B')
+    override=dict(branch_id=chosen,operation_id='tl.leiden',tool_name='run_snapatac2',
+        function_name='tl.leiden',arguments={'kwargs':{'resolution':.7}})
+    c.coordinate(dict(f.args,operation_overrides={'captured':override}),'execution')
+    leiden=[r for r in f.calls if r['operation_id']=='tl.leiden']
+    assert len(leiden)>1
+    assert [r['branch_id'] for r in leiden if r['arguments']['kwargs'].get('resolution')==.7]==[chosen]
+    f.calls.clear()
+    override=dict(branch_id='initial',operation_id='markers',tool_name='run_scanpy',
+        function_name='tl.rank_genes_groups',arguments={'kwargs':{'method':'t-test'}})
+    with pytest.raises(ValueError,match='owned|marker'):
+        c.coordinate(dict(f.args,operation_overrides={'captured':override}),'execution')
+
+
+def test_progress_records_actual_branches_and_stopping_outcomes(controlled):
+    rows=[];controlled.inv.progress=lambda **kw:rows.append(kw)
+    h=c.coordinate(controlled.args,'execution')
+    assert rows[-1]['outcome']=='complete' and rows[-1]['pending_branches']==0
+    assert all(r.get('pending_branches',0)>=0 for r in rows)
+    stops={r['outcome'] for r in rows if r.get('outcome')}
+    assert {b['stopping_reason'] for b in h['branches']}<=stops
+    assert any(r.get('function_name')=='snapatac2.tl.leiden' for r in rows)
+    assert all('total_steps' not in r for r in rows)

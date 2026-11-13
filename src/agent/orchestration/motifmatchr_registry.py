@@ -48,7 +48,7 @@ def tool_spec():
     base_scalar = scalar
     scalar = lambda k, **kw: scalar_port(owner.TOOL, ('matchMotifs',), k, **kw) if ({**required, **optional}[k].planning.scientific_parameter) else base_scalar(k, **kw)
     ports = [Consumer('dataset',(member('dataset','input_path'),),True,
-        request_sources=(request('input_path',rm('dataset','input_path')),),accepted_upstream_types=('scatac_matrix_h5ad.v1','native_matrix_h5ad.v1')),
+        request_sources=(request('input_path',rm('dataset','input_path')),),accepted_upstream_types=('scatac_matrix_h5ad.v1','hierarchical_annotation_h5ad.v1','native_matrix_h5ad.v1')),
         Consumer('genome',(member('path','genome_path'),member('sha256','genome_sha256')),False,
             request_sources=(request('genome_path',rm('path','genome_path'),rm('sha256','genome_sha256')),)),
         *(scalar(k,required=k in required) for k in (*required,*optional) if k not in ('input_path','genome_path','genome_sha256'))]

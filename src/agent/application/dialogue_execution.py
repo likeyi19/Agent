@@ -1888,7 +1888,7 @@ def planning_task(interaction, state, registry=None):
         task['source_observation'] = dict(declarations=_serialize(evidence['declarations']),
             annotation_declarations={k:v for k,v in _serialize(current['annotation']).items()
                 if k in ('species','assembly','measurement','context','grouping_provenance')},
-            qualified_groupings=_serialize(evidence['qualified_groupings']),
+            selected_group_column=current.get('annotation_arguments', {}).get('group_column'),
             grouping_columns=_serialize(evidence['grouping_columns']),
             selected_count_slot=current.get('annotation_arguments', {}).get('count_slot', 'X'))
     from .structured_parameters import bound_records
@@ -2101,7 +2101,7 @@ def prepare_native_task(sessions, interaction, admitted):
         try:
             return prepare_annotation(tool, arguments, selected)
         except AnnotationPrerequisite as exc:
-            question = (None, exc.questions,())
+            question = (None, exc.questions,exc.options)
             raise PlannerError('ANNOTATION_INPUT_REQUIRED', str(exc), category=ErrorCategory.USER_INPUT_ERROR) from exc
     delegate = app.runtime.planner
     if 'native_plan' in admitted:

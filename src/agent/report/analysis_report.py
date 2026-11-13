@@ -772,7 +772,7 @@ _TOOL_TITLES: Mapping[str, str] = {
     "build_scATAC_cell_by_features": "Fragment-derived regulatory-feature matrix",
     "adopt_scATAC_cell_by_features": "Neutral regulatory-feature matrix adoption",
     "adapt_epizoo_species": "EpiZoo species adaptation",
-    "annotate_scATAC_cell_types": "Primary cell-type annotation",
+    "annotate_scATAC_cell_types": "Hierarchical cell-type annotation",
     "select_scATAC_cells": "Explicit QC selection",
     "import_scATAC_fragments": "External fragment adoption",
     "prepare_scATAC_bam_fragments": "BAM fragment preparation",
@@ -1018,7 +1018,7 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
     ("motif_accessibility", "Motif-associated accessibility", frozenset({"compute_motif_accessibility"})),
     ("regulatory_sequence", "Regulatory sequence analysis and design", frozenset({"predict_regulatory_sequences", "evaluate_regulatory_predictions", "optimize_regulatory_sequences", "generate_regulatory_sequences", "prepare_scatac_regulatory_sequences"})),
     ("fragment_features", "Fragment-derived regulatory-feature matrix", frozenset({"build_scATAC_cell_by_features"})),
-    ("primary_cell_type_annotation", "Primary cell-type annotation", frozenset({"annotate_scATAC_cell_types"})),
+    ("primary_cell_type_annotation", "Hierarchical cell-type annotation", frozenset({"annotate_scATAC_cell_types"})),
     ("bam_fragments", "BAM Fragment Preparation", frozenset({"prepare_scATAC_bam_fragments"})),
     ("cell_selection", "Explicit QC selection", frozenset({"select_scATAC_cells"})),
     ("species_adaptation", "EpiZoo species adaptation", frozenset({"adopt_scATAC_cell_by_features", "adapt_epizoo_species", "posttrain_epizoo_model"})),
@@ -1075,7 +1075,7 @@ _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
     "evaluate_regulatory_predictions": ("measurement", "limitations"),
     'inspect_scATAC_fragments': ('record_limit', 'reached_eof', 'index_status', 'limitations'),
 
-    "annotate_scATAC_cell_types": ("annotation_profile", "context", "source_authority_sha256"),
+    "annotate_scATAC_cell_types": ("maximum_levels",),
     "adapt_epizoo_species": ("strategy", "profile_sha256", "source_model_identity_sha256", "seam_bundle_identity_sha256"),
     "posttrain_epizoo_model": ("strategy", "profile_sha256", "parent_model_manifest_sha256", "source_model_identity_sha256", "seam_bundle_identity_sha256"),
     "adopt_scATAC_cell_by_features": ("matrix_semantics", "reference_identity_sha256"),
@@ -1150,6 +1150,9 @@ def report_fact_fields(tool_name, raw_facts):
     gain no new meaning; optional extensions are selected by their recorded keys.
     """
     fields = _REPORT_FIELDS.get(tool_name, ())
+    if tool_name == 'annotate_scATAC_cell_types' and 'native_methods' in raw_facts:
+        from .annotation import METHOD_FIELDS
+        fields = (*fields, *METHOD_FIELDS)
     if tool_name == 'run_macs3' and 'result_files' in raw_facts:
         fields = (*fields, 'result_files')
     if tool_name == 'run_motifmatchr' and 'n_positions' in raw_facts:
@@ -1420,39 +1423,49 @@ def _annotation_table(headers, rows):
         *[' | '.join(cell(v) for v in row) for row in rows], '']
 
 
-def render_annotation_facts(facts):
-    """Researcher-facing native annotation facts, independent of model prose.
-
-    No lookup, label substitution or new measurement occurs during rendering.
-    Matrix/analysis sections own their feature counts and upstream parameters.
-    """
-    lines = ['### Native cell-type annotation', '',
-        'The selected native method assigns computational candidate labels from recorded groups. '
-        'Original labels, scores and missing assignments remain in the annotated H5AD.', '',
-        'Data: ' + str(facts.get('species', 'unavailable')) + '; assembly ' + str(facts.get('assembly', 'unavailable'))
-        + '; context ' + str(facts.get('context', 'unavailable')) + '.',
-        'Method: ' + str(facts.get('annotation_profile', 'not recorded')) + '.', '',
-        'Input feature counts, preprocessing and clustering are reported with their source matrix and analysis results; '
-        'no omitted upstream method is inferred here.', '']
-    lines += _annotation_table(['Population', 'Cells / groups'], [
-        ('Analyzed cells', facts.get('n_cells')), ('Input groups', facts.get('n_groups')),
-        ('Assigned cells', facts.get('assigned_cells')), ('Unassigned cells', facts.get('unassigned_cells')),
-        ('Ambiguous cells (within unassigned)', facts.get('ambiguous_cells'))])
-    lines += ['#### Native candidate distribution', '']
-    rows = facts.get('group_summary', [])
-    lines += _annotation_table(['Group', 'Native label', 'Assignment status', 'Cells'], [
-        (r['group'], r['primary_annotation'] if r['primary_annotation'] is not None else '(unassigned)',
-         r['status'], r['n_cells']) for r in rows])
-    if facts.get('groups_omitted'):
-        lines.append(str(facts['groups_omitted']) + ' further groups remain in the full native output; omitted groups are not absent.')
-    lines += ['', '#### Supporting evidence and outputs', '',
-        'Native candidate scores, marker/signature support and regulatory potential (RP) are available in annotation evidence. '
-        'Composition and group distributions, marker-activity dot plots and RP distributions show the recorded native output. '
-        'An annotation-colored UMAP is available when exact accepted coordinates and ordered source cells are present; no coordinates are refitted.',
-        'RP is accessibility-derived activity, not measured RNA expression. Native markers and signatures are dependent annotation evidence; '
-        'candidate scores are not calibrated probabilities. Unassigned and ambiguous cells are retained. '
-        'Independent biological validation: ' + str(facts.get('validation_state', 'not recorded')) + '.',
-        'Download the annotated H5AD and scientific figures. Detailed parameters, exact source identities and native evidence remain in the methods and evidence views.']
+def render_annotation_facts(facts, *, technical=False):
+    """Recorded hierarchy facts; no scientific work or biological certainty."""
+    from agent.schemas.orchestration import _serialize
+    facts = _serialize(facts)
+    lines = ['### Hierarchical cell-type annotation', '',
+        'Current-round labels use native Gene Activity markers and CellMarker ORA evidence. '
+        'Fine-grained assignments and inherited broad labels remain distinct; unresolved populations retain their status.', '']
+    lines += _annotation_table(['Population', 'Count'], [
+        ('Analyzed cells', facts.get('n_cells')), ('Levels reached', facts.get('levels_reached')),
+        ('Branches', facts.get('n_branches')), ('Terminal populations', facts.get('terminal_populations'))])
+    rows = facts.get('population_summary', [])
+    lines += _annotation_table(['Status', 'Terminal populations', 'Cells'],
+        [(r['status'], r['populations'], r['cells']) for r in rows])
+    lines += ['', 'Gene Activity is accessibility-derived, not measured RNA expression. '
+        'Markers, ORA and differential peaks are computational evidence, not independent biological validation.',
+        'The complete hierarchical H5AD and evidence are available in Downloads & reports. '
+        'Figures reuse qualified accepted UMAP coordinates when available; no global UMAP is refitted.']
+    lines += ['', 'Final annotation view. Inherited ancestor labels: ' + str(facts.get('inherited_label_cells', 0)) + ' cells.', '']
+    if facts.get('branch_summary'):
+        lines += _annotation_table(['Branch prefix', 'Level', 'Cells', 'Current-round label', 'Evidence status', 'Stopping outcome'],
+            [(r['branch_id'][:16],r['level'],r['n_cells'],r.get('label') or '(unassigned)',r['status'],r['stopping_reason'])
+             for r in facts['branch_summary'][:10]])
+        lines += [str(max(0, facts.get('n_branches',0)-min(10,len(facts['branch_summary'])))) +
+            ' additional branch records omitted from this summary; see the complete hierarchy.', '']
+    if not technical:
+        return '\n'.join(lines)
+    lines += ['', '#### Recorded methods and provenance', '',
+        'Maximum level budget: ' + _inline_code(facts.get('maximum_levels')) + '.',
+        'Initial grouping: ' + _inline_code(facts.get('initial_grouping')) + '.',
+        'Interpretation parameters: ' + _inline_code(facts.get('interpretation_parameters')) + '.',
+        'CellMarker resource identity: ' + _inline_code(facts.get('cellmarker_identity')) + '.', '']
+    for operation in facts.get('native_methods', ()):
+        lines += ['- ' + _inline_code(operation['branch_id']) + ' / ' + _inline_code(operation['operation_id'])
+            + ': ' + _inline_code(operation['function']),
+            '  Recorded parameters: ' + _inline_code(operation['parameters']),
+            '  Software versions: ' + _inline_code(operation['software_versions']),
+            '  Producing Run: ' + _inline_code(operation['producing_run_id'])
+            + '; accepted step: ' + _inline_code(operation['accepted_step_sha256'])
+            + '; manifest: ' + _inline_code(operation['manifest_sha256'])]
+        if operation.get('privacy_omitted_parameter_fields'):
+            lines.append('  Private source/provenance fields omitted: '
+                + _inline_code(operation['privacy_omitted_parameter_fields']))
+    lines += ['', str(facts.get('native_methods_omitted', 0)) + ' additional native method records omitted here; full evidence is in hierarchy.json.']
     return '\n'.join(lines)
 
 
@@ -1499,7 +1512,7 @@ def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
             "", _fact_ids_line(step.facts), ""))
         return lines
     if step.tool_name == "annotate_scATAC_cell_types":
-        return [render_annotation_facts({f.field:f.value for f in step.facts}), '', _fact_ids_line(step.facts), '']
+        return [render_annotation_facts({f.field:f.value for f in step.facts}, technical=True), '', _fact_ids_line(step.facts), '']
     if step.tool_name == "adopt_scATAC_cell_by_ccre":
         lines=[f"### External cell-by-cCRE adoption {occurrence}", "",
             "Adopted an external matrix with the exact complete canonical cCRE vocabulary. "

@@ -133,7 +133,6 @@ def test_raw_source_binding_admits_compiled_method_choice(sample):
 
 def test_real_selected_native_counts_and_publication_read_without_replay(native, sample, monkeypatch):
     import anndata as ad
-    from agent.tools.analysis import annotation_contract
     imported = call(sample, 'source', 'pp.import_fragments', chrom_sizes_path=str(sample.sizes), fragment_order='unknown')
     selected = call(sample, 'selected-method', FUNCTION, imported['matrix_path'],
                     peaks_path=str(sample.peaks), counting_strategy='fragment')
@@ -142,7 +141,6 @@ def test_real_selected_native_counts_and_publication_read_without_replay(native,
     a, b = (ad.read_h5ad(r['matrix_path']) for r in (selected, explicit))
     assert (a.X != b.X).nnz == 0 and a.obs_names.equals(b.obs_names) and a.var_names.equals(b.var_names)
     assert selected['measurement'] == 'fragment_counts'
-    assert annotation_contract.input_problems('human', 'hg38', selected['measurement']) == []
     assert selected['parameters']['kwargs'] == {}
     assert selected['parameters']['counting_strategy'] == 'fragment'
     assert selected['parameters']['effective_native_parameters']['counting_strategy'] == 'fragment'

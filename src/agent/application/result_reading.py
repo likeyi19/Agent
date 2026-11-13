@@ -37,7 +37,7 @@ def analysis_lineage(store, run_id, step_id):
     while True:
         descriptor = describe(stored.tool_name, stored.result)
         if stored.tool_name == 'annotate_scATAC_cell_types':
-            argument = 'source_path'
+            argument = 'input_path'
         elif descriptor and descriptor['preserves_counts'] and stored.tool_name != 'annotate_scATAC_cell_types':
             argument = descriptor['input_argument']
             if stored.result['source_identity']['sha256'] != stored.resolved_arguments.get('input_sha256', stored.result['source_identity']['sha256']):
@@ -59,9 +59,9 @@ def original_source(store, run_id, step_id):
     """Follow only exact accepted lineage; legacy EpiZoo has no input digest."""
     run_id, stored, _ = analysis_lineage(store, run_id, step_id)[-1]
     if stored.tool_name == 'annotate_scATAC_cell_types':
-        if stored.resolved_arguments.get('source_path'):
-            return dict(path=stored.resolved_arguments['source_path'],
-                        sha256=stored.resolved_arguments['source_sha256'])
+        if stored.resolved_arguments.get('input_path'):
+            return dict(path=stored.resolved_arguments['input_path'],
+                        sha256=stored.resolved_arguments.get('input_sha256') or _annotation_source_sha(stored))
         return None
     descriptor = describe(stored.tool_name, stored.result)
     if descriptor and stored.tool_name.startswith('run_'):
@@ -128,8 +128,8 @@ def _files(sessions, run, step):
 
 def _role(step, location, name, file):
     if location == 'result' and step.tool_name == 'annotate_scATAC_cell_types':
-        from agent.tools.analysis.annotation_contract import OBS_COLUMNS
-        return 'computational_assignment' if name in OBS_COLUMNS else 'copied_supplied_source_observation; biological validity not assessed'
+        from agent.tools.analysis.hierarchical_annotation import annotation_column
+        return 'computational_assignment' if annotation_column(name) else 'copied_supplied_source_observation; biological validity not assessed'
     if location == 'result' and step.tool_name.startswith('run_'):
         descriptor = describe(step.tool_name, step.result)
         return ('computational_assignment' if descriptor and name == descriptor['grouping']
@@ -294,17 +294,17 @@ def cell_overlay(sessions, coordinate, categories, field):
 
 
 def marker_activity_overlay(sessions, coordinate, activity):
-    """Combine accepted UMAP and native RP through existing source qualification."""
-    from agent.tools.analysis import scatac_annotation
+    """Combine accepted UMAP and native Gene Activity through existing source qualification."""
+    from agent.tools.analysis import hierarchical_annotation
     from agent.report.annotation_visualization import marker_activity_input
     store = sessions._application.run_store
     ids, xy, identity, coordinate_source = _coordinate_input(sessions, coordinate)
     step, _, run = _accepted_step(store, activity['run_id'], activity['step_id'])
     if (accepted_step_digest(step) != activity['accepted_step_sha256']
             or step.tool_name != 'annotate_scATAC_cell_types' or activity['output_key'] not in step.result):
-        raise ValueError('Select an accepted native annotation with per-cell RP.')
+        raise ValueError('Select an accepted native annotation with per-cell Gene Activity.')
     result = step.result
-    data = scatac_annotation.presentation_data(result['manifest_path'], result['manifest_sha256'])
+    data = hierarchical_annotation.presentation_data(result['manifest_path'], result['manifest_sha256'])
     other_identity = dict(artifact_sha256=result['manifest_sha256'], source_sha256=data['source_sha256'],
         run_id=run.run_id, step_id=step.step_id, accepted_step_sha256=activity['accepted_step_sha256'])
     basis = qualified_sources(identity, other_identity)
@@ -315,7 +315,7 @@ def marker_activity_overlay(sessions, coordinate, activity):
             artifact_kind='scatac_cell_type_annotation_manifest_json' if manifest else 'native_annotation_sidecar',
             artifact_path=pin['path'], integrity=dict(sha256=pin['sha256']), role='activity',
             source_sha256=data['source_sha256'],
-            **(dict(accepted_output=dict(activity), field='native:RP') if manifest else {})))
+            **(dict(accepted_output=dict(activity), field='native:GeneActivity') if manifest else {})))
     return marker_activity_input(data, ids, xy, sources, basis=basis)
 
 
@@ -523,3 +523,8 @@ def read(sessions, state, run, step, request):
         source_pointer='/obs', reason='field_size_limit' if omitted else 'on_demand_accepted_result_read',
         artifact_name='accepted_categorical_observations', artifact_sha256=left_source['artifact_sha256'],
         derivation=derivation),)
+
+
+def _annotation_source_sha(step):
+    from agent.tools.analysis.sequence_prediction import read
+    return read(step.result['hierarchy_path'], step.result['hierarchy_sha256'])['source']['sha256']

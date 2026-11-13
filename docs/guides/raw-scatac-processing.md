@@ -74,7 +74,7 @@ rejected as unrepresentable, rather than being silently omitted.
 
 Ordinary research tasks may select the native matrix `counting_strategy` through
 a reviewed Registry scalar choice, considering the current objective and stated
-downstream goals. A prospective MAESTRO region-count analysis can justify
+downstream goals. A prospective native region-count analysis can justify
 fragment-overlap counts; no annotation method or region vocabulary is mandatory.
 The Planner chooses methods, while the existing component binder resolves their
 actual reference inputs. Genuine scientific ambiguity still requires clarification.

@@ -73,8 +73,8 @@ def test_minimal_scientific_wire_preserves_durable_identity_and_followup(app, mo
     def wire(output, subject):
         return dict(kind='answer_scientific',target=dict(output=output,subject=subject),
                     comparison=None,focus='question')
-    first = ask(app,'first','What does cluster 3 show?',Model(wire('r0','3'),['primary_annotation']))
-    follow = ask(app,'follow','Why?',Model(wire('@focus','@focus'),['primary_annotation']))
+    first = ask(app,'first','What does cluster 3 show?',Model(wire('r0','3'),['label']))
+    follow = ask(app,'follow','Why?',Model(wire('@focus','@focus'),['label']))
     assert first.status == follow.status == 'answered'
     state = app.sessions.load('session')
     a, b = state.interactions[-2:]

@@ -119,6 +119,8 @@ def prepare_input(args, stage, *, source=None):
     matrix.X = x.copy() if x is not None else None
     effective['matrix_semantics'] = effective.get('matrix_semantics') or 'unspecified_retained_measurement'
     matrix.uns['matrix_semantics'] = effective['matrix_semantics']
+    if args.get('group_column') is not None and args.get('grouping_path') is None:
+        raise ValueError('An explicit projected group column requires its grouping source')
     if args.get('grouping_path') is not None:
         from .native_gene_activity import project_grouping
         matrix, effective['_grouping_projection'] = project_grouping(matrix, args, source)
@@ -578,7 +580,7 @@ class MatrixPackage:
         return self.verify_publication(path, expected_sha256=sha)
 
     def invoke(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, use_rep=None, parameter_selection=None,
-               gene_activity=None, cell_subset=None, input_orientation=None, grouping_path=None):
+               gene_activity=None, cell_subset=None, input_orientation=None, grouping_path=None, group_column=None):
         return self.execute({k: v for k, v in locals().items() if k != "self" and v is not None})
 
     def invoke_signac(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, second_path=None, second_sha256=None, second_count_slot=None):

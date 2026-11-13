@@ -25,7 +25,7 @@ def tool_spec():
     base_scalar = scalar
     scalar = lambda k, **kw: scalar_port(owner.TOOL, tuple(owner.FUNCTIONS), k, **kw) if ({**required, **optional}[k].planning.scientific_parameter) else base_scalar(k, **kw)
     ports = [Consumer('dataset', (member('dataset','input_path'),), True,
-        request_sources=(request('input_path',rm('dataset','input_path')),), accepted_upstream_types=('raw_scatac_dataset.v1','scatac_matrix_h5ad.v1','native_matrix_h5ad.v1','cicero_cds_exchange.v1')),
+        request_sources=(request('input_path',rm('dataset','input_path')),), accepted_upstream_types=('raw_scatac_dataset.v1','scatac_matrix_h5ad.v1','hierarchical_annotation_h5ad.v1','native_matrix_h5ad.v1','cicero_cds_exchange.v1')),
         Consumer('genomic_coords',(member('dataset','genomic_coords_path'),),False,
             request_sources=(request('genomic_coords_path',rm('dataset','genomic_coords_path')),)),
         *(scalar(k,required=k in required) for k in (*required,*optional) if k not in ('input_path','genomic_coords_path'))]

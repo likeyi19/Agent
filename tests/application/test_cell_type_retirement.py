@@ -25,15 +25,17 @@ def test_retired_operations_and_modules_are_absent_while_native_science_remains(
 
 def test_annotation_report_preserves_native_names_and_missing_states_without_model_prose():
     from agent.report.analysis_report import render_annotation_facts
-    facts=dict(n_cells=5,n_groups=2,assigned_cells=3,unassigned_cells=2,ambiguous_cells=0,
-        species='human',assembly='hg38',context='explicit synthetic fixture',annotation_profile='native test profile',
-        validation_state='not_assessed',groups_omitted=0,group_summary=[
-            dict(group='one',n_cells=3,primary_annotation='Original / native+ label',status='assigned'),
-            dict(group='two',n_cells=2,primary_annotation=None,status='insufficient_evidence')])
+    facts=dict(n_cells=5,n_branches=2,levels_reached=1,terminal_populations=2,
+        inherited_label_cells=0,branches_omitted=0, population_summary=[
+            dict(status='assigned',populations=1,cells=3),
+            dict(status='insufficient_evidence',populations=1,cells=2)],branch_summary=[
+            dict(branch_id='one',level=1,n_cells=3,label='Original / native+ label',status='assigned',stopping_reason='maximum_levels'),
+            dict(branch_id='two',level=1,n_cells=2,label=None,status='insufficient_evidence',stopping_reason='no_supported_subdivision')])
     report=render_annotation_facts(facts)
     assert 'Original / native+ label' in report and '(unassigned)' in report and 'insufficient_evidence' in report
-    assert 'Native candidate distribution' in report and 'not_assessed' in report
-    assert 'not calibrated probabilities' in report
+    assert 'Current-round label' in report and 'no_supported_subdivision' in report
+    assert 'not independent biological validation' in report
+
 
 
 def test_removed_keyed_mapping_wire_is_rejected_by_current_declarations():

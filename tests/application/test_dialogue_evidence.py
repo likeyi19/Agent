@@ -121,8 +121,8 @@ def files(app):
 PROBES = [
     ('compute_scATAC_qc', {'n_observed_barcodes': 13, 'tss_undefined': 3}),
     ('select_scATAC_cells', {'n_selected': 8, 'n_rejected': 5, 'cell_call_state': 'not_assessed'}),
-    ('annotate_scATAC_cell_types', {'group_summary': [dict(group='cluster/3', n_cells=8,
-        primary_annotation='CD8 T', status='assigned')], 'groups_omitted': 7, 'validation_state': 'not_assessed'}),
+    ('annotate_scATAC_cell_types', {'branch_summary': [dict(branch_id='cluster/3', n_cells=8,
+        label='CD8 T', status='assigned')], 'branches_omitted': 7}),
     ('build_scATAC_cell_by_features', {'n_cells': 8, 'n_features': 15, 'nnz': 32,
         'matrix_semantics': 'canonical-fragment-record-overlap-counts.v1'}),
     ('adapt_epizoo_species', {'strategy': 'de_novo', 'purpose': 'qualification', 'completed_step': 10,
@@ -152,22 +152,22 @@ def test_cross_capability_exact_immutable_read(app, monkeypatch, tool, values):
     if tool == 'annotate_scATAC_cell_types':
         assert view.coverage[0].value == 7
         with pytest.raises(TypeError):
-            next(f for f in view.facts if f.field == 'group_summary').value[0]['status'] = 'new'
+            next(f for f in view.facts if f.field == 'branch_summary').value[0]['status'] = 'new'
     assert files(app) == before
 
 
 def test_field_selection_null_missing_and_omissions(app, monkeypatch):
-    rid, _, _ = accepted(app, 'annotate_scATAC_cell_types', overrides=dict(groups_omitted=8,
-        group_summary=[dict(group='3', primary_annotation=None, status='ambiguous')]))
+    rid, _, _ = accepted(app, 'annotate_scATAC_cell_types', overrides=dict(branches_omitted=8,
+        branch_summary=[dict(branch_id='3', label=None, status='ambiguous')]))
     guard = forbid_work(app, monkeypatch)
-    view = guard.sessions.evidence('session', rid, 'output0', fields=['group_summary', 'marker_ranking'])
+    view = guard.sessions.evidence('session', rid, 'output0', fields=['branch_summary', 'marker_ranking'])
     assert view.status == 'available' and view.coverage[0].value == 8
-    assert view.facts[0].value[0]['primary_annotation'] is None
+    assert view.facts[0].value[0]['label'] is None
     assert view.facts[1].status == 'unavailable'
     assert view.facts[1].reason == 'not_in_accepted_summary'
-    assert 'groups_omitted' in view.unselected_fields
+    assert 'branches_omitted' in view.unselected_fields
     monkeypatch.setattr(de, 'MAX_FACT_BYTES', 10)
-    omitted = guard.sessions.evidence('session', rid, 'output0', fields=['group_summary'])
+    omitted = guard.sessions.evidence('session', rid, 'output0', fields=['branch_summary'])
     assert omitted.facts[0].status == 'omitted' and omitted.facts[0].value is None
     assert omitted.coverage[0].value == 8
     monkeypatch.setattr(de, 'MAX_VIEW_BYTES', 10)

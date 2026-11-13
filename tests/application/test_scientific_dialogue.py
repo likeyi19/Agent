@@ -55,10 +55,10 @@ class Model:
 
 
 def annotation(app, *, omitted=0):
-    return accepted(app, 'annotate_scATAC_cell_types', overrides=dict(n_groups=2+omitted,
-        groups_omitted=omitted, validation_state='not_assessed', group_summary=[
-            dict(group='3', n_cells=8, primary_annotation='CD8 T', status='assigned'),
-            dict(group='7', n_cells=5, primary_annotation='B cell', status='assigned')]))[0]
+    return accepted(app, 'annotate_scATAC_cell_types', overrides=dict(n_branches=2+omitted,
+        branches_omitted=omitted, branch_summary=[
+            dict(branch_id='3', level=1, n_cells=8, label='CD8 T', status='assigned', stopping_reason='maximum_levels'),
+            dict(branch_id='7', level=1, n_cells=5, label='B cell', status='assigned', stopping_reason='maximum_levels')]))[0]
 
 
 def ask(app, turn, text, model, **kwargs):
@@ -68,23 +68,23 @@ def ask(app, turn, text, model, **kwargs):
 def test_annotation_multiturn_subject_pair_provenance_and_limitation(app, monkeypatch):
     rid = annotation(app)
     app = forbid_work(app, monkeypatch)
-    first = ask(app, 'a', 'What does cluster 3 show?', Model(question(subject='3'), ['primary_annotation']))
+    first = ask(app, 'a', 'What does cluster 3 show?', Model(question(subject='3'), ['label']))
     assert first.status == 'answered', first
     assert 'group 3' in first.text and 'CD8 T' in first.text
-    why = ask(app, 'b', 'Why?', Model(question('@focus'), ['primary_annotation'], support='insufficient_evidence'))
+    why = ask(app, 'b', 'Why?', Model(question('@focus'), ['label'], support='insufficient_evidence'))
     assert why.status == 'answered' and why.scientific.support == 'insufficient_evidence'
     from agent.application.dialogue_evidence import RESULT_LIMITATIONS
     assert RESULT_LIMITATIONS['annotate_scATAC_cell_types'] in why.scientific.limitations
-    assert any(c.field == 'primary_annotation' and c.value == 'CD8 T' for c in why.scientific.claims)
-    other = ask(app, 'c', 'What about cluster 7?', Model(question('@focus','7',focus='continue'), ['primary_annotation']))
+    assert any(c.field == 'label' and c.value == 'CD8 T' for c in why.scientific.claims)
+    other = ask(app, 'c', 'What about cluster 7?', Model(question('@focus','7',focus='continue'), ['label']))
     assert other.status == 'answered' and 'B cell' in other.text and 'group 7' in other.text
-    pair = ask(app, 'd', 'How are the two different?', Model(question('@focus', comparison=dict(output='@previous',subject=None)), ['primary_annotation','n_cells']))
+    pair = ask(app, 'd', 'How are the two different?', Model(question('@focus', comparison=dict(output='@previous',subject=None)), ['label','n_cells']))
     assert pair.status == 'answered', pair
     assert {c.subject for c in pair.scientific.claims} == {'3','7'}
-    provenance = ask(app, 'e', 'Where did that value come from?', Model(question('@focus'), ['primary_annotation']))
+    provenance = ask(app, 'e', 'Where did that value come from?', Model(question('@focus'), ['label']))
     assert provenance.scientific.claims[0].source['revision_id'] == rid
-    assert provenance.scientific.claims[0].source['pointer'].endswith('/1/primary_annotation')
-    certain = ask(app, 'f', 'Does this prove the biological identity?', Model(question('@focus'), ['primary_annotation'], support='insufficient_evidence'))
+    assert provenance.scientific.claims[0].source['pointer'].endswith('/1/label')
+    certain = ask(app, 'f', 'Does this prove the biological identity?', Model(question('@focus'), ['label'], support='insufficient_evidence'))
     assert certain.scientific.support == 'insufficient_evidence'
     state = app.sessions.load('session')
     assert state.generation == 1
@@ -136,14 +136,14 @@ def test_selection_cross_revision_counts_and_thresholds(app, monkeypatch):
 def test_ambiguity_truncation_unavailable_and_incompatible(app, monkeypatch):
     rid = annotation(app, omitted=5)
     guarded = forbid_work(app, monkeypatch)
-    assert ask(guarded, 'a', 'Explain cluster 3', Model(question(subject='3'), ['primary_annotation'])).status == 'answered'
+    assert ask(guarded, 'a', 'Explain cluster 3', Model(question(subject='3'), ['label'])).status == 'answered'
     ambiguous = ask(guarded, 'other', 'What about the other cluster?', Model(question('@focus','@other')))
     assert ambiguous.clarification.reason == 'ambiguous_subject'
     missing = ask(guarded, 'absent', 'What about cluster 99?', Model(question('@focus','99')))
     assert missing.status == 'failed' and missing.error is not None
     # Exact offered identities do not need a second language interpretation.
     selected = ask(guarded, 'selected', 'Explain the other saved population.',
-        Model(question('g0','7'), ['primary_annotation']))
+        Model(question('g0','7'), ['label']))
     assert selected.status == 'answered' and selected.scientific.claims[0].subject == '7'
     locator = guarded.sessions.load('session').revisions[0].outputs[0]
     path = guarded._workspace.runs / guarded._workspace.run_digest(locator.run_id) / 'evidence' / 'analysis_evidence.json'
@@ -154,8 +154,8 @@ def test_ambiguity_truncation_unavailable_and_incompatible(app, monkeypatch):
 
 def test_no_implicit_cross_revision_cluster_correspondence(app, monkeypatch):
     first = annotation(app)
-    accepted(app, 'annotate_scATAC_cell_types', name='another', overrides=dict(groups_omitted=0,
-        group_summary=[dict(group='3',n_cells=8,primary_annotation='other',status='assigned')]))
+    accepted(app, 'annotate_scATAC_cell_types', name='another', overrides=dict(branches_omitted=0,
+        branch_summary=[dict(branch_id='3',n_cells=8,label='other',status='assigned')]))
     guarded = forbid_work(app, monkeypatch)
     result = ask(guarded, 'compare', 'Compare cluster 3 with cluster 3 in the parent.',
         Model(question('r0','3', comparison=dict(output='r1',subject='3'))))
@@ -188,15 +188,15 @@ def test_reordered_completions_require_explicit_predecessor(app, monkeypatch):
     app = forbid_work(app,monkeypatch)
     started, release = Event(), Event()
     with ThreadPoolExecutor() as pool:
-        a = pool.submit(ask, app, 'a', 'Explain cluster 3', Model(question(subject='3'), ['primary_annotation'], started=started, release=release))
+        a = pool.submit(ask, app, 'a', 'Explain cluster 3', Model(question(subject='3'), ['label'], started=started, release=release))
         assert started.wait(10)
-        b = ask(app, 'b', 'Explain cluster 7', Model(question(subject='7'), ['primary_annotation']))
+        b = ask(app, 'b', 'Explain cluster 7', Model(question(subject='7'), ['label']))
         assert b.status == 'answered'
         release.set()
         assert a.result().status == 'answered'
     unclear = ask(app, 'ambiguous', 'Why?', Model(question('@focus')))
     assert unclear.clarification.reason == 'ambiguous_predecessor'
-    follow = ask(app, 'continue-a', 'Why?', Model(question('@focus'), ['primary_annotation']), predecessor_turn_id='a')
+    follow = ask(app, 'continue-a', 'Why?', Model(question('@focus'), ['label']), predecessor_turn_id='a')
     assert follow.status == 'answered' and follow.scientific.claims[0].subject == '3'
     state = app.sessions.load('session')
     assert state.interactions[-1].admitted['predecessor'] == 'a'
@@ -206,7 +206,7 @@ def test_reordered_completions_require_explicit_predecessor(app, monkeypatch):
 
 def test_fresh_process_followup_without_prose(app):
     annotation(app)
-    assert ask(app, 'a', 'Explain cluster 3', Model(question(subject='3'), ['primary_annotation'])).status == 'answered'
+    assert ask(app, 'a', 'Explain cluster 3', Model(question(subject='3'), ['label'])).status == 'answered'
     code = '''
 import json, sys
 from agent.application import ResearchAgentApplication
@@ -221,7 +221,7 @@ class Model:
    return json.dumps(dict(turn_schema_version=1, decision=dict(kind='answer',intent='scientific',target=dict(output='@focus',subject=None),comparison=None,focus='question')))
   if 'grounding_review_version' in p:
    return json.dumps(dict(verdicts={row['id']: dict(verdict='entailed', independent=True) for row in p['paragraphs']}))
-  c=next(c['claim_id'] for c in p['evidence']['claims'] if c['field']=='primary_annotation')
+  c=next(c['claim_id'] for c in p['evidence']['claims'] if c['field']=='label')
   return json.dumps(dict(support='insufficient_evidence',paragraphs=[dict(text='The recorded assignment follows.', kind='finding', citations=[c], comparisons=[])]))
 app=ResearchAgentApplication(sys.argv[1])
 result=app.sessions.respond('session','b','Why?',interpreter=Model())
@@ -263,7 +263,7 @@ def test_new_science_routes_to_existing_planner_and_executor(app, tmp_path):
 def test_question_uses_typed_scientific_answer_without_execution(app, monkeypatch):
     rid = annotation(app)
     app = forbid_work(app,monkeypatch)
-    model = Model(question(subject='3'), ['primary_annotation'])
+    model = Model(question(subject='3'), ['label'])
     result = ask(app, 'q', 'What does cluster 3 show?', model)
     assert result.kind == 'answer' and result.status == 'answered'
     assert result.scientific.claims[0].value == 'CD8 T'
@@ -278,7 +278,7 @@ def test_question_uses_typed_scientific_answer_without_execution(app, monkeypatc
 def test_command_like_scientific_answer_keeps_exact_target_and_subject(app, monkeypatch, utterance):
     rid = annotation(app)
     app = forbid_work(app, monkeypatch)
-    model = Model(question(subject='3'), ['primary_annotation'])
+    model = Model(question(subject='3'), ['label'])
     result = ask(app, 'science', utterance, model)
     assert result.kind == 'answer' and result.status == 'answered'
     claim, = result.scientific.claims
@@ -293,7 +293,7 @@ def test_command_like_scientific_answer_keeps_exact_target_and_subject(app, monk
 
 def test_command_like_scientific_answer_rejects_unoffered_subject(app, monkeypatch):
     annotation(app)
-    model = Model(question(subject='99'), ['primary_annotation'])
+    model = Model(question(subject='99'), ['label'])
     result = ask(forbid_work(app, monkeypatch), 'wrong-subject',
         'Compute an explanation of the accepted result for cluster 3.', model)
     assert result.status == 'failed' and result.error is not None
@@ -345,7 +345,7 @@ def test_context_omits_automatic_detail_but_preserves_whole_summary(app, monkeyp
     from agent.application.dialogue_evidence import EvidenceFact
     annotation(app)
     app = forbid_work(app, monkeypatch)
-    result = ask(app, 'bounded-detail', 'Explain the annotation.', Model(question(), ['group_summary']))
+    result = ask(app, 'bounded-detail', 'Explain the annotation.', Model(question(), ['branch_summary']))
     assert result.status == 'answered'
     admitted = dict(app.sessions.load('session').interactions[-1].admitted)
     original = app.sessions.evidence
@@ -358,21 +358,21 @@ def test_context_omits_automatic_detail_but_preserves_whole_summary(app, monkeyp
         return view
     monkeypatch.setattr(app.sessions, 'evidence', evidence)
     public, claims = sd.context(app.sessions, 'session', admitted)
-    assert len(next(c.value for c in claims if c.field == 'group_summary')) == 2
+    assert len(next(c.value for c in claims if c.field == 'branch_summary')) == 2
     assert not any(c.field.startswith('detail.') for c in claims)
     assert any('Automatic supplementary detail was omitted' in v for v in public['limitations'])
     admitted['detail'] = dict(section='annotation_rationale', field=None, other_field=None, limit=8, offset=0)
     explicit, explicit_claims = sd.context(app.sessions, 'session', admitted)
     assert len(json.dumps(explicit).encode()) > sd.PREFERRED_CONTEXT_BYTES
     assert len([c for c in explicit_claims if c.field.startswith('detail.candidate.')]) == 3
-    assert len(next(c.value for c in explicit_claims if c.field == 'group_summary')) == 2
+    assert len(next(c.value for c in explicit_claims if c.field == 'branch_summary')) == 2
 
 
 def test_retry_reuses_admitted_references_without_reinterpreting(app, monkeypatch):
     annotation(app)
     app = forbid_work(app,monkeypatch)
-    first = ask(app,'a','Explain cluster 3',Model(question(subject='3'),['primary_annotation']))
-    model = Model(None,['primary_annotation'])
+    first = ask(app,'a','Explain cluster 3',Model(question(subject='3'),['label']))
+    model = Model(None,['label'])
     repeated = ask(app,'a','Explain cluster 3',model)
     assert repeated.status == 'answered' and repeated.scientific.claims == first.scientific.claims
     assert len(model.calls)==1 and 'dialogue_schema_version' in model.calls[0]

@@ -21,7 +21,6 @@ TOOLS = {
     **{c.tool_name: k for k, c in CONTRACTS.items()},
     'compute_scATAC_qc': 'qc', 'select_scATAC_cells': 'selection',
     'build_scATAC_cell_by_ccre': 'matrix', 'adopt_scATAC_cell_by_ccre': 'matrix',
-    'annotate_scATAC_cell_types': 'annotation',
     # Data-layer owner identity only; not an executable ToolRegistry entry.
     'adopt_cell_by_features': 'matrix',
     'build_cell_by_features': 'matrix',
@@ -34,7 +33,6 @@ TOOLS = {
 }
 MODULES = {
     'epizoo_adaptation': 'agent.tools.models.epizoo_adaptation.publication',
-    'annotation': 'agent.tools.analysis.scatac_annotation',
     'matrix': 'scatac_matrix_adoption',
 }
 
@@ -89,9 +87,6 @@ def _load(kind, path, sha):
     elif kind == 'epizoo_adaptation':
         from agent.tools.models.epizoo_adaptation.publication import load_manifest
         value = load_manifest(path, actual)
-    elif kind == 'annotation':
-        from agent.tools.analysis.annotation_contract import load_manifest
-        value = load_manifest(path, actual)
     elif kind == 'matrix':
         from .scatac_matrix_contract import load_manifest_bytes
         value = load_manifest_bytes(raw)
@@ -142,45 +137,6 @@ def describe(kind, path, sha, context):
             dependency('initialized_model','epizoo_adaptation',parent['manifest_path'],parent['manifest_sha256'])
         profile = adaptation.profile_sha256(args['profile'])
         verifier = dict(id='epizoo.species-adaptation-structural', compatibility_version='1')
-    elif kind == 'annotation':
-        from agent.tools.analysis import annotation_contract as annotation, marker_annotation
-        from agent.orchestration.verification_authority import bind_annotation_matrix
-        args = value['arguments']
-        spec = annotation.resolved_specification(args)
-        if spec['schema'] == annotation.EXTERNAL_SPEC:
-            authority = annotation.digest(dict(contract='external-peak-annotation-input.v1',
-                binding=value['matrix_binding'],declarations=spec,
-                upstream_counting_history='declared_not_reconstructed'))
-        else:
-            authority, _ = bind_annotation_matrix(spec, args['matrix_manifest_path'], args['matrix_manifest_sha256'], context)
-        if value['inputs'] != spec or value['source_authority_sha256'] != authority:
-            raise AuthorityError('Annotation source authority or specification changed.')
-        if spec['schema'] == annotation.EXTERNAL_SPEC:
-            from agent.tools.analysis import peak_h5ad
-            resources.append(args['source_path'])
-            if value['schema_version'] == 1:
-                resources.append(peak_h5ad.__file__)
-            if 'contig_scope' in spec:
-                resources.append(spec['contig_scope']['path'])
-                if os.environ.get('AGENT_QC_RESOURCE_CATALOG'):
-                    resources.append(os.environ['AGENT_QC_RESOURCE_CATALOG'])
-        else:
-            dependency('matrix', 'matrix', args['matrix_manifest_path'], args['matrix_manifest_sha256'])
-        owned.extend(root / name for name in value['sidecars'])
-        if 'path' in spec['groups']: resources.append(spec['groups']['path'])
-        if 'analysis_path' in spec['groups']: resources.append(spec['groups']['analysis_path'])
-        resources.extend([args['annotation_spec_path'],
-                          spec['gene_resource']['path'], spec['signature_resource']['path']])
-        runtime = annotation.backend_runtime()
-        resources.extend([runtime.rscript, marker_annotation.__file__,
-                          str(Path(marker_annotation.__file__).parent / 'r/maestro_markers_v1.R')])
-        if spec['schema'] == annotation.EXTERNAL_SPEC and value['schema_version'] == 1:
-            resources.append(annotation.backend(value['matrix_binding']).__file__)
-        resources.extend(str(Path(runtime.upstream_dir) / name) for name in marker_annotation.SOURCES)
-        for package in ('presto', 'Matrix', 'dplyr'):
-            resources.extend(str(p.resolve()) for p in (Path(runtime.r_library)/package).rglob('*') if p.is_file())
-        profile = value['profile_sha256']
-        verifier = annotation.verifier(value['schema_version'])
     elif kind in CONTRACTS or kind == 'generic_fragments':
         kinds = {e['provenance']['kind'] for e in value['libraries']}
         if len(kinds) != 1 or not kinds <= CONTRACTS.keys():
@@ -323,9 +279,7 @@ def describe(kind, path, sha, context):
     if kind == 'matrix' and is_fragment_features(value):
         resources.extend(historical)
         historical = {}  # current required inputs here; historical record remains in the producer dependency
-    files = (annotation.publication_files(context, [*owned, *resources],
-                context.accepted.get((str(path), actual))) if kind == 'annotation'
-             else context.files([*owned, *resources]))
+    files = context.files([*owned, *resources])
     relative = []
     for entry in files:
         if entry['path'] == str(path):
@@ -369,9 +323,6 @@ def reuse_result(kind, description, proof, kwargs):
         if kind == 'generic_fragments': return fragment
         from types import SimpleNamespace
         return SimpleNamespace(fragments=fragment)
-    if kind == 'annotation':
-        from agent.tools.analysis.scatac_annotation import _summary
-        return _summary(description['manifest'], path, sha)
     if kind == 'explicit_cells':
         from .explicit_cells import load_manifest
         return load_manifest(path, sha)
@@ -407,12 +358,10 @@ def _publication_record(context, tool_name, arguments, result, execution_identit
         from agent.tools.models import epizoo_posttraining as module
     publication = (module._recorded_publication(arguments, execution_identity,
         result['manifest_path'], result['manifest_sha256']) if kind == 'qc' else
-        module._publication(arguments, execution_identity,
-        version=result['artifact_schema_version']) if kind == 'annotation'
-        else module._publication(arguments, execution_identity))
+        module._publication(arguments, execution_identity))
     destination, token = publication[:2] if kind == 'fastq_fragment_production' else publication[1:]
     normalized_arguments = arguments if kind == 'fastq_fragment_production' else publication[0]
-    directory = 'fragments' if kind in CONTRACTS else 'artifact' if kind in ('matrix', 'annotation', 'epizoo_adaptation') else ''
+    directory = 'fragments' if kind in CONTRACTS else 'artifact' if kind in ('matrix', 'epizoo_adaptation') else ''
     path = destination / directory / 'manifest.json'
     if str(path) != result['manifest_path']:
         raise AuthorityError('Publication belongs to a different execution.')

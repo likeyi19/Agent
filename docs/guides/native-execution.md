@@ -58,7 +58,7 @@ allocation exception and from scientific input rejection. Worker logs retain
 native errors without inventing scientific conclusions.
 
 The current whole-owner boundary covers annotation input observation, uploaded-reference
-qualification, MAESTRO execution/independent validation, MatrixPackage (SnapATAC2, Scanpy, EpiScanpy,
+qualification, iterative annotation native children, MatrixPackage (SnapATAC2, Scanpy, EpiScanpy,
 Signac), chromVAR and Cicero CDS. The existing command runner also applies the
 same boundary to repository-controlled native commands. This is not a claim that
 every Python-only tool or GPU allocation in Agent is isolated. CUDA device memory

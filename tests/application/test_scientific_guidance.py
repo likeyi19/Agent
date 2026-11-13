@@ -325,7 +325,7 @@ def test_guidance_to_scientific_followup_uses_same_focus(app,monkeypatch):
     annotation(app)
     app=guard(app,monkeypatch)
     assert ask(app,utterance='What could I analyze for cluster 3?',model=Model(decision('r0',subject='3'))).status=='answered'
-    result=ask(app,'facts','What does that result show?',ScientificModel(question('@focus'),['primary_annotation']))
+    result=ask(app,'facts','What does that result show?',ScientificModel(question('@focus'),['label']))
     assert result.status=='answered' and result.scientific.claims[0].subject=='3'
 
 

@@ -30,6 +30,17 @@ def _peak_source(binding, parent, store):
     # Measurement units do not identify a feature space. The existing native
     # publication keeps source metadata and explicit supplied declarations apart
     # from the effective measurement (e.g. binary accessibility/fragment counts).
+    if binding is None:
+        from .native_gene_activity import source_metadata
+        from agent.tools._file_identity import checked_file
+        pin = parent['source']
+        checked_file(pin['path'], pin['sha256'])
+        metadata = source_metadata(pin['path'], {})
+        if metadata['measurement'] in {'peak_counts', 'peak_accessibility'}:
+            return dict(origin='recorded_peak_declaration', source=pin,
+                matrix_semantics=metadata['measurement'],
+                qualification='Source declaration, not independent biological validation.')
+        return None
     rows = None
     native, declared, seen = parent, None, set()
     while native['matrix_sha256'] not in seen:
@@ -172,7 +183,7 @@ def _decide(children, parent_positions, alpha, minimum):
 
 def assess_subdivision(parent_binding, local_bindings=(), differentials=None, *, store, registry,
                        adjusted_p_threshold=0.01, minimum_peak_features=5,
-                       annotation=None, annotation_bindings=(), budget_reason=None, failed_local=None):
+                       annotation=None, annotation_bindings=(), budget_reason=None, failed_local=None, source_grouping=None):
     """Return ordinary data for one attempt, never dispatch scientific work.
 
     ``parent_binding`` selects an accepted clustering retaining peak X. The four
@@ -191,8 +202,17 @@ def assess_subdivision(parent_binding, local_bindings=(), differentials=None, *,
         raise ValueError('Adjusted-p interpretation threshold must lie in [0, 1].')
     if type(minimum_peak_features) is not int or minimum_peak_features < 1:
         raise ValueError('Minimum distinct peak interpretation count must be a positive integer.')
-    _, parent = _read(parent_binding, store, registry)
-    result = dict(schema='local-subdivision.v1', parent=dict(binding=parent_binding.to_dict(), native_result=parent),
+    if source_grouping is None:
+        _, parent = _read(parent_binding, store, registry)
+        parent_record = dict(binding=parent_binding.to_dict(), native_result=parent)
+        descriptor = describe(parent_binding.tool_name, parent)
+    else:
+        if parent_binding is not None:
+            raise ValueError('Select either native grouping or the original source column')
+        parent = source_grouping
+        parent_record = dict(binding=None, source_grouping=source_grouping)
+        descriptor = dict(preserves_counts=True, grouping=source_grouping['groupby'])
+    result = dict(schema='local-subdivision.v1', parent=parent_record,
         local_steps=[], children=[], parent_membership=None, residual_parent=None, annotation=None, peak_source=None,
         interpretation=dict(adjusted_p_threshold=adjusted_p_threshold, minimum_peak_features=minimum_peak_features,
             rule='distinct native features with positive log2 fold change and adjusted p strictly below threshold',
@@ -200,7 +220,6 @@ def assess_subdivision(parent_binding, local_bindings=(), differentials=None, *,
             references=['10.1093/nargab/lqae174', '10.1038/s41586-023-06824-9'],
             limitation='Exploratory within-data evidence, not independent biological validation or proof of a new cell type.'),
         execution_budget=dict(default_maximum_levels=5, supplied_reason=deepcopy(budget_reason), enforced=False))
-    descriptor = describe(parent_binding.tool_name, parent)
     if descriptor and descriptor['preserves_counts'] and descriptor['grouping']:
         result['peak_source'] = _peak_source(parent_binding, parent, store)
     if result['peak_source'] is None:
@@ -211,13 +230,18 @@ def assess_subdivision(parent_binding, local_bindings=(), differentials=None, *,
         return result
     if len(local_bindings) != len(LOCAL_METHODS) and not (failed_local is not None and len(local_bindings) < 4):
         raise ValueError('Supply the four accepted native local steps; this component executes none.')
-    parent_obs, = _metadata(parent, 'obs')
+    parent_obs, = _metadata(parent if source_grouping is None else {'matrix_path': parent['source']['path']}, 'obs')
     previous = parent
     for i, (binding, method) in enumerate(zip(local_bindings, LOCAL_METHODS)):
         step, native = _read(binding, store, registry)
         if binding.tool_name != 'run_snapatac2' or native['function_name'] != method:
             raise ValueError('Local evidence differs from the selected SnapATAC2 route.')
-        _follows(step, native, previous)
+        if i == 0 and source_grouping is not None:
+            pin = source_grouping['source']
+            if step.resolved_arguments.get('input_path') != pin['path'] or native['source_identity']['sha256'] != pin['sha256']:
+                raise AuthorityError('Local selection does not consume the exact supplied grouping source')
+        else:
+            _follows(step, native, previous)
         written = ('var.selected', 'obsm.X_spectral', 'obsp.distances')
         if i < 3 and written[i] not in native['result_slots']:
             raise AuthorityError('Local evidence retained an inherited slot instead of computing it.')

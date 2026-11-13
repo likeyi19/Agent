@@ -249,15 +249,21 @@ def project_grouping(matrix, args, source):
     native = next((p.result_metadata for p in context.proofs.values()
                    if p.result_metadata.get('matrix_path') == pin['path']
                    and p.result_metadata.get('matrix_sha256') == pin['sha256']), None)
-    if native is None:
-        raise AuthorityError('Grouping projection requires an accepted native publication')
-    descriptor = describe('run_' + native['function_name'].split('.')[0], native)
     groupby = args.get('kwargs', {}).get('groupby')
-    if not descriptor or descriptor['grouping'] != groupby:
-        raise AuthorityError('Marker grouping differs from the selected native clustering')
+    if args.get('group_column') is not None:
+        if args['group_column'] != groupby:
+            raise AuthorityError('Marker grouping differs from the explicitly selected source column')
+        provenance = dict(origin='user_supplied', qualification='Intended grouping role supplied by researcher; biological identity and derivation not validated.')
+    else:
+        if native is None:
+            raise AuthorityError('Grouping projection requires an accepted native publication')
+        descriptor = describe('run_' + native['function_name'].split('.')[0], native)
+        if not descriptor or descriptor['grouping'] != groupby:
+            raise AuthorityError('Marker grouping differs from the selected native clustering')
+        provenance = dict(accepted_publication={k: native[k] for k in ('manifest_path', 'manifest_sha256')})
     positions = corresponding_positions(args['input_path'], source['sha256'], pin['path'], pin['sha256'], context)
     matrix = matrix[positions, :].copy()
     with h5py.File(pin['path'], 'r') as handle:
         matrix.obs[groupby] = read_elem(handle['obs'])[groupby]
     return matrix, dict(source=pin, activity_positions=positions, groupby=groupby,
-        accepted_publication={k: native[k] for k in ('manifest_path', 'manifest_sha256')})
+        **provenance)

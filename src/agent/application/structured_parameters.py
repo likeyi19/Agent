@@ -436,17 +436,18 @@ def accepted_analysis(sessions, session_id, revision_id):
     return state, revision, run
 
 
-def recorded_native_kwargs(step):
+def recorded_native_kwargs(step, *, recorded=None):
     """Actual accepted kwargs, including defaults recorded by the native worker."""
-    recorded = _serialize(step.result.get('parameters', {}))
+    if recorded is None:
+        recorded = _serialize(step.result.get('parameters', {}))
     effective = recorded.get('effective_native_parameters', {}) if isinstance(recorded, dict) else {}
     return {**_serialize(step.resolved_arguments.get('kwargs', {})), **effective}
 
 
 
-def annotation_operations(run, store, registry):
+def annotation_operations(run, store, registry, *, hierarchies=None):
     """Actual accepted children of this selected result, keyed by branch and operation."""
-    from agent.tools.analysis.sequence_prediction import read
+    from agent.tools.analysis.hierarchical_annotation import read_evidence as read
     from agent.schemas.prior_output import PriorOutputBinding
     from agent.orchestration.prior_outputs import validate_binding
     from .session_state import digest
@@ -455,6 +456,8 @@ def annotation_operations(run, store, registry):
         if parent.tool_name != 'annotate_scATAC_cell_types' or parent.result is None or not parent.verification or not parent.verification.passed:
             continue
         hierarchy = read(parent.result['hierarchy_path'], parent.result['hierarchy_sha256'])
+        if hierarchies is not None:
+            hierarchies[parent.step_id] = hierarchy
         for operation in hierarchy['operations']:
             binding = PriorOutputBinding(**operation['binding'])
             child = validate_binding(binding, store=store, registry=registry)
@@ -469,7 +472,8 @@ def result_parameters(sessions, session_id, revision_id):
     state, revision, run = accepted_analysis(sessions, session_id, revision_id)
     registry = sessions._application.registry
     steps = []
-    children = annotation_operations(run, sessions._application.run_store, registry)
+    hierarchies = {}
+    children = annotation_operations(run, sessions._application.run_store, registry, hierarchies=hierarchies)
     executed = list(run.steps) + [replace(row['step'],step_id=handle) for handle,row in children.items()]
     for step in executed:
         if step.result is None or step.verification is None or not step.verification.passed:
@@ -478,20 +482,20 @@ def result_parameters(sessions, session_id, revision_id):
         spec = catalog(registry, step.tool_name, function)
         spec = spec[0] if spec else dict(parameters=[])
         recorded = _serialize(step.result.get('parameters', {}))
+        arguments = _serialize(step.resolved_arguments)
+        native_kwargs = recorded_native_kwargs(step, recorded=recorded)
         fields = []
         for kwarg, rows in ((False, spec['parameters']), (True, spec.get('kwargs', ()))):
             for field in rows:
                 name = field['argument']
-                values = (recorded_native_kwargs(step) if kwarg
-                          else {**_serialize(step.resolved_arguments),
+                values = (native_kwargs if kwarg
+                          else {**arguments,
                                 **{k:v for k,v in recorded.items() if k == name and k != 'parameter_selection'},
                                 **{k:_serialize(v) for k,v in step.result.items() if k == name}})
                 if step.tool_name == 'annotate_scATAC_cell_types':
                     if name not in {'maximum_levels','marker_alpha','ora_alpha','adjusted_p_threshold','minimum_peak_features','species','identity_kind','identity_column'}:
                         continue
-                    from agent.tools.analysis.sequence_prediction import read
-                    hierarchy=read(step.result['hierarchy_path'],step.result['hierarchy_sha256'])
-                    values.update(hierarchy['interpretation'])
+                    values.update(hierarchies[step.step_id]['interpretation'])
                 if function and not kwarg and name not in values:
                     continue
                 # Current installed defaults are not evidence of a past execution.

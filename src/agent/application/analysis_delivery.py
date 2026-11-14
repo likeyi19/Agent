@@ -411,7 +411,7 @@ def _source_record(path, sha256, root):
 
 
 def _annotation_source(artifact):
-    from agent.tools.analysis.sequence_prediction import read
+    from agent.tools.analysis.hierarchical_annotation import read_evidence as read
     pin = next(p for p in artifact.manifest['files'] if Path(p['path']).name == 'hierarchy.json')
     source = read(pin['path'], pin['sha256'])['source']
     return {k:source[k] for k in ('path','sha256')}

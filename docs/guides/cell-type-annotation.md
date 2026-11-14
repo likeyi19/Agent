@@ -152,6 +152,9 @@ omitted from presentation; scientific values are neither aggregated nor renamed.
 Composition shows final labels separately from current-round evidence status,
 including the count of cells inheriting an ancestor label. Inheritance does not
 turn ambiguous or unresolved evidence into a confident current-round assignment.
+Marker plot rows show current-round labels or evidence status, with short branch
+prefixes for tracing. Annotation levels and composition share a label palette;
+each UMAP legend includes only its displayed categories and missing coverage.
 
 Qualified accepted global UMAP can be colored by final annotation or reached levels
 (up to five displayed levels), and by at most six representative markers. The
@@ -159,7 +162,9 @@ annotation-level control only selects existing presentation artifacts; it create
 no scientific Run. Before planning, missing compatible coordinates prompt the
 fixed English **Generate UMAP?** choice. **Generate UMAP** requests registered
 native representation prerequisites and UMAP in the annotation plan, retaining
-the supplied initial grouping. SnapATAC2 UMAP consumes its selected representation
+the supplied initial grouping. The annotated original H5AD and native UMAP H5AD
+remain selected for exact continuation and result-scoped parameter edits.
+SnapATAC2 UMAP consumes its selected representation
 and fits its own neighbors; Scanpy and epiScanpy use their compatible native neighbor
 graphs. A visualization request alone does not require a new Leiden grouping.
 **Skip UMAP** continues annotation without the
@@ -169,6 +174,17 @@ not a local UMAP. Exact cell ancestry can survive native representation transfor
 without granting those transformed matrices original count authority. The
 ICTA-4C-1 report records the current browser qualification
 and any incomplete integration boundaries.
+
+Accepted `analysis_evidence.json` is one Run-scoped envelope, shared by all its
+selected outputs. The existing dialogue evidence reader uses accepted Run steps
+to select the 512 MiB annotation bound when annotation is present, including when
+reading a UMAP output. The generic 8 MiB bound protects ordinary local summary
+reads; the annotation allowance accommodates recorded native arrays. These are
+encoded read ceilings, not measured memory budgets or scientific thresholds.
+Selected facts (16 KiB) and views (64 KiB), pinned hashes and exact source bindings
+remain independently enforced. Technical methods reuse this same accepted reader;
+publication verifies freshly serialized evidence against the complete expected
+payload through its existing scientific owner.
 
 Hierarchical JSON evidence has an explicit 512 MiB bound per sidecar, including
 verification, figure projection and detailed rationale reads. Full tested-gene
@@ -215,12 +231,30 @@ External scoring and large PBMC/GLUE benchmarking remain outside that acceptance
 The [ICTA-4C-1 optimization report](../../../agent-data/acceptance/iterative-cell-type-annotation/icta-4c/phase1-h5ad-browser/optimization-2026-11-14/REPORT.md)
 records real accepted-evidence performance comparisons, complete table/privacy
 equivalence and isolated figure qualification. Fresh Generate UMAP browser
-acceptance remains pending.
+acceptance had not begun at that checkpoint.
 The [final pre-Generate-UMAP optimization report](../../../agent-data/acceptance/iterative-cell-type-annotation/icta-4c/phase1-h5ad-browser/final-optimization-2026-11-14/REPORT.md)
 records further invocation-local read/preparation reuse, self-contained sidecar
 deduplication, figure cleanup and preserved-science checks. Generate UMAP remains
 unstarted by that pass.
 The [engineering Git checkpoint](../../../agent-data/acceptance/iterative-cell-type-annotation/icta-4c/phase1-h5ad-browser/engineering-git-closeout-2026-11-14/REPORT.md)
 records the cumulative review, scoped checks and authorized commit/push.
-ICTA-4C-1 remains **CONDITIONAL**: fresh Generate UMAP Firefox acceptance is
-still outstanding.
+That checkpoint retained **CONDITIONAL** pending fresh Generate UMAP acceptance.
+The [fresh Generate UMAP Firefox report](../../../agent-data/acceptance/iterative-cell-type-annotation/icta-4c/phase1-h5ad-browser/generate-umap-2026-11-14/REPORT.md)
+records **PASS within the PBMC1k ICTA-4C-1 scope** after demonstrated fixes and a
+complete new stable-source run, with nine figures, fifteen verified browser
+downloads, a one-step UMAP parameter Revision and grounded result continuation.
+Biological accuracy, larger inputs and the separate raw-fragments campaign remain
+unqualified. The acceptance fixes remain unstaged and uncommitted.
+
+Result-scoped parameter steps are grouped by the recorded parent annotation step
+and branch IDs. Analysis/UMAP and annotation groups start collapsed; each operation
+creates its controls only when opened, and recorded native details remain read only
+and lazy. Unopened steps retain their exact accepted values. No parameter, source,
+Revision or execution ownership changes with this presentation grouping.
+
+The [final ICTA-4C-1 engineering and dual-path report](../../../agent-data/acceptance/iterative-cell-type-annotation/icta-4c/phase1-h5ad-browser/final-consolidation-2026-11-14/REPORT.md)
+records bounded PASS for fresh Generate and Skip UMAP Sessions on one frozen
+implementation, exact downloads, UMAP-only Revision reuse, read-only continuation,
+structured titles and the grouped lazy parameter editor. Biological accuracy,
+large inputs and raw-fragments acceptance remain outside this qualification.
+The cumulative implementation remains unstaged and uncommitted for review.

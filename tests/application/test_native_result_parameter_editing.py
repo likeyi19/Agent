@@ -9,6 +9,41 @@ from agent.schemas.orchestration import _serialize
 from test_structured_interaction import setup, PROFILE
 
 
+def test_annotation_parameter_operations_decode_self_contained_effective_arrays(tmp_path, monkeypatch):
+    import hashlib
+    from types import SimpleNamespace as N
+    from agent.application.structured_parameters import annotation_operations
+    from agent.tools.analysis.hierarchical_annotation import scientific_evidence
+    from agent.report.annotation import method_facts
+    binding=dict(run_id='child', step_id='operation', tool_name='run_snapatac2',
+        source_port='dataset', semantic_type='h5ad', accepted_step_sha256='a'*64,
+        manifest_sha256='b'*64, authority_sha256='c'*64)
+    native=dict(function_name='snapatac2.tl.diff_test', manifest_sha256='b'*64,
+        parameters=dict(kwargs={'features':['peak-a', 'peak-b']},
+            effective_native_parameters={'features':['peak-a', 'peak-b'], 'min_pct':.05}))
+    hierarchy=dict(input_results=[], operations=[dict(binding=binding, native_result=native,
+        branch_id='branch', operation_id='diff-child')], grouping=dict(origin='user_supplied',
+        groupby='groups', qualification='Supplied grouping'), source={'sha256':'d'*64},
+        interpretation={'marker_alpha':.05}, cellmarker={'version':'pinned'})
+    path=tmp_path/'hierarchy.json'
+    path.write_text(json.dumps(scientific_evidence(hierarchy, 'hierarchy.json', encode=True)))
+    result=dict(hierarchy_path=str(path), hierarchy_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    parent=N(tool_name='annotate_scATAC_cell_types', step_id='annotation', result=result,
+        verification=N(passed=True))
+    child=N(result=native)
+    monkeypatch.setattr('agent.orchestration.prior_outputs.validate_binding', lambda *a, **k:child)
+    rows=annotation_operations(N(steps=[parent]), None, None)
+    assert len(rows)==1
+    assert next(iter(rows.values()))['step'].result == native
+    assert method_facts(result)['native_methods'][0]['parameters'] == native['parameters']
+    changed=json.loads(path.read_text())
+    changed['operations'][0]['native_result']['parameters']['kwargs']['features'][0]='changed'
+    path.write_text(json.dumps(changed))
+    result['hierarchy_sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match='differs from accepted evidence'):
+        annotation_operations(N(steps=[parent]), None, None)
+
+
 @pytest.mark.parametrize('changed', ['scale', 'again', 'both'])
 def test_native_repeated_step_edits_preserve_defaults_and_lineage(tmp_path, monkeypatch, changed):
     from agent.tools import _native_process
@@ -84,3 +119,33 @@ def test_native_repeated_step_edits_preserve_defaults_and_lineage(tmp_path, monk
     corrupt['result_edit']['run_result_sha256'] = '0' * 64
     with pytest.raises(ValueError, match='accepted-run anchor'):
         replace(state, interactions=state.interactions[:-1] + (replace(state.interactions[-1], admitted=corrupt),))
+
+
+def test_result_parameter_fields_share_one_invocation_local_hierarchy_decode(tmp_path, monkeypatch):
+    import hashlib
+    from types import SimpleNamespace as N
+    from agent.application import structured_parameters as owner
+    from agent.tools.analysis import hierarchical_annotation as annotation
+    values = dict(maximum_levels=5, marker_alpha=.05, ora_alpha=.05,
+        adjusted_p_threshold=.01, minimum_peak_features=5, species='Human')
+    path=tmp_path/'hierarchy.json'
+    path.write_text(json.dumps(dict(operations=[], interpretation=values)))
+    result=dict(parameters={}, hierarchy_path=str(path),
+        hierarchy_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    parent=N(tool_name='annotate_scATAC_cell_types', step_id='annotation', result=result,
+        resolved_arguments={}, verification=N(passed=True))
+    monkeypatch.setattr(owner, 'accepted_analysis', lambda *args:(N(generation=1), None, N(steps=[parent])))
+    monkeypatch.setattr(owner, 'catalog', lambda *args:[dict(parameters=[
+        dict(argument=name, description=name) for name in values])])
+    original=annotation.read_evidence
+    reads=[]
+    def observed(*args):
+        reads.append(args)
+        return original(*args)
+    monkeypatch.setattr(annotation, 'read_evidence', observed)
+    sessions=N(_application=N(registry=None, run_store=None))
+    response=owner.result_parameters(sessions, 'session', 'revision')
+    assert len(reads)==1
+    assert {row['argument']:row['value'] for row in response['steps'][0]['parameters']} == values
+    owner.result_parameters(sessions, 'session', 'revision')
+    assert len(reads)==2  # No reuse across invocations or altered accepted inputs.

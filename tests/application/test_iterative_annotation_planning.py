@@ -52,7 +52,9 @@ def test_species_uses_only_actual_reference_values(declaration,resolved):
 
 @pytest.mark.parametrize('choice,invalid_port', [('generate',None), ('skip',None), ('available',None),
                                                ('generate','activity_source'), ('generate','groups'),
-                                               ('generate','ambiguous_native_dataset')])
+                                               ('generate','ambiguous_native_dataset'), ('generate','omit_umap'),
+                                               ('generate','omit_annotation'), ('generate','wrong_output'),
+                                               ('generate','wrong_identity')])
 def test_optional_umap_click_preserves_supplied_groups_and_ordinary_planning(tmp_path, monkeypatch, choice, invalid_port):
     import anndata as ad
     import numpy as np
@@ -79,8 +81,18 @@ def test_optional_umap_click_preserves_supplied_groups_and_ordinary_planning(tmp
                     arguments=[dict(tool='annotate_scATAC_cell_types', argument='group_column',
                         source='source.0', mode='offered', value='groups', literal='groups', evidence='groups')])))
             if 'output_selection_schema_version' in value:
+                assert value['question'] == 'Annotate using groups.'
+                assert value['current_utterance'] == ('' if choice != 'available' else 'Annotate using groups.')
                 outputs=[dict(name='annotation',step_id='annotation',output_key='annotated_h5ad_path')]
                 if choice=='generate': outputs.append(dict(name='umap',step_id='umap',output_key='matrix_path'))
+                if value.get('requested_output_uses'):
+                    assert set(value['requested_output_uses']) == {'visualization_labels', 'visualization_coordinates'}
+                    for output in outputs:
+                        output['use'] = ['visualization_labels' if output['step_id']=='annotation' else 'visualization_coordinates']
+                if invalid_port == 'omit_umap': outputs = [o for o in outputs if o['step_id'] != 'umap']
+                if invalid_port == 'omit_annotation': outputs = [o for o in outputs if o['step_id'] != 'annotation']
+                if invalid_port == 'wrong_output': outputs[1]['output_key'] = 'n_cells'
+                if invalid_port == 'wrong_identity': outputs[1]['step_id'] = 'spectral'
                 return json.dumps(dict(outputs=outputs))
             task=value['research_context']['task']
             if choice != 'available': assert task['annotation_umap']['generate'] == (choice=='generate')
@@ -98,7 +110,7 @@ def test_optional_umap_click_preserves_supplied_groups_and_ordinary_planning(tmp
                 source('activity_method',kind='registered_choice',choice='episcanpy.tl.geneactivity')]))
             if invalid_port == 'ambiguous_native_dataset' and 'repair' not in value:
                 steps[2]['sources'][0]=source('dataset',kind='step',step='features')
-            elif invalid_port is not None and 'repair' not in value:
+            elif invalid_port in {'activity_source', 'groups'} and 'repair' not in value:
                 # Reproduce both actual browser failures. The existing compiler
                 # must reject inspection as a supplemental native annotation input.
                 steps[-1]['sources'].append(source(invalid_port,kind='step_port',step='inspect',source_port='dataset'))
@@ -127,6 +139,10 @@ def test_optional_umap_click_preserves_supplied_groups_and_ordinary_planning(tmp
         assert not executor.plans
         outcome=app.submit_turn('session','click','',expected_generation=0,input_sets=inputs,
             clarification_choice=dict(question_turn_id='request',handle='annotation-umap:'+choice))
+    if invalid_port in {'omit_umap', 'omit_annotation', 'wrong_output', 'wrong_identity'}:
+        assert outcome.error.code == 'PLANNER_OUTPUT_INVALID', outcome.to_dict()
+        assert not executor.plans
+        return
     assert outcome.error.code=='TEST_SCIENCE_WITHHELD',outcome.to_dict()
     plan=executor.plans[0]
     assert [s.arguments.get('function_name') for s in plan.steps[:-1]] == (

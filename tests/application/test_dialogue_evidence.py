@@ -27,26 +27,30 @@ def passed(kind, identity):
     return VerificationResult(True, kind, identity, (VerificationCheck('fixture', True, 'Fixture acceptance.'),))
 
 
-def accepted(app, tool, *, name='initial', overrides=None, extra_facts=None, copies=1, activate=True, arguments=None):
+def accepted(app, tool, *, name='initial', overrides=None, extra_facts=None, copies=1, activate=True, arguments=None, additional_tool=None):
     state = app.sessions.load('session')
     request = AgentRequest(name, 'Synthetic accepted metadata fixture.', {})
     spec = app.registry.get(tool)
+    tools = [tool] * copies + ([] if additional_tool is None else [additional_tool])
     # Populate the real result shape; explicit probe values below carry the
     # assertions. These are metadata fixtures, not scientific-owner executions.
     default = {str: 'fixture', int: 2, float: 0.5, bool: True, dict: {}, list: []}
     result = {k: default[t[0]] for k, t in spec.result_contract.required_fields.items()}
     result.update(overrides or {})
     output_key = 'manifest_path' if 'manifest_path' in result else next(iter(result))
-    selections = tuple(OutputSelection(f'output{i}', f'step{i}', output_key) for i in range(copies))
+    selections = tuple(OutputSelection(f'output{i}', f'step{i}', output_key if t == tool else 'annotated_h5ad_path')
+                       for i, t in enumerate(tools))
     app.sessions.start_turn('session', name, request, selections, expected_generation=state.generation)
     app.sessions.link_run('session', name)
     effective, paths = app._prepare_request(request)
-    plan = AgentPlan(name + ':plan', name, 'fixture', tuple(PlanStep(f'step{i}', tool, arguments or {}) for i in range(copies)))
-    steps = tuple(StepExecutionResult(s.step_id, tool, StepStatus.SUCCEEDED, attempt_count=1,
-                    result=result, verification=passed('step', s.step_id), resolved_arguments=arguments or {},
+    plan = AgentPlan(name + ':plan', name, 'fixture', tuple(PlanStep(f'step{i}', t, arguments or {}) for i, t in enumerate(tools)))
+    results = [result if t == tool else {k: default[types[0]] for k, types in app.registry.get(t).result_contract.required_fields.items()}
+               for t in tools]
+    steps = tuple(StepExecutionResult(s.step_id, s.tool_name, StepStatus.SUCCEEDED, attempt_count=1,
+                    result=results[i], verification=passed('step', s.step_id), resolved_arguments=arguments or {},
                     started_at='2026-09-23T00:00:00+00:00',
-                    finished_at='2026-09-23T00:00:00+00:00', duration_seconds=0.0) for s in plan.steps)
-    policies = (ToolRecoveryPolicySnapshot(tool, spec.recovery_policy_version),)
+                    finished_at='2026-09-23T00:00:00+00:00', duration_seconds=0.0) for i, s in enumerate(plan.steps))
+    policies = tuple(ToolRecoveryPolicySnapshot(t, app.registry.get(t).recovery_policy_version) for t in sorted(set(tools)))
     policy = RecoveryPolicySnapshot('fixture', 1, policies, fingerprint_recovery_policy('fixture', 1, policies))
     stored = PersistedRunState(3, 0, name + ':run', effective, RunLifecycleStatus.SUCCEEDED,
         '2026-09-23T00:00:00+00:00', '2026-09-23T00:00:00+00:00', plan=plan,
@@ -55,18 +59,17 @@ def accepted(app, tool, *, name='initial', overrides=None, extra_facts=None, cop
         run_verification=passed('run', plan.plan_id))
     app.run_store.create(stored)
     run = stored.to_run_result()
-    fields = ev._TOOL_PROJECTIONS[tool].fact_fields
     payload = dict(schema_version=1, artifact_type=ev.ANALYSIS_EVIDENCE_ARTIFACT_TYPE, status='success',
         run=dict(run_id=run.run_id, request_id=name, plan_id=plan.plan_id, planner_name=plan.planner_name,
             source_run_status='SUCCEEDED', plan_sha256=digest(plan.to_dict()), source_run_result_sha256=digest(run.to_dict())),
-        workflow=dict(ordered_steps=[dict(step_id=s.step_id, tool_name=tool, depends_on=[]) for s in steps]),
-        steps=[dict(step_id=s.step_id, tool_name=tool, attempt_count=1,
-                    facts={k: result[k] for k in fields} | (extra_facts or {}),
+        workflow=dict(ordered_steps=[dict(step_id=s.step_id, tool_name=s.tool_name, depends_on=[]) for s in steps]),
+        steps=[dict(step_id=s.step_id, tool_name=s.tool_name, attempt_count=1,
+                    facts={k: results[i][k] for k in ev._TOOL_PROJECTIONS[s.tool_name].fact_fields} | (extra_facts or {}),
                     verification=dict(passed=True, freshly_verified=True, check_names=['fixture']),
-                    recovery_identity=spec.recovery_policy_version) for s in steps],
+                    recovery_identity=app.registry.get(s.tool_name).recovery_policy_version) for i, s in enumerate(steps)],
         artifacts=[], provenance=dict(trace_sha256=digest([]), evidence_projection_version=1,
-            registry_tool_identities=[dict(tool_name=tool, result_contract=spec.result_contract.name,
-                recovery_identity=spec.recovery_policy_version)] * copies))
+            registry_tool_identities=[dict(tool_name=t, result_contract=app.registry.get(t).result_contract.name,
+                recovery_identity=app.registry.get(t).recovery_policy_version) for t in tools]))
     evidence = paths.evidence / ev.ANALYSIS_EVIDENCE_FILENAME
     evidence.write_bytes(canonical(payload))
     report = paths.report / 'fixture.json'
@@ -349,4 +352,24 @@ def test_large_accepted_annotation_envelope_keeps_summary_and_bounded_report(app
     assert path.read_bytes() == before
     path.write_bytes(before + b' ')
     changed = guarded.sessions.evidence('session', rid, 'output0')
+    assert changed.status == 'unavailable' and changed.reason == 'evidence_digest_mismatch'
+
+
+@pytest.mark.parametrize('selected', [0, 1])
+def test_native_output_reads_large_shared_annotation_envelope(app, monkeypatch, selected):
+    # The same envelope carries both UMAP and annotation; the selected output
+    # must not change the envelope bound. Compact fact limits still apply.
+    rid, path, _ = accepted(app, 'run_snapatac2',
+        overrides=dict(n_cells=8), additional_tool='annotate_scATAC_cell_types',
+        extra_facts=dict(native_methods=[dict(parameters='x' * (de.MAX_EVIDENCE_BYTES + 1024))]))
+    before = path.read_bytes()
+    guarded = forbid_work(app, monkeypatch)
+    view = guarded.sessions.evidence('session', rid, 'output' + str(selected))
+    assert view.status == 'available', view
+    assert next(f for f in view.facts if f.field == 'n_cells').value == (8 if selected == 0 else 2)
+    omitted = next(f for f in view.facts if f.field == 'native_methods')
+    assert omitted.status == 'omitted' and omitted.reason == 'field_size_limit'
+    assert path.read_bytes() == before
+    path.write_bytes(before + b' ')
+    changed = guarded.sessions.evidence('session', rid, 'output' + str(selected))
     assert changed.status == 'unavailable' and changed.reason == 'evidence_digest_mismatch'

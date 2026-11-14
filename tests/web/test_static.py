@@ -695,3 +695,74 @@ def test_reopen_polls_conversation_without_blocking_on_metadata_only_runs():
     assert result['metadataOnly']['watched'] == []
     assert result['metadataOnly']['history'][-1]['revision_id'] == 'accepted'
     assert result['active'] == 'question' and result['watched'] == ['question']
+
+
+def test_marker_activity_viewer_does_not_require_categorical_sources():
+    code=(STATIC/'app.js').read_text()
+    view=code[code.index('async function viewArtifact('):code.index('function readableLabel(')]
+    script='''
+    const state={epoch:0,artifactEpoch:0,revisionEpoch:0,session:{session_id:'session'},
+      revision:{revision_id:'revision',artifacts:[]}};
+    const nodes={};const element=id=>nodes[id]||(nodes[id]={hidden:true,textContent:'',scrollIntoView(){}});
+    const showWorkspacePanel=()=>{},clearArtifactView=()=>{state.artifactEpoch++;};
+    const readableLabel=x=>x,artifactPath=()=>'/accepted.png';
+    const URL={createObjectURL:()=> 'blob:accepted'};
+    const fetch=async()=>({ok:true,headers:{get:()=> 'image/png'},blob:async()=>({})});
+    class ApiError extends Error {}
+    '''+view+'''
+    const result={};viewArtifact('session','revision',{handle:'accepted',artifact_type:'analysis_figure',
+      figure:{kind:'marker_activity_umap',coordinate_reused:true,run_id:'run',
+        step_ids:['annotation','umap'],sources:[{run_id:'run',step_id:'annotation'},{run_id:'run',step_id:'umap'}]}})
+      .then(()=>Object.assign(result,{errorHidden:element('artifact-view-error').hidden,
+        imageVisible:!element('figure-content').hidden,description:element('figure-description').textContent,
+        fullSize:element('figure-full-size').href,fullSizeVisible:!element('figure-full-size').hidden}));
+    return result;
+    '''
+    result=_javascript_value('(()=>{'+script+'})()')
+    assert result['errorHidden'] and result['imageVisible']
+    assert 'Accepted Gene Activity' in result['description'] and 'no fitting' in result['description']
+    assert result['fullSize'] == '/api/v1/accepted.png' and result['fullSizeVisible']
+
+
+def test_parameter_provenance_is_rendered_only_when_its_details_open():
+    code=(STATIC/'app.js').read_text()
+    show=code[code.index('function parameterDetails('):code.index('function parameterValue(')]
+    script='''
+    const state={},created=[],nodes={};let reads=0;
+    class Node {
+      constructor(tag){this.tag=tag;this.children=[];this.listeners={};this.open=false;created.push(this);}
+      append(...items){this.children.push(...items);} replaceChildren(...items){this.children=items;}
+      setAttribute(){} addEventListener(event,fn){this.listeners[event]=fn;}
+      get childElementCount(){return this.children.length;} showModal(){}
+    }
+    const document={createElement:tag=>new Node(tag)},element=id=>nodes[id]||(nodes[id]=new Node(id));
+    const readableLabel=x=>x,selectOptions=()=>{},evidenceValueNode=value=>{reads++;return new Node('evidence');};
+    '''+show+'''
+    const recorded={features:Array.from({length:10000},(_,i)=>'peak-'+i)};
+    showParameters({revisionId:'revision',steps:[{step_id:'umap',tool:'run_episcanpy',recorded,
+      parameters:[{argument:'min_dist',value:.5,recorded:true,description:'Executed native parameter'}]}]});
+    const closedReads=reads,group=created.find(node=>node.tag==='details');
+    if (state.parameterEditor.rows.length) throw Error('Collapsed task created controls');
+    group.open=true;group.listeners.toggle();
+    const operation=group.children[1];operation.open=true;operation.listeners.toggle();
+    const details=created.find(node=>node.tag==='details' && node!==group && node!==operation);
+    details.listeners.toggle();details.open=true;details.listeners.toggle();
+    details.open=false;details.listeners.toggle();details.open=true;details.listeners.toggle();
+    return {closedReads,openReads:reads,value:state.parameterEditor.rows[0].input.value,
+      features:recorded.features.length,detailsChildren:details.childElementCount};
+    '''
+    result=_javascript_value('(()=>{'+script+'})()')
+    assert result == {'closedReads':0,'openReads':1,'value':'0.5','features':10000,'detailsChildren':2}
+
+
+def test_recent_conversation_description_uses_recorded_task_without_claiming_success():
+    code = (STATIC / 'app.js').read_text()
+    description = code[code.index('function conversationDescription('):code.index('function rememberSession(')]
+    script = "const stepLabel=s=>s.function_name || s.tool_name;" + description + """
+    const task={steps:[{tool_name:'annotate_scATAC_cell_types',status:'FAILED'},
+      {tool_name:'run_snapatac2',function_name:'snapatac2.tl.umap'}],attachments:[{input_type:'h5ad'}]};
+    return [conversationDescription({turns:[{utterance:'long initial question'},task]}),
+      conversationDescription({turns:[{utterance:'no structured task'}]}),
+      conversationDescription({history_truncated:true,turns:[task]})];
+    """
+    assert _javascript_value('(()=>{'+script+'})()') == ['scATAC H5AD · Cell annotation · UMAP', None, None]

@@ -54,12 +54,24 @@ function recentSessions() {
   } catch (_) { return []; }
 }
 
+function conversationDescription(view) {
+  // Describe the earliest recorded task, regardless of its execution outcome.
+  if (view.history_truncated) return null;
+  const task = view.turns.find((turn) => turn.steps?.length);
+  if (!task) return null;
+  const steps = task.steps;
+  const descriptions = [];
+  if (steps.some((step) => step.tool_name === "annotate_scATAC_cell_types")) descriptions.push("Cell annotation");
+  if (steps.some((step) => step.function_name?.endsWith("tl.umap"))) descriptions.push("UMAP");
+  if (!descriptions.length) descriptions.push(...[...new Set(steps.map(stepLabel))].slice(0, 2));
+  const h5ad = task.attachments?.some((attachment) => attachment.input_type === "h5ad");
+  return `${h5ad ? "scATAC H5AD · " : ""}${descriptions.join(" · ")}`.slice(0, 80);
+}
+
 function rememberSession(view) {
   const rows = recentSessions();
-  const first = view.turns.find((t) => t.utterance);
   const previous = rows.find((r) => r.id === view.session_id);
-  const row = {id: view.session_id, label: previous && previous.label !== "New conversation"
-    ? previous.label : first ? first.utterance.slice(0, 80) : "New conversation"};
+  const row = {id: view.session_id, label: conversationDescription(view) || previous?.label || "New conversation"};
   const updated = [row, ...rows.filter((r) => r.id !== row.id)].slice(0, 30);
   try { localStorage.setItem(RECENT_SESSIONS_KEY, JSON.stringify(updated)); } catch (_) {}
   const select = element("recent-sessions");
@@ -307,6 +319,7 @@ function clearArtifactView() {
   state.artifactUrl = null;
   element("artifact-viewer").hidden = true;
   element("figure-description").hidden = true;
+  element("figure-full-size").hidden = true;
   element("figure-content").hidden = true;
   element("figure-content").removeAttribute("src");
   element("artifact-view-error").hidden = true;
@@ -882,11 +895,15 @@ async function viewArtifact(sessionId, revisionId, artifact, reveal = true) {
       state.artifactUrl = URL.createObjectURL(blob);
       element("figure-content").src = state.artifactUrl;
       element("figure-content").hidden = false;
+      element("figure-full-size").href = `/api/v1${artifactPath(sessionId, revisionId, artifact.handle, artifact.turn_id)}`;
+      element("figure-full-size").hidden = false;
       element("figure-description").hidden = false;
       element("figure-description").textContent = artifact.figure
         ? `Accepted ${readableLabel(artifact.figure.kind)} · Source runs: ${[...new Set([artifact.figure.run_id, ...(artifact.figure.sources || []).map((s) => s.run_id)].filter(Boolean))].join(", ")} · Operations: ${artifact.figure.step_ids.join(", ")}. Exact sources are saved in the technical report.`
         : "Accepted historical PNG. Figure subject metadata is unavailable; no association with the selected field is asserted.";
-      if (artifact.figure?.coordinate_reused) {
+      if (artifact.figure?.kind === "marker_activity_umap") {
+        element("figure-description").textContent += " Accepted Gene Activity on reused UMAP coordinates; no fitting or additional normalization. Accessibility-derived activity is not RNA expression or independent validation.";
+      } else if (artifact.figure?.coordinate_reused) {
         const coordinates = artifact.figure.sources.find((source) => source.role === "coordinates");
         const categories = artifact.figure.sources.find((source) => source.role === "categories");
         const labelSource = categories.output ? resultLabel(categories.output.revision_id) : "the registered input";
@@ -2391,6 +2408,16 @@ async function openRequestedParameter(option, questionTurnId) {
   } catch (error) { showError(error); }
 }
 
+function parameterDetails(label, build) {
+  const details = document.createElement("details"), summary = document.createElement("summary");
+  summary.textContent = label;
+  details.append(summary);
+  details.addEventListener("toggle", () => {
+    if (details.open && details.childElementCount === 1) details.append(...build());
+  });
+  return details;
+}
+
 function showParameters(editor) {
   editor.rows = [];
   state.parameterEditor = editor;
@@ -2400,7 +2427,7 @@ function showParameters(editor) {
     : "Supply the requested value to continue your pending request.";
   element("run-parameters").textContent = editor.revisionId ? "Run with changes" : "Apply and continue";
   element("parameter-error").textContent = "";
-  element("parameter-steps").replaceChildren(...editor.steps.map((step) => {
+  const renderStep = (step) => {
     const section = document.createElement("section"), title = document.createElement("h3");
     title.textContent = `${step.native_function || step.tool}${step.branch_id ? " · Branch " + step.branch_id + " · " + step.operation_id : step.step_id ? " · " + step.step_id : ""}`;
     section.append(title);
@@ -2453,11 +2480,37 @@ function showParameters(editor) {
     if (step.recorded) {
       const details = document.createElement("details"), summary = document.createElement("summary");
       summary.textContent = "Recorded execution details (read only)";
-      details.append(summary, evidenceValueNode(step.recorded)); section.append(details);
+      details.append(summary);
+      details.addEventListener("toggle", () => {
+        if (details.open && details.childElementCount === 1) details.append(evidenceValueNode(step.recorded));
+      });
+      section.append(details);
     }
     return section;
-  }));
-  element("run-parameters").disabled = !editor.rows.length;
+  };
+  const operation = (step) => parameterDetails(
+    `${step.native_function || readableLabel(step.tool)} · ${step.operation_id || step.step_id}`,
+    () => [renderStep(step)]);
+  if (editor.revisionId) {
+    const global = editor.steps.filter((step) => !step.parent_step_id && step.tool !== "annotate_scATAC_cell_types");
+    const groups = global.length ? [parameterDetails(`Analysis and UMAP · ${global.length} steps`, () => global.map(operation))] : [];
+    for (const parent of editor.steps.filter((step) => step.tool === "annotate_scATAC_cell_types" && !step.parent_step_id)) {
+      const children = editor.steps.filter((step) => step.parent_step_id === parent.step_id);
+      groups.push(parameterDetails(`Cell annotation · ${parent.step_id} · ${children.length + 1} steps`, () => {
+        const branches = new Map();
+        for (const step of children) {
+          if (!branches.has(step.branch_id)) branches.set(step.branch_id, []);
+          branches.get(step.branch_id).push(step);
+        }
+        return [operation(parent), ...[...branches].map(([branch, steps]) => parameterDetails(
+          `${branch === "initial" ? "Shared preparation" : "Branch " + branch} · ${steps.length} operations`, () => steps.map(operation)))];
+      }));
+    }
+    element("parameter-steps").replaceChildren(...groups);
+  } else {
+    element("parameter-steps").replaceChildren(...editor.steps.map(renderStep));
+  }
+  element("run-parameters").disabled = !editor.steps.some((step) => step.parameters.some((spec) => spec.editable !== false));
   element("parameter-dialog").showModal();
 }
 

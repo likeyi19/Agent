@@ -533,5 +533,5 @@ def read(sessions, state, run, step, request):
 
 
 def _annotation_source_sha(step):
-    from agent.tools.analysis.sequence_prediction import read
+    from agent.tools.analysis.hierarchical_annotation import read_evidence as read
     return read(step.result['hierarchy_path'], step.result['hierarchy_sha256'])['source']['sha256']

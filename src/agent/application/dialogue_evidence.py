@@ -232,9 +232,10 @@ def _accepted(sessions, state, revision, output):
     if path.resolve(strict=True) != path:
         raise _Unavailable('unsafe_evidence_path')
     evidence_limit = MAX_EVIDENCE_BYTES
-    if step.tool_name == 'annotate_scATAC_cell_types':
+    if any(s.tool_name == 'annotate_scATAC_cell_types' for s in run.steps):
         # Complete native parameter arrays can exceed the generic envelope bound.
-        # This accepted annotation envelope retains its hash and compact fact caps.
+        # The envelope is shared by every step in this accepted run, including
+        # its UMAP. It retains its hash and the selected step's compact fact caps.
         from agent.tools.analysis.hierarchical_annotation import EVIDENCE_MAX_BYTES
         evidence_limit = EVIDENCE_MAX_BYTES
     with path.open('rb') as stream:

@@ -559,7 +559,7 @@ def presentation_data(path, sha, *, level=None):
     sources=[dict(path=str(path),sha256=actual),*pins.values(),
         dict(path=activity['matrix_path'],sha256=activity['matrix_sha256'])]
     branch_views = []
-    for row in hierarchy['branches'][:60]:
+    for row in hierarchy['branches']:
         annotation = row.get('annotation')
         status = annotation['status'] if annotation else ('unassigned' if row.get('cluster') == '-1' else 'insufficient_evidence')
         label = annotation['preferred'][0]['cell_name'] if status == 'assigned' else None
@@ -572,6 +572,9 @@ def presentation_data(path, sha, *, level=None):
         ambiguous_marker_names=ambiguous,
         measurement='Accepted Gene Activity X; accessibility-derived, not measured RNA expression',
         composition=[dict(label=k,n_cells=v) for k,v in counts.items()],
+        palette_labels=sorted({str(value) for column in ['cell_type_final',
+            *['cell_type_level_' + str(i) for i in range(1, reached + 1)]]
+            for value in obs[column] if pd.notna(value)}),
         population_summary=[dict(status=status, cells=status_cells[status], populations=status_populations[status])
             for status in ('assigned','ambiguous','unresolved','insufficient_evidence','unassigned')] if status_cells else [],
         inherited_label_cells=int(sum(pd.notna(label) and status != 'assigned'
@@ -579,5 +582,7 @@ def presentation_data(path, sha, *, level=None):
         source_sha256=hierarchy['source']['sha256'],
         sources=sources,level=level,levels_reached=reached,
         coordinate_source_sha256s=[hierarchy['source']['sha256'],*(r['matrix_sha256'] for r in hierarchy['input_results'][:-1])],
-        branches=branch_views,
+        group_labels={row['branch_id']: row['label'] or row['status'].replace('_', ' ').capitalize()
+                      for row in branch_views if row['branch_id'] in group_order},
+        branches=branch_views[:60],
         branches_omitted=max(0,len(hierarchy['branches'])-60))

@@ -15,7 +15,9 @@ def test_native_transformed_representation_keeps_cell_origin_separate_from_count
     from agent.schemas import StepOutputRef
     original='a'*64
     steps=[];planned=[]
-    methods=['pp.tfidf','tl.lsi','pp.neighbors','tl.umap']
+    from agent.tools.analysis.native_matrix import EPISCANPY
+    methods=['pp.tfidf','pp.lsi','pp.neighbors','tl.umap']
+    assert set(methods) <= EPISCANPY.FUNCTIONS.keys()
     for i,method in enumerate(methods):
         sid='s'+str(i);parent='s'+str(i-1)
         args={'input_path':'/original.h5ad' if i==0 else StepOutputRef(parent,'matrix_path')}
@@ -28,8 +30,13 @@ def test_native_transformed_representation_keeps_cell_origin_separate_from_count
         planned.append(SimpleNamespace(step_id=sid,arguments=args,depends_on=() if i==0 else (parent,)))
     run=SimpleNamespace(steps=steps,plan=SimpleNamespace(steps=planned))
     views=_cell_results(run)
+    assert views['s1']['preserves_cell_identity']
+    assert not views['s1']['preserves_counts']
     assert views['s3']['cell_source_sha256']==original
     assert views['s3']['source_sha256']=='1'*64  # Transformed LSI counts are not original counts.
+    steps[1].result['parameters']['input_orientation']='features_by_cells'
+    assert _cell_results(run)['s3']['cell_source_sha256']=='1'*64
+    del steps[1].result['parameters']['input_orientation']
     steps[1].result['source_identity']['sha256']='f'*64
     import pytest
     with pytest.raises(ValueError,match='source digest changed'):
@@ -75,7 +82,7 @@ def test_marker_projection_uses_exact_unique_columns_on_nonunique_native_axis(tm
         var=pd.DataFrame(index=['repeat', 'unique', 'repeat']))
     activity_path = tmp_path/'activity.h5ad'; activity.write_h5ad(activity_path)
     annotated = ad.AnnData(sparse.csr_matrix((2, 1)), obs=pd.DataFrame(
-        dict(cell_type_final=['A', 'A'], annotation_branch_id=['branch', 'branch']),
+        dict(cell_type_final=['A', 'A'], cell_type_level_1=['A', 'A'], annotation_branch_id=['branch', 'branch']),
         index=['one', 'two']))
     dataset = tmp_path/'annotated.h5ad'; annotated.write_h5ad(dataset)
     pin = lambda p: dict(path=str(p), sha256=hashlib.sha256(p.read_bytes()).hexdigest())
@@ -139,3 +146,36 @@ def test_composition_separates_final_labels_and_current_evidence():
     assert 'Current-round evidence' == figure.axes[1].get_title()
     assert [p.get_width() for p in figure.axes[1].patches] == [2,1]
     assert '1 cells inherit ancestor labels' in figure.texts[0].get_text()
+
+
+def test_marker_axes_show_current_evidence_with_short_branch_trace():
+    from matplotlib.figure import Figure
+    value = dict(genes=['GENE'], group_order=['branch-1234567890', 'branch-abcdefghij'],
+        group_labels={'branch-1234567890': 'CD14+ monocyte', 'branch-abcdefghij': 'Ambiguous'},
+        mean_activity=[[2.], [1.]], fraction_positive=[[1.], [.5]], groups_omitted=0)
+    for kind in ('marker_activity_dot', 'marker_activity_heatmap'):
+        figure = Figure(figsize=(12, 8))
+        owner.render(figure, SimpleNamespace(kind=kind, value=value))
+        assert [t.get_text() for t in figure.axes[0].get_yticklabels()] == [
+            'CD14+ monocyte\n12345678', 'Ambiguous\nabcdefgh']
+        assert figure.axes[0].get_ylabel() == 'Current-round label / evidence'
+
+
+def test_annotation_levels_keep_shared_label_colors_and_relevant_legends():
+    from matplotlib.figure import Figure
+    colors=[]
+    for labels in (['A', 'C'], ['B', 'C']):
+        figure=Figure(figsize=(10, 6))
+        owner.render(figure, SimpleNamespace(kind='annotation_umap', value=dict(
+            coordinates=[[0., 0.], [1., 1.]], labels=labels, palette_labels=['A', 'B', 'C'])))
+        colors.append(figure.axes[0].collections[0].get_facecolors()[1])
+        assert {t.get_text() for t in figure.legends[0].get_texts()} == set(labels)
+    np.testing.assert_array_equal(*colors)
+
+
+def test_missing_annotation_legend_requires_actual_missing_cells():
+    from matplotlib.figure import Figure
+    figure = Figure(figsize=(10, 6))
+    owner.render(figure, SimpleNamespace(kind='annotation_umap', value=dict(
+        coordinates=[[0., 0.], [1., 1.]], labels=['A', None], palette_labels=['A', 'B'])))
+    assert {t.get_text() for t in figure.legends[0].get_texts()} == {'A', 'Missing / unassigned'}

@@ -8,7 +8,7 @@ METHOD_FIELDS = ('native_methods', 'native_methods_omitted', 'interpretation_par
 
 def method_facts(result):
     """Read the accepted hierarchy's actual methods; never reconstruct science."""
-    from agent.tools.analysis.sequence_prediction import read
+    from agent.tools.analysis.hierarchical_annotation import read_evidence as read
     h = read(result['hierarchy_path'], result['hierarchy_sha256'])
     methods = []
     for op in h['operations'][:100]:

@@ -23,12 +23,15 @@ def sha(path):
 
 
 @pytest.mark.parametrize('package,methods',[('snapatac2',['pp.select_features','tl.spectral','tl.umap']),
-                                          ('episcanpy',['pp.tfidf','tl.lsi','pp.neighbors','tl.umap'])])
+                                          ('episcanpy',['pp.tfidf','pp.lsi','pp.neighbors','tl.umap'])])
 def test_coordinate_cell_source_crosses_representation_without_count_claim(monkeypatch,package,methods):
     from types import SimpleNamespace as N
     from agent.application import result_reading as reading
     from agent.schemas import StepOutputRef
     from agent.tools import _native_process
+    from agent.tools.analysis.native_matrix import EPISCANPY
+    if package == 'episcanpy':
+        assert set(methods) <= EPISCANPY.FUNCTIONS.keys()
     monkeypatch.setattr(_native_process,'call',lambda *a,**k:pytest.fail('Accepted metadata reads must not execute native science'))
     rows={'inspect':(N(step_id='inspect',tool_name='inspect_scATAC',result={'input_path':'/original.h5ad'}),N(arguments={}))}
     state=N(lifecycle_status=N(value='SUCCEEDED'))

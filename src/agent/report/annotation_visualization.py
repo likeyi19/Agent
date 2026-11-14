@@ -101,17 +101,20 @@ def projections(snapshot, *, marker_activity=True):
         data_source_path=next(p['path'] for p in data['sources'] if Path(p['path']).name=='annotated.h5ad')
         sources=[source]+[dict(producing_step_id=sid,tool_name=tool,artifact_kind='native_annotation_sidecar',
             artifact_path=p['path'],integrity=dict(sha256=p['sha256'])) for p in data.pop('sources') if p['path']!=str(path)]
-        counts=dict(groups=data['group_order'],counts=data['group_counts'],composition=data['composition'],
+        palette_labels=data.get('palette_labels', [r['label'] for r in data['composition']])
+        counts=dict(groups=data['group_order'],counts=data['group_counts'],composition=data['composition'],palette_labels=palette_labels,
             population_summary=data.get('population_summary', []), inherited_label_cells=data.get('inherited_label_cells', 0))
         result.append(_projection(sid,'annotation_composition',sources,counts,
             dict(n_cells=len(data['cells']),groups_omitted=data['groups_omitted']),width=13,height=max(7,min(12,.26*len(counts['composition'])+5))))
         if data['genes']:
             dot={k:data[k] for k in ('genes','group_order','mean_activity','fraction_positive','groups_omitted')}
+            dot['group_labels'] = data['group_labels']
             result.append(_projection(sid,'marker_activity_dot',sources,dot,
                 dict(marker_selection=data['marker_selection'],selected_marker_sources=data['selected_marker_sources'],groups_omitted=data['groups_omitted'],measurement=data['measurement'],dependent_evidence=True,ambiguous_marker_names=data.get('ambiguous_marker_names', [])),
-                height=max(6,min(14,.27*len(data['group_order'])+2))))
+                height=max(6,min(14,.4*len(data['group_order'])+2))))
             result.append(_projection(sid,'marker_activity_heatmap',sources,dot,
-                dict(marker_selection=data['marker_selection'],groups_omitted=data['groups_omitted'],measurement=data['measurement'],ambiguous_marker_names=data.get('ambiguous_marker_names', [])),width=12,height=8))
+                dict(marker_selection=data['marker_selection'],groups_omitted=data['groups_omitted'],measurement=data['measurement'],ambiguous_marker_names=data.get('ambiguous_marker_names', [])),width=12,
+                height=max(8,min(14,.4*len(data['group_order'])+2))))
         result.append(_projection(sid,'annotation_hierarchy',sources,
             dict(branches=data['branches'],branches_omitted=data['branches_omitted']),
             dict(branches_omitted=data['branches_omitted']),width=11,
@@ -151,7 +154,7 @@ def projections(snapshot, *, marker_activity=True):
                     obs=read_elem(handle['obs'])
                 field='cell_type_final' if level is None else 'cell_type_level_'+str(level)
                 labels=[None if pd.isna(x) else str(x) for x in obs[field]]
-                value=dict(cell_ids=list(ids),coordinates=xy.tolist(),labels=labels)
+                value=dict(cell_ids=list(ids),coordinates=xy.tolist(),labels=labels,palette_labels=palette_labels)
                 suffix=coordinate['producing_step_id']+'-'+('final' if level is None else 'level-'+str(level))
                 from dataclasses import replace
                 projection=_projection(sid,'annotation_umap',sources+[coordinate],value,
@@ -221,12 +224,17 @@ def _hierarchy_positions(rows):
     return positions
 
 
+def _marker_group_labels(value):
+    return [fill(value['group_labels'][group], 24) + '\n' + group.removeprefix('branch-')[:8]
+            for group in value['group_order']]
+
+
 def render(figure,data):
     kind,value=data.kind,data.value
     if kind=='annotation_composition':
         grid=figure.add_gridspec(2,2,height_ratios=[3.5,1],left=.22,right=.96,bottom=.17,top=.88,wspace=.8,hspace=.65)
         axes=[figure.add_subplot(grid[0,0]),figure.add_subplot(grid[0,1]),figure.add_subplot(grid[1,:])]
-        palette=_palette([r['label'] for r in value['composition']])
+        palette=_palette(value.get('palette_labels', [r['label'] for r in value['composition']]))
         _bars(axes[0],[fill(r['label'],26) if r['label'] is not None else 'Unassigned (missing)' for r in value['composition']],
             [r['n_cells'] for r in value['composition']],'Final labels (may be inherited)',[palette[r['label']] for r in value['composition']])
         statuses=value.get('population_summary', [])
@@ -245,21 +253,22 @@ def render(figure,data):
             ax.tick_params(length=0,pad=6)
         figure.text(.5,.035,f"{value.get('inherited_label_cells', 0)} cells inherit ancestor labels; current-round ambiguous or unresolved evidence remains unchanged.",ha='center',fontsize=9)
     elif kind=='marker_activity_dot':
-        ax=figure.add_axes((.20,.24,.53,.65)); means=np.asarray(value['mean_activity']);fraction=np.asarray(value['fraction_positive'])
+        ax=figure.add_axes((.24,.24,.49,.65)); means=np.asarray(value['mean_activity']);fraction=np.asarray(value['fraction_positive'])
         x,y=np.meshgrid(np.arange(len(value['genes'])),np.arange(len(value['group_order'])))
         dots=ax.scatter(x.ravel(),y.ravel(),s=200*fraction.ravel(),c=np.log1p(means).ravel(),cmap='viridis',vmin=0)
         ax.set_xticks(range(len(value['genes'])),value['genes'],rotation=50,ha='right',fontsize=8)
-        ax.set_yticks(range(len(value['group_order'])),[g[:16] for g in value['group_order']],fontsize=7);ax.invert_yaxis();ax.set_ylabel('Branch ID prefix')
+        ax.set_yticks(range(len(value['group_order'])),_marker_group_labels(value),fontsize=7);ax.invert_yaxis();ax.set_ylabel('Current-round label / evidence')
         ax.set_title('Native markers: accessibility-derived Gene Activity' + (f" (showing {len(value['group_order'])}/{len(value['group_order'])+value['groups_omitted']} groups)" if value['groups_omitted'] else ''))
         figure.colorbar(dots,ax=ax,label='log1p(mean Gene Activity)',fraction=.04)
         handles=[ax.scatter([],[],s=200*f,color='#555555',label=f'{f:.0%}') for f in (.1,.5,1)]
         ax.legend(handles=handles,title='Fraction activity > 0',loc='upper left',bbox_to_anchor=(1.30,1),fontsize=6,title_fontsize=6)
     elif kind=='marker_activity_heatmap':
-        ax=figure.add_axes((.2,.25,.65,.65))
+        ax=figure.add_axes((.24,.25,.61,.65))
         values=np.log1p(np.asarray(value['mean_activity']))
         mesh=ax.imshow(values,aspect='auto',cmap='viridis',vmin=0)
         ax.set_xticks(range(len(value['genes'])),value['genes'],rotation=50,ha='right',fontsize=8)
-        ax.set_yticks(range(len(value['group_order'])),[g[:16] for g in value['group_order']],fontsize=7)
+        ax.set_yticks(range(len(value['group_order'])),_marker_group_labels(value),fontsize=7)
+        ax.set_ylabel('Current-round label / evidence')
         ax.set_title('Representative marker Gene Activity')
         figure.colorbar(mesh,ax=ax,label='log1p(mean Gene Activity X)')
     elif kind=='annotation_hierarchy':
@@ -295,11 +304,13 @@ def render(figure,data):
             ax.set(title=value['genes'][j],xlabel='UMAP 1',ylabel='UMAP 2',xticks=[],yticks=[])
             figure.colorbar(dots,ax=ax,label='log1p(Gene Activity)',fraction=.05,pad=.03)
     elif kind=='annotation_umap':
-        xy=np.asarray(value['coordinates']);palette=_palette(value['labels'])
+        xy=np.asarray(value['coordinates']);palette=_palette(value.get('palette_labels', value['labels']))
         ax=figure.add_axes((.08,.12,.6,.78));_scatter(ax,xy,value['labels'],palette,'Hierarchical cell types')
-        legend=list(palette.items());shown=legend[:30]+([(None,palette[None])] if len(legend)>30 else [])
+        present=set(value['labels'])
+        legend=[(label,color) for label,color in palette.items() if label in present]
+        shown=legend[:30]
         handles=[Line2D([],[],marker='o',linestyle='',color=c,label=l if l is not None else 'Missing / unassigned') for l,c in shown]
         if len(legend)>30:
-            figure.text(.04,.96,f'Legend shows 30/{len(legend)-1} labels plus missing coverage; all labels remain in downloads.',fontsize=8)
+            figure.text(.04,.96,f'Legend shows 30/{len(legend)} present categories; all labels remain in downloads.',fontsize=8)
         figure.legend(handles=handles,loc='center left',bbox_to_anchor=(.7,.5),fontsize=7,frameon=False)
     else:raise ValueError('Unknown annotation figure kind')

@@ -18,6 +18,13 @@
         <div class="model-controls">
           <label for="recent-sessions">Recent conversations · this browser</label>
           <select id="recent-sessions"><option value="">Open a conversation…</option></select>
+
+        </div>
+        <div class="model-controls">
+          <label for="model-choice">Conversation model</label>
+          <select id="model-choice" disabled><option value="">Loading model choices…</option></select>
+        </div>
+        <button id="new-session" type="button" class="secondary">New conversation</button>
           <details class="conversation-navigation"><summary>Open by ID</summary>        <form id="reopen-form" class="reopen-form">
           <label for="session-input">Reopen session ID</label>
           <div class="inline-fields">
@@ -26,12 +33,6 @@
           </div>
         </form>
 </details>
-        </div>
-        <div class="model-controls">
-          <label for="model-choice">Conversation model</label>
-          <select id="model-choice" disabled><option value="">Loading model choices…</option></select>
-        </div>
-        <button id="new-session" type="button" class="secondary">New conversation</button>
       </div>
     </header>
 
@@ -90,6 +91,7 @@
         <div id="artifact-viewer" hidden>
           <h3 id="artifact-title"></h3>
           <p id="figure-description" class="muted small" hidden></p>
+          <p><a id="figure-full-size" target="_blank" rel="noopener" hidden>Open full-size PNG</a></p>
           <img id="figure-content" class="analysis-figure" alt="Accepted analysis figure" hidden>
           <p id="artifact-view-error" class="turn-error" role="alert" hidden></p>
         </div>

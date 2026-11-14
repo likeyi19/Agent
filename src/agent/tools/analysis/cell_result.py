@@ -57,7 +57,7 @@ def describe(tool, result):
         grouping=grouping if inplace and grouping and 'obs.' + grouping in slots else None,
         preserves_counts=function in _PRESERVE and parameters.get('count_slot', 'X') == 'X',
         preserves_cell_identity=(function in _PRESERVE or
-            package=='episcanpy' and function in ('pp.tfidf','tl.lsi'))
+            package=='episcanpy' and function in ('pp.tfidf','pp.lsi'))
             and parameters.get('input_orientation')!='features_by_cells',
         input_argument='input_path')
 

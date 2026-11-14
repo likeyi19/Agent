@@ -2211,6 +2211,9 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
             purposes.extend('visualization_' + role for role in ('coordinates', 'labels') if drawing.get(role) == 'new')
         if comparison is not None and 'new' in (comparison['left'], comparison['right']):
             purposes.append('comparison_result')
+        annotation_umap = (admitted.get('annotation') or {}).get('generate_umap') is True
+        if annotation_umap:
+            purposes.extend(p for p in ('visualization_coordinates', 'visualization_labels') if p not in purposes)
         if purposes:
             item = schema['properties']['outputs']['items']
             item['properties']['use'] = {'type':'array', 'maxItems':len(purposes),
@@ -2230,11 +2233,13 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                 schema = _object(dict(**schema['properties'], retain={'type':'array','maxItems':32,
                     'items':{'type':'string','enum':list(retention)}}))
         selection_prompt = dict(output_selection_schema_version=2 if retained_offer else 1,
-            question=intent, current_utterance=interaction.utterance, steps=offered,
+            question=intent, current_utterance=('' if (interaction.submission or {}).get('clarification_choice')
+                                               else interaction.utterance), steps=offered,
             instructions=(
                 'Select a relevant subset of 1 to 32 outputs of this actual plan to retain in the new revision. '
                 'Choose results that satisfy the user request; do not automatically enumerate every field from every step. '
                 'The current_utterance may add output-retention preferences while answering an earlier input prerequisite. Honor those preferences among the actual offered outputs; it never authorizes additional scientific steps. '
+                'A deterministic clarification-button label is not a new output-retention request and is omitted from current_utterance; preserve the original question and its requested scientific products. '
                 'Preserve multiple legitimate outputs when the user explicitly requests them. '
                 'The scientific_outputs metadata names reusable artifacts produced by this exact plan. Prefer retaining the relevant scientific artifact member (path or manifest) to scalar summaries alone; summaries remain readable through that artifact. Retain distinct requested artifacts separately, including DNA sequences when the requested result includes them. '
                 'For each selection, copy step_id exactly from an offered step and output_key exactly from that same step\'s outputs. '
@@ -2254,6 +2259,12 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                 'the explicitly requested new side of the comparison. Other outputs use=[]. '
                 'These are result selections, never new scientific steps or inferred workflow completion. '
                 'Never select by last-step or alias order.')
+            if annotation_umap:
+                selection_prompt['instructions'] += (
+                    ' Generate UMAP is additive to the annotation objective. Retain both the annotated original '
+                    'H5AD as visualization_labels and the native UMAP H5AD as visualization_coordinates, '
+                    'so each accepted scientific result remains available for exact continuation and parameter edits. '
+                    'Do not substitute scalar summaries for these two scientific artifacts.')
         if retained_offer:
             selection_prompt['retained_outputs'] = retained_offer
             selection_prompt['instructions'] += (
@@ -2281,6 +2292,13 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
             from agent.tools.analysis.cell_result import planned_coordinates
             if any('visualization_coordinates' in selection_uses(s)
                     and not any(p.step_id == s.step_id and planned_coordinates(p.tool_name, p.arguments) for p in plan.steps)
+                    for s in selections):
+                raise IntentError('planning_failed')
+            if annotation_umap and any(
+                    ('visualization_coordinates' in selection_uses(s) and s.output_key != 'matrix_path')
+                    or ('visualization_labels' in selection_uses(s) and
+                        (s.output_key != 'annotated_h5ad_path' or not any(
+                            p.step_id == s.step_id and p.tool_name == 'annotate_scATAC_cell_types' for p in plan.steps)))
                     for s in selections):
                 raise IntentError('planning_failed')
             retained = ()

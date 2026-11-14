@@ -156,9 +156,12 @@ class AnnotationDeclaration:
     resource: str | None = None
     groups_result: str | None = None
     grouping_strategy: str | None = None
+    generate_umap: bool | None = None
 
     def __post_init__(self):
         from agent.tools._file_identity import identifier
+        if self.generate_umap is not None and type(self.generate_umap) is not bool:
+            raise ValueError('UMAP visualization choice must be boolean.')
         if self.grouping_strategy not in (None, 'reuse_only', 'compute_if_needed'):
             raise ValueError('Invalid grouping strategy.')
         for name in ('source', 'groups_source'):
@@ -234,7 +237,7 @@ def declaration(value, field='fastq'):
             raise ValueError('Invalid EpiZoo declaration shape.')
         return EpiZooDeclaration(**value)
     if field == 'annotation':
-        if type(value) is not dict or set(value) - {'groups_result', 'grouping_strategy'} != set(AnnotationDeclaration.__dataclass_fields__) - {'groups_result', 'grouping_strategy'}:
+        if type(value) is not dict or set(value) - {'groups_result', 'grouping_strategy', 'generate_umap'} != set(AnnotationDeclaration.__dataclass_fields__) - {'groups_result', 'grouping_strategy', 'generate_umap'}:
             raise ValueError('Invalid annotation declaration shape.')
         value = dict(value)
         return AnnotationDeclaration(**value)
@@ -256,7 +259,7 @@ def scientific_metadata_fields(declared):
     if type(declared) not in (FastqDeclaration, BamDeclaration, FragmentsDeclaration,
                              AnnotationDeclaration, EpiZooDeclaration):
         raise ValueError('A typed scientific declaration is required.')
-    fixed = {'source', 'members', 'namespace', 'operation', 'resource',
+    fixed = {'source', 'members', 'namespace', 'operation', 'resource', 'generate_umap',
              'genome_resource', 'resource_preference', 'uploaded', 'groups_result'}
     return tuple(name for name in declared.__dataclass_fields__
                  if name not in fixed and not name.endswith('_source'))
@@ -325,6 +328,8 @@ def declaration_dict(value):
         result.pop('groups_result')
     if isinstance(value, AnnotationDeclaration) and value.grouping_strategy is None:
         result.pop('grouping_strategy')
+    if isinstance(value, AnnotationDeclaration) and value.generate_umap is None:
+        result.pop('generate_umap')
     return result
 
 
@@ -342,7 +347,9 @@ def schema(field='fastq'):
     identity = {'anyOf': [{'type': 'string', 'minLength': 1, 'maxLength': 256}, {'type': 'null'}]}
     if field == 'annotation':
         text = {'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]}
-        return _object(dict(source=identity, groups_source=identity, groups_result=identity,
+        grouping_file = dict(identity, description='A distinct uploaded cell_id/group TSV attachment only. '
+            'Use null for a grouping column inside the original H5AD; bind that column through group_column instead.')
+        return _object(dict(source=identity, groups_source=grouping_file, groups_result=identity,
             **{k:text for k in ('species','assembly','context','measurement','grouping_provenance')},
             grouping_strategy=optional(('reuse_only','compute_if_needed')), resource=identity))
     if field == 'fragments':
@@ -931,10 +938,12 @@ def _validate_fragments_completion(interaction, admitted, candidates, declared, 
 def public(interaction, preceding):
     field = _field(interaction)
     origin, source = _captured(interaction, preceding)
+    question = next((i for i in preceding if i.turn_id ==
+        (interaction.snapshot.get('prerequisite') or {}).get('binding_turn_id')), source)
     return dict(handle='@roles', field=field, tool=source.admitted['tool'],
         objective=origin.utterance, declarations=_serialize(source.admitted[field]),
-        missing=list(source.admitted['choices']),
-        resource_options=_serialize(source.admitted.get('resource_options', ())))
+        missing=list(source.admitted.get('choices', question.admitted.get('choices', ()))),
+        resource_options=_serialize(source.admitted.get('resource_options', question.admitted.get('resource_options', ()))))
 
 
 def validate(interaction, preceding):

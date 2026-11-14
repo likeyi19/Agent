@@ -64,7 +64,6 @@ def controlled(tmp_path,monkeypatch):
     monkeypatch.setattr(c,'groups',groups)
     monkeypatch.setattr(c,'accepted_authorities',lambda *a: nullcontext(None))
     monkeypatch.setattr(c,'corresponding_positions',lambda *a:list(range(9)))
-    monkeypatch.setattr(c,'_peak_source',lambda *a:True)
     monkeypatch.setattr(c,'library',lambda:None)
     monkeypatch.setattr(c,'CellMarkerEvidence',lambda *a:SimpleNamespace(identity={},entry={'files':[]},_check=lambda:None))
     def annotate(b,**kw):
@@ -72,7 +71,7 @@ def controlled(tmp_path,monkeypatch):
         return {'clusters':[annotation(g,'assigned' if g=='A' else 'ambiguous' if g=='1' else 'unresolved')
                             for g in dict.fromkeys(v['labels']) if g!='-1']}
     monkeypatch.setattr(c,'annotate_markers',annotate)
-    monkeypatch.setattr(c,'differential_kwargs',lambda *a,**k:{})
+    monkeypatch.setattr(c,'differential_preparer',lambda binding,**kw:lambda child,kwargs:(kwargs,None))
     def assess(parent,local,diffs,**kw):
         old,new=values[parent],values[local[-1]]
         source_positions=[old['positions'].index(i) for i in new['positions']]
@@ -130,14 +129,6 @@ def test_controller_enforces_actual_depth_budget(controlled,maximum):
     assert all(r['level']<=maximum for r in h['branches'])
     assert any(r['stopping_reason']=='maximum_levels' for r in h['branches'])
     p.observation_columns(f.obs,h)
-
-
-def test_gene_activity_only_retains_current_annotation(controlled,monkeypatch):
-    monkeypatch.setattr(c,'_peak_source',lambda *a:None)
-    h=c.coordinate(controlled.args,'execution')
-    assert [x['operation_id'] for x in controlled.calls]==['markers']
-    assert h['branches'][0]['stopping_reason']=='missing_required_peak_space'
-    assert p.observation_columns(controlled.obs,h).cell_type_final.iloc[0]=='broad'
 
 
 def test_native_failure_never_publishes_biological_stop(controlled):
@@ -272,3 +263,125 @@ def test_progress_records_actual_branches_and_stopping_outcomes(controlled):
     assert {b['stopping_reason'] for b in h['branches']}<=stops
     assert any(r.get('function_name')=='snapatac2.tl.leiden' for r in rows)
     assert all('total_steps' not in r for r in rows)
+
+
+def test_hierarchical_evidence_exceeds_generic_metadata_bound_without_losing_checks(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    from agent.tools.analysis import hierarchical_annotation as owner
+    from agent.tools.analysis.sequence_prediction import read as generic_read
+    path=tmp_path/'annotations.json'
+    # This is the demonstrated production boundary, not native scientific work.
+    path.write_bytes(b'{"records":"'+b'x'*(64*1024**2)+b'"}')
+    sha=hashlib.sha256(path.read_bytes()).hexdigest()
+    with pytest.raises(ValueError,match='declared bound'): generic_read(path,sha)
+    result=owner.read_evidence(path,sha)
+    assert len(result['records'])==64*1024**2
+    with pytest.raises(ValueError,match='identity mismatch'): owner.read_evidence(path,'0'*64)
+    monkeypatch.setattr(owner,'EVIDENCE_MAX_BYTES',128)
+    with pytest.raises(ValueError,match='declared bound'): owner.read_evidence(path,sha)
+    for raw in [b'{"repeated":1,"repeated":2}',b'{"invalid":NaN}']:
+        path.write_bytes(raw)
+        with pytest.raises(ValueError):owner.read_evidence(path,hashlib.sha256(raw).hexdigest())
+    other=tmp_path/'unrelated.json';other.write_text('{}')
+    with pytest.raises(ValueError,match='evidence sidecar'):owner.read_evidence(other,hashlib.sha256(other.read_bytes()).hexdigest())
+
+
+def test_marker_column_tables_keep_every_value_and_reject_corrupt_rows(tmp_path):
+    from copy import deepcopy
+    from agent.tools.analysis.sequence_prediction import write
+    markers = [dict(feature='repeat', identity='repeat', exclusion_reason=None,
+        score=1.125, pvalue=1e-20, pvalue_adj=2e-20, positive=True,
+        detection_fractions=dict(pts=[.1,.9],pts_rest=[.2,.4])),
+        dict(feature='repeat',identity='repeat',exclusion_reason=None,
+        score=-1.125,pvalue=.95,pvalue_adj=1.,positive=False,detection_fractions={})]
+    original = {'initial': dict(schema='marker-candidates.v1',provenance={'source_sha256':'a'*64},
+        reference={'resource':{'id':'exact'}}, candidates=[{'genes':['repeat']}],
+        clusters=[dict(cluster='g',status='assigned',tests=[{'pvalue':1e-9}],markers=markers)])}
+    before = deepcopy(original)
+    table = p.annotation_tables(original)
+    assert original == before
+    assert table['rounds']['initial']['schema'] == 'marker-candidates.v2'
+    assert table['rounds']['initial']['clusters'][0]['markers']['columns'] == list(p.MARKER_COLUMNS)
+    target = tmp_path/'annotations.json'; sha = write(target, table)
+    assert p.read_evidence(target, sha) == before
+    assert p.annotation_records(before) == before  # Accepted historical bytes.
+    for corrupt in ('columns', 'length', 'extra'):
+        broken = deepcopy(table); value = broken['rounds']['initial']['clusters'][0]['markers']
+        if corrupt == 'columns': value['columns'][0] = 'wrong'
+        elif corrupt == 'length': value['rows'][0].pop()
+        else: value['unowned'] = True
+        with pytest.raises(AuthorityError,match='statistical table'): p.annotation_records(broken)
+    original['initial']['clusters'][0]['markers'][0]['new_field'] = 1
+    with pytest.raises(AuthorityError,match='statistical table fields'): p.annotation_tables(original)
+
+
+def test_owner_publication_keeps_original_counts_and_absent_marker_rounds(tmp_path):
+    import json
+    from agent.tools.analysis.iterative_annotation import branch_id
+    from agent.tools._file_identity import file_closure
+    original=tmp_path/'original.h5ad'
+    obs=pd.DataFrame({'groups':pd.Categorical(['A','A'])},index=['one','two'])
+    ad.AnnData(np.array([[1.,2.],[0.,3.]]),obs=obs).write_h5ad(original)
+    source=file_closure([original])[0]
+    branch=dict(branch_id=branch_id(None,'A'),parent=None,cluster='A',level=1,
+        positions=[0,1],n_cells=2,residual_positions=[0,1],annotation=None,
+        annotation_round='initial',grouping_binding=None,stopping_reason='maximum_levels')
+    hierarchy=dict(completion='complete',source=source,grouping=dict(origin='user_supplied',source=source,groupby='groups'),
+        maximum_levels=1,branches=[branch],input_results=[],operations=[],cellmarker={},limitations='controlled fixture')
+    result=p.publish(dict(input_path=str(original),group_column='groups',output_dir=str(tmp_path/'published')),
+        'test-publication-only',hierarchy,{}, {},resource_files=[])
+    assert p.read_evidence(result['annotations_path'],result['annotations_sha256'])=={}
+    assert json.loads((tmp_path/'published/hierarchy.json').read_bytes())==hierarchy
+    p.verify_h5ad(result['annotated_h5ad_path'],hierarchy)
+
+
+def test_backgrounds_are_self_contained_exact_and_restore_independent_rounds():
+    original={'one':dict(schema='marker-candidates.v1',universe=['A'],tested_features=[dict(feature='A',identity='A')],
+        reference={'resource':{'id':'pinned'}},candidates=[dict(genes=['A'])],clusters=[])}
+    original['two']=deepcopy(original['one'])
+    packed=p.annotation_tables(original)
+    assert len(packed['shared_backgrounds'])==1
+    assert packed['rounds']['one']['background']==packed['rounds']['two']['background']==0
+    restored=p.annotation_records(packed)
+    assert restored==original
+    restored['one']['candidates'][0]['genes'].clear()
+    assert restored['two']['candidates'][0]['genes']==['A']
+    original['two']['universe']=['Different']
+    assert len(p.annotation_tables(original)['shared_backgrounds'])==2
+    packed['rounds']['one']['background']=True
+    with pytest.raises(AuthorityError,match='background index'):p.annotation_records(packed)
+
+
+def test_native_parameter_arrays_and_differential_tables_keep_all_values():
+    native=dict(parameters=dict(kwargs={'features':[0,2], 'cell_group1':[0]},
+        effective_native_parameters={'features':[0,2],'cell_group1':[0],'min_pct':.05}))
+    rows=[{'feature name':'peak','log2(fold_change)':1.25,'p-value':1e-15,'adjusted p-value':None,'native extra':2}]
+    decision=dict(parent={'native_result':native},local_steps=[{'native_result':native}],
+        children=[dict(differential=dict(native_result=native,rows=rows))])
+    original={'branch':decision};packed=p.scientific_evidence(original,'subdivisions.json',encode=True)
+    effective=packed['branch']['children'][0]['differential']['native_result']['parameters']['effective_native_parameters']
+    assert effective['from_kwargs']==['features','cell_group1']
+    assert 'native extra' in packed['branch']['children'][0]['differential']['rows']['columns']
+    restored=p.scientific_evidence(packed,'subdivisions.json')
+    assert restored==original
+    params=restored['branch']['parent']['native_result']['parameters']
+    params['kwargs']['features'].append(1)
+    assert params['effective_native_parameters']['features']==[0,2]
+    native['parameters']['effective_native_parameters']['features']=[0.,2.]
+    typed=p._native_parameters(native,encode=True)
+    assert 'features' not in typed['parameters']['effective_native_parameters']['from_kwargs']
+    assert p._native_parameters(typed,encode=False)['parameters']['effective_native_parameters']['features']==[0.,2.]
+
+
+def test_compact_evidence_preserves_path_key_privacy_as_well_as_scientific_values():
+    import json
+    from agent.application.sequence_delivery import metadata_bytes
+    native=dict(parameters=dict(kwargs={'features':[0,2], 'reference_path':['private.h5ad']},
+        effective_native_parameters={'features':[0,2],'reference_path':['private.h5ad']}))
+    row={'feature name':'peak','log2(fold_change)':1.,'p-value':.001,'adjusted p-value':.01,'source_path':'relative-private.tsv'}
+    original={'branch':dict(parent={'native_result':native},local_steps=[],children=[dict(differential=dict(native_result=native,rows=[row]))])}
+    packed=p.scientific_evidence(original,'subdivisions.json',encode=True)
+    delivered=json.loads(metadata_bytes(packed));expected=json.loads(metadata_bytes(original))
+    assert p.scientific_evidence(delivered,'subdivisions.json')==expected
+    assert 'private.h5ad' not in json.dumps(delivered) and 'relative-private.tsv' not in json.dumps(delivered)

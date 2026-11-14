@@ -1429,7 +1429,9 @@ def render_annotation_facts(facts, *, technical=False):
     facts = _serialize(facts)
     lines = ['### Hierarchical cell-type annotation', '',
         'Current-round labels use native Gene Activity markers and CellMarker ORA evidence. '
-        'Fine-grained assignments and inherited broad labels remain distinct; unresolved populations retain their status.', '']
+        '`cell_type_final` may be inherited from an ancestor; `annotation_status` records current-round evidence. '
+        'Inherited labels are not independent confident subtype assignments. Branch and cluster IDs identify '
+        'computational populations, not biological truth.', '']
     lines += _annotation_table(['Population', 'Count'], [
         ('Analyzed cells', facts.get('n_cells')), ('Levels reached', facts.get('levels_reached')),
         ('Branches', facts.get('n_branches')), ('Terminal populations', facts.get('terminal_populations'))])
@@ -1465,6 +1467,10 @@ def render_annotation_facts(facts, *, technical=False):
         if operation.get('privacy_omitted_parameter_fields'):
             lines.append('  Private source/provenance fields omitted: '
                 + _inline_code(operation['privacy_omitted_parameter_fields']))
+        if operation.get('report_omitted_parameter_fields'):
+            lines.append('  Large parameter fields omitted from this report only '
+                '(exact hashes and complete sidecar locations): '
+                + _inline_code(operation['report_omitted_parameter_fields']))
     lines += ['', str(facts.get('native_methods_omitted', 0)) + ' additional native method records omitted here; full evidence is in hierarchy.json.']
     return '\n'.join(lines)
 

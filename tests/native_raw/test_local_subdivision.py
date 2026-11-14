@@ -187,13 +187,6 @@ def test_genuine_annotation_handoff_is_independent(accepted):
     assert annotated['outcome']==plain['outcome']
     assert [(c['retained'],c['qualifying_peak_count']) for c in annotated['children']]==[(c['retained'],c['qualifying_peak_count']) for c in plain['children']]
     assert all(c['annotation_cluster'] is not None for c in annotated['children'])
-    # A gene-only accepted clustering is not evidence of original peak space.
-    app,run=execute(app,'gene-only-parent',[('parent',dict(input_path=PriorOutputRef(activity,'matrix_path'),
-        function_name='tl.leiden',kwargs=dict(resolution=.1)),())])
-    assert run.lifecycle_status.value=='SUCCEEDED', run.errors
-    gene_parent=bind_output(app.run_store,app.registry,run.run_id,'parent','dataset')
-    missing=assess_subdivision(gene_parent,store=app.run_store,registry=app.registry)
-    assert missing['outcome']=='missing_input' and 'peak-accessibility' in missing['reason']
     (f['root']/'annotated-decision.json').write_text(json.dumps(annotated,indent=2,allow_nan=False))
 
 
@@ -220,33 +213,3 @@ def test_native_small_feature_returns_and_failed_local_attempt(accepted):
         failed_local=dict(run_id=run.run_id,step_id='features'))
     assert decision['outcome']=='native_execution_failure' and decision['parent_membership'] is None
     (f['root']/'failed-local-decision.json').write_text(json.dumps(decision,indent=2))
-
-
-@pytest.mark.parametrize('measurement', ['peak_counts','binary_accessibility','fragment_counts'])
-def test_declared_peak_source_keeps_native_measurement(tmp_path,measurement):
-    """Genuine publication of an explicit peak declaration, without new science policy."""
-    if os.environ.get('RUN_RAW_NATIVE_QUALIFICATION') != '1':
-        pytest.skip('Explicit installed native runtime qualification')
-    from agent.tools.analysis.local_subdivision import _peak_source
-    from agent.orchestration.prior_outputs import validate_binding
-    x=np.ones((8,6),dtype=np.uint32)
-    if measurement=='fragment_counts': x[:4,:3]=3
-    data=ad.AnnData(sparse.csr_matrix(x),obs=pd.DataFrame(index=[f'c{i}' for i in range(8)]),
-        var=pd.DataFrame(index=[f'chr1:{i*100}-{i*100+50}' for i in range(6)]))
-    data.uns['matrix_semantics']=measurement
-    data.obsp['distances']=sparse.csr_matrix(np.ones((8,8))-np.eye(8))
-    source=tmp_path/'source.h5ad'; data.write_h5ad(source); before=file_sha256(source)
-    app=ResearchAgentApplication(tmp_path/'workspace')
-    app,run=execute(app,'declared-peaks',[('parent',dict(input_path=str(source),
-        function_name='tl.leiden',matrix_semantics='peak_accessibility',kwargs=dict(resolution=.05)),())])
-    assert run.lifecycle_status.value=='SUCCEEDED',run.errors
-    binding=bind_output(app.run_store,app.registry,run.run_id,'parent','dataset')
-    step=validate_binding(binding,store=app.run_store,registry=app.registry,integrity=True)
-    native=_serialize(step.result)
-    result=_peak_source(binding,native,app.run_store)
-    assert result['declaration']==dict(source_sha256=before,field='supplied_declarations',matrix_semantics='peak_accessibility')
-    assert native['measurement']==measurement
-    assert native['source_identity']['declarations']['matrix_semantics']==measurement
-    assert file_sha256(source)==before
-    np.testing.assert_array_equal(ad.read_h5ad(native['matrix_path']).X.toarray(),x)
-    (tmp_path/'peak-source.json').write_text(json.dumps(dict(binding=binding.to_dict(),result=result),indent=2))

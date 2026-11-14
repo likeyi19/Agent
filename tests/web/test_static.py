@@ -661,3 +661,37 @@ def test_workflow_qc_counts_do_not_hide_an_independent_equal_population():
     assert [(row['field'],row['value']) for row in result]==[
         ('input_barcodes',14),('retained_barcodes',8),('n_cells',8)]
     assert result[-1]['sources']==['Independent data']
+
+
+def test_reopen_polls_conversation_without_blocking_on_metadata_only_runs():
+    source = (STATIC/'app.js').read_text()
+    constants = source[source.index('const TERMINAL_STATES'):source.index('const element =')]
+    terminal = source[source.index('function terminal('):source.index('function checkpointText(')]
+    reopen = source[source.index('async function openSession('):source.index('function newTurnId(')]
+    script = '''
+    const state={epoch:0,scientificFiles:new Map()};
+    const nodes={};const element=id=>nodes[id]||(nodes[id]={value:''});
+    const stopPolling=()=>{},renderExecution=()=>{},showError=()=>{},saveConveniences=()=>{},updateControls=()=>{};
+    let view,watched=[];
+    const api=async()=>view,sessionPath=id=>id;
+    const displaySession=value=>{state.session=value;};
+    const watchTurn=(session,turn)=>watched.push(turn);
+    ''' + constants + terminal + reopen + '''
+    const result={};(async()=>{
+      const metadata={turn_id:'native-only',run_id:'native-run',status:'running'};
+      const continuation={turn_id:'continued',run_id:'accepted-run',status:'succeeded',revision_id:'accepted'};
+      view={session_id:'session',turns:[metadata,continuation]};
+      await openSession('session');
+      const metadataOnly={active:state.activeTurn,watched:[...watched],history:state.session.turns};
+      view={...view,turns:[{turn_id:'question',utterance:'Analyze these cells',status:'running'},metadata,continuation]};
+      await openSession('session');
+      return {metadataOnly,active:state.activeTurn.turn_id,watched};
+    })().then(value=>Object.assign(result,value)).catch(error=>{result.error=String(error);});
+    return result;
+    '''
+    # JavaScriptCore runs promise reactions before this evaluation completes.
+    result = _javascript_value('(()=>{' + script + '})()')
+    assert result['metadataOnly']['active'] is None
+    assert result['metadataOnly']['watched'] == []
+    assert result['metadataOnly']['history'][-1]['revision_id'] == 'accepted'
+    assert result['active'] == 'question' and result['watched'] == ['question']

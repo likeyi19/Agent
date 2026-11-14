@@ -22,6 +22,40 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+@pytest.mark.parametrize('package,methods',[('snapatac2',['pp.select_features','tl.spectral','tl.umap']),
+                                          ('episcanpy',['pp.tfidf','tl.lsi','pp.neighbors','tl.umap'])])
+def test_coordinate_cell_source_crosses_representation_without_count_claim(monkeypatch,package,methods):
+    from types import SimpleNamespace as N
+    from agent.application import result_reading as reading
+    from agent.schemas import StepOutputRef
+    from agent.tools import _native_process
+    monkeypatch.setattr(_native_process,'call',lambda *a,**k:pytest.fail('Accepted metadata reads must not execute native science'))
+    rows={'inspect':(N(step_id='inspect',tool_name='inspect_scATAC',result={'input_path':'/original.h5ad'}),N(arguments={}))}
+    state=N(lifecycle_status=N(value='SUCCEEDED'))
+    for i,method in enumerate(methods):
+        sid='n'+str(i);parent='inspect' if i==0 else 'n'+str(i-1)
+        path='/original.h5ad' if i==0 else '/'+parent+'.h5ad'
+        digest='a'*64 if i==0 else str(i)*64
+        native=dict(contract_version='native-'+package+'-matrix.v1',function_name=package+'.'+method,
+            matrix_path='/'+sid+'.h5ad',matrix_sha256=str(i+1)*64,source_identity={'sha256':digest},
+            parameters={'kwargs':{}},result_slots=['obsm.X_umap'] if method=='tl.umap' else [])
+        rows[sid]=(N(step_id=sid,tool_name='run_'+package,result=native,
+            resolved_arguments={'input_path':path,'input_sha256':digest}),
+            N(arguments={'input_path':StepOutputRef(parent,'input_path' if i==0 else 'matrix_path')},depends_on=(parent,)))
+    monkeypatch.setattr(reading,'_accepted_step',lambda store,rid,sid:(*rows[sid],state))
+    monkeypatch.setattr('agent.orchestration.verification_authority._accepted',lambda store,rid,sid:
+        (None,N(record={'resources':{'result_metadata':rows[sid][0].result}}),None,None))
+    sid='n'+str(len(methods)-1)
+    expected={'path':'/original.h5ad','sha256':'a'*64}
+    source=reading.original_source(None,'run',sid)
+    assert source==(expected if package=='snapatac2' else {'path':'/n1.h5ad','sha256':'2'*64})
+    assert reading.original_source(None,'run',sid,cell_axis=True)==expected
+    assert reading.handoff(None,'run',sid)['cell_source']==expected
+    rows[sid][0].resolved_arguments['input_path']='/unrelated.h5ad'
+    with pytest.raises(ValueError,match='dependency changed'):
+        reading.original_source(None,'run',sid,cell_axis=True)
+
+
 def publication(app, name='initial', *, source=None, ids=None, labels=None):
     root = app.workspace_root/'fixture'; root.mkdir(exist_ok=True)
     ids = ids or ['a','b','c','d','e']

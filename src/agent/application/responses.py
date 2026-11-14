@@ -45,8 +45,6 @@ def summarize(sessions, session_id, turn_id, outcome, *, model=None):
                 outcome = replace(outcome, error=ClientError(run.errors[0].code, public_error_message(run.errors[0])))
     if interaction is not None and any((interaction.submission or {}).get(k) for k in (
             'clarification_choice', 'parameter_overrides', 'candidate_selection', 'rerun_revision_id')):
-        if outcome.kind == 'clarify':
-            return replace(outcome, text='Input required: ' + outcome.clarification.reason)
         if outcome.status == 'failed':
             return dialogue.status_outcome(outcome, outcome.error.code if outcome.error else 'EXECUTION_FAILED')
     if outcome.error is not None and dialogue.language_failure(outcome.error.code):
@@ -54,7 +52,10 @@ def summarize(sessions, session_id, turn_id, outcome, *, model=None):
     if outcome.kind == 'clarify' and interaction is not None:
         from .resource_continuation import pending_choices
         from .structured_parameters import scope_choices
-        if pending_choices(interaction.prerequisite, state.interactions) or scope_choices(interaction):
+        options = pending_choices(interaction.prerequisite, state.interactions)
+        if any(row['handle'].startswith('annotation-umap:') for row in options):
+            return replace(outcome, text='Generate UMAP?\n\nNo compatible UMAP coordinates were found. Would you like to compute UMAP for visualization? This will run an additional scientific analysis.')
+        if options or scope_choices(interaction):
             return replace(outcome, text='Input required: ' + outcome.clarification.reason)
     if interaction is not None and (outcome.kind == 'clarify' or outcome.status == 'failed'):
         return dialogue.explain_outcome(sessions, session_id, interaction, outcome, model)

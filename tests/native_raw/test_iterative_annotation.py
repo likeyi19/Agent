@@ -64,7 +64,6 @@ def native(tmp_path_factory):
         var=pd.DataFrame(index=[f'chr1:{1000+i*200}-{1100+i*200}' for i in range(120)]))
     data.layers['original_counts'] = data.X.copy()
     data.raw = data.copy()
-    data.uns['matrix_semantics'] = 'peak_counts'
     data.uns['scientific_note'] = 'transparent Bernoulli synthetic accessibility; no biological validation'
     data.obsp['distances'] = sparse.block_diag([np.ones((120,120))-np.eye(120),np.ones((20,20))-np.eye(20)],format='csr')
     source = root/'original.h5ad'; data.write_h5ad(source)
@@ -93,6 +92,8 @@ def native(tmp_path_factory):
 
 def test_genuine_coordinator_interrupt_continue_publish_and_recover(native, monkeypatch):
     f=native
+    original=ad.read_h5ad(f['source'])
+    assert 'matrix_semantics' not in original.uns and 'feature_type' not in original.var
     # Reuse ICTA-1's fault injector; it writes only through FileRunStore.
     lifecycle=runpy.run_path(str(Path(__file__).parents[1]/'unit/orchestration/test_annotation_child_runs.py'))
     FaultStore,Crash=lifecycle['FaultStore'],lifecycle['Crash']
@@ -216,30 +217,6 @@ def test_accepted_activity_reuse_and_native_failure_remains_unfinished(native):
     assert resumed.status.value=='FAILED'
     assert f['store'].load(children[-1].run_id).to_dict()==exact
     (f['root']/'native-failure-evidence.json').write_text(json.dumps(dict(parent=failed.to_dict(),child=exact),indent=2))
-
-
-def test_gene_only_current_round_is_a_complete_limited_result(native):
-    from agent.schemas.prior_output import PriorOutputBinding
-    f=native; h=json.loads(Path(f['completed']['hierarchy_path']).read_text())
-    activity=PriorOutputBinding(**h['activity'])
-    value=next(s for s in f['store'].load(activity.run_id).steps if s.step_id==activity.step_id).result
-    request=AgentRequest('gene-grouping',None,{})
-    plan=AgentPlan('gene-grouping:plan',request.request_id,'Gene-only grouping',
-        (PlanStep('groups','run_snapatac2',dict(input_path=PriorOutputRef(activity,'matrix_path'),
-            output_dir=str(f['root']/'gene-grouping'),function_name='tl.leiden',kwargs={'resolution':.05})),))
-    result=f['runtime']().run_prepared(request,plan)
-    assert result.status.value=='SUCCEEDED',result.to_dict()
-    grouping=bind_output(f['store'],f['registry'],result.run_id,'groups','dataset')
-    args=dict(input_path=value['matrix_path'],input_sha256=value['matrix_sha256'],
-        grouping_path=PriorOutputRef(grouping,'matrix_path'),activity_path=PriorOutputRef(activity,'matrix_path'),
-        cellmarker_id=f['args']['cellmarker_id'],cellmarker_identity=f['args']['cellmarker_identity'],species='Mouse')
-    result=f['runtime']().run_prepared(*prepare('gene-only',f['root'],args))
-    assert result.status.value=='SUCCEEDED',result.to_dict()
-    hierarchy=json.loads(Path(result.steps[0].result['hierarchy_path']).read_text())
-    assert all(b['stopping_reason']=='missing_required_peak_space' for b in hierarchy['branches'])
-    assert [r['operation_id'] for r in hierarchy['operations']]==['markers']
-    assert hierarchy['maximum_levels']==5
-    (f['root']/'gene-only-evidence.json').write_text(json.dumps(_serialize(result.steps[0].result),indent=2))
 
 
 def test_cancellation_after_accepted_marker_and_exact_continuation(native,monkeypatch):
@@ -419,7 +396,9 @@ def test_captured_fragment_constructor_and_existing_peak_routes(fragment_handoff
         assert projection['activity_positions']==list(range(24))
         assert projection['accepted_publication']=={k:f['native']['groups'][k] for k in ('manifest_path','manifest_sha256')}
         assert m['function_name']=='scanpy.tl.rank_genes_groups'
-        evidence=json.loads(Path(result.steps[0].result['annotations_path']).read_text())['initial']
+        stored=json.loads(Path(result.steps[0].result['annotations_path']).read_text())['rounds']['initial']
+        assert stored['schema']=='marker-candidates.v2'
+        evidence=owner.read_evidence(result.steps[0].result['annotations_path'],result.steps[0].result['annotations_sha256'])['initial']
         assert evidence['schema']=='marker-candidates.v1' and evidence['reference']['resource']==h['cellmarker']
         assert len(evidence['clusters'])>1
         annotated=ad.read_h5ad(result.steps[0].result['annotated_h5ad_path'])
@@ -521,7 +500,7 @@ def test_accepted_multilevel_publication_downstream_compatibility(tmp_path, monk
         for child in science:validate_binding(child,store=store,registry=reg,integrity=True)
         return owner.publish(owner.arguments(args),identity,
             read(accepted['hierarchy_path'],accepted['hierarchy_sha256']),
-            read(accepted['annotations_path'],accepted['annotations_sha256']),
+            owner.read_evidence(accepted['annotations_path'],accepted['annotations_sha256']),
             read(accepted['subdivisions_path'],accepted['subdivisions_sha256']),resource_files=evidence.entry['files'])
     spec=reg.get(owner.TOOL)
     spec=replace(spec,optional_arguments={**spec.optional_arguments,'accepted_hierarchy_path':ArgumentSpec((str,))},

@@ -2,7 +2,16 @@
 from pathlib import Path
 from collections.abc import Mapping
 from agent.tools.analysis import iterative_annotation as coordinator, hierarchical_annotation as owner
-from .native_matrix_registry import classify
+from .native_matrix_registry import classify as native_classify
+
+
+def classify(exception):
+    from .annotation_runs import AnnotationChildError
+    from .registry import ErrorClassification
+    if isinstance(exception, AnnotationChildError):
+        error = exception.error
+        return ErrorClassification(error.category, error.code, error.details.get('public_diagnostic'))
+    return native_classify(exception)
 
 
 def annotation_tool_spec():
@@ -16,13 +25,13 @@ def annotation_tool_spec():
             artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
         cellmarker_id=arg((str,), 'Installed CellMarker 3.0 evidence selected by the scientific resource library.'),
         output_dir=arg((str, Path), 'Managed hierarchical publication destination.'))
-    optional = dict(grouping_path=arg((str, Path), 'Exact accepted native initial clustering with original source ancestry.',
+    optional = dict(grouping_path=arg((str, Path), 'Optional distinct accepted native initial clustering. Omit groups when reusing an original obs group_column; inspection is not a clustering result.',
             artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
         group_column=arg((str,), 'Explicit original source obs column to reuse at level 1; user-supplied grouping, without validation of biological identity or derivation.',
             scientific_parameter=True, observation_source='source'),
         input_sha256=arg((str,), 'Exact original file identity.'),
-        activity_path=arg((str, Path), 'Compatible accepted Gene Activity; reused without reconstruction.', source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
-        activity_source_path=arg((str, Path), 'Accepted native activity construction source: fragment/insertion H5AD for default SnapATAC2, selected peak X for use_x=True or epiScanpy.', source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
+        activity_path=arg((str, Path), 'Optional genuine accepted Gene Activity H5AD, constructed by a native gene-activity operation. Inspection of accessibility does not construct Gene Activity. Omit activity to construct it inside annotation using activity_method.', source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
+        activity_source_path=arg((str, Path), 'Optional distinct accepted source for native Gene Activity construction. Omit activity_source when constructing from the annotation source or its selected grouping: use_x=True selects its X for SnapATAC2; epiScanpy uses its peak X. Default SnapATAC2 requires accepted fragment/insertion storage.', source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
         gene_anno_path=arg((str, Path), 'Native gene annotation reference.', source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
         gene_anno_sha256=arg((str,), 'Exact gene annotation reference identity.'),
         cellmarker_identity=arg((Mapping,), 'Captured installed CellMarker resource identity.'))
@@ -79,9 +88,18 @@ def annotation_tool_spec():
             'Select original peak accessibility. An explicit source group_column reuses that obs grouping directly at level 1; do not plan initial clustering for it. Otherwise reuse exact accepted native grouping. Reuse compatible Gene Activity. '
             'If clustering is missing, plan the necessary registered native representation, neighbors and clustering steps. '
             'For Gene Activity choose an applicable registered native construction and gene annotation reference.',
-            'Default SnapATAC2 uses '
+            'Port source is the original accessibility dataset. With original obs group_column, omit groups. '
+            'Omit activity unless genuine constructed Gene Activity is available. For construction from original peak X, '
+            'choose activity_method and its applicable activity_kwargs; omit activity_source. The coordinator performs the native construction.',
+            'inspect_scATAC.dataset is an unchanged accessibility handoff, not Gene Activity, native grouping or a distinct activity construction source. '
+            'Optional UMAP prerequisites consume that inspection dataset through their own dataset ports, without changing annotation input roles.',
+            'SnapATAC2 use_x=False requires '
             'actual accepted fragment/insertion storage; use_x=True uses the selected X; epiScanpy uses peak X. Never infer cross-file '
-            'correspondence from names or shapes. Gene-only inputs can annotate the current level but cannot subdivide in peak space.',
+            'correspondence from names or shapes. The intended input is cell-by-peak accessibility. Native input legality and failures remain visible; no Agent peak-space eligibility certificate is required.',
+            'Choose a Gene Activity construction supported by the offered inputs. When only the original peak-count X is available, '
+            'epiScanpy tl.geneactivity can construct activity directly. Do not choose SnapATAC2 use_x=False and request missing fragments '
+            'when a registered construction already supports the supplied X. Counts described as cut sites or insertions in X are not '
+            'native fragment/insertion storage. An explicit use_x=True setting enables that SnapATAC2 X route.',
             'Deterministic iteration uses native Scanpy Wilcoxon/BH, CellMarker exact matching, SciPy hypergeometric ORA/BH, '
             'local peak-space SnapATAC2 feature selection/Spectral/KNN/Leiden with bounded ASW and native child-versus-rest differential peaks. '
             'Default maximum five levels. No per-iteration model planning.',

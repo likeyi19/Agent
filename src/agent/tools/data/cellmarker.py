@@ -27,6 +27,17 @@ MEMBER = 'all_cell_marker.txt'
 FIELDS = ', '.join('"' + name + '"' for name in COLUMNS)
 
 
+def resolve_species(declaration, available):
+    """Bind only unique case-insensitive equality to pinned reference values."""
+    if declaration is None:
+        return None
+    matches = [value for value in available if value.casefold() == declaration.casefold()]
+    if len(matches) != 1:
+        raise ValueError('CellMarker species declaration has no unique case-insensitive reference match: '
+                         + repr(declaration))
+    return matches[0]
+
+
 def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
@@ -298,7 +309,11 @@ class CellMarkerEvidence:
                         source_rows=sorted(map(int, pending[23].split(','))), multiplicity=pending[24]))
                     pending = cursor.fetchone()
                 self._check()
-                yield dict(query=deepcopy(request), resource=deepcopy(self.identity),
+                # All input leaves are validated strings. Copy the containers
+                # once per page without recursively revisiting every background
+                # gene; pages retain independent mutable query identities.
+                yield dict(query=dict(request, names=list(names), gene_ids=list(gene_ids), filters=dict(filters)),
+                           resource=deepcopy(self.identity),
                            page=page, complete=pending is None, items=items)
                 if pending is None:
                     break

@@ -5,6 +5,8 @@ reconstructs the tree from their accepted outcomes; no branch database is needed
 """
 from collections import deque
 from pathlib import Path
+from threading import Lock
+from time import perf_counter
 
 from agent.orchestration.annotation_runs import annotation_invocation
 from agent.orchestration.verification_authority import accepted_authorities
@@ -13,9 +15,9 @@ from agent.schemas.verification_authority import AuthorityError, digest
 from agent.tools._file_identity import file_closure
 from agent.tools.data.cellmarker import CellMarkerEvidence
 from .cell_result import describe
-from .local_subdivision import (_read, _metadata, _peak_source, assess_subdivision,
-                                differential_kwargs, LOCAL_METHODS)
-from .marker_candidates import annotate_markers, marker_kwargs
+from .local_subdivision import (_read, _metadata, assess_subdivision,
+                                differential_preparer, LOCAL_METHODS)
+from .marker_candidates import annotate_markers, marker_kwargs, MarkerReference
 from .native_gene_activity import corresponding_positions
 from .sequence_prediction import library
 
@@ -78,17 +80,20 @@ def coordinate(arguments, execution_identity):
     if positions != list(range(len(original_obs))) or len(_metadata({'matrix_path': source['path']}, 'obs')[0]) != len(positions):
         raise AuthorityError('Initial grouping must retain every original ordered cell exactly once')
     evidence = CellMarkerEvidence(library(), args['cellmarker_id'])
+    reference = MarkerReference(evidence)
     if args.get('cellmarker_identity') is not None and args['cellmarker_identity'] != evidence.identity:
         raise AuthorityError('Captured CellMarker resource identity changed')
     operations, annotations, subdivisions = [], {}, {}
     overrides = args.get('operation_overrides', {})
     applied = set()
+    differential_preparations = {}
+    scheduling_lock = Lock()
     def progress(**details):
         if hasattr(inv, 'progress'):
             inv.progress(**details)
 
 
-    def invoke(branch, operation, tool, native_args, parent_inputs=None):
+    def invoke(branch, operation, tool, native_args, parent_inputs=None, differential_child=None, prepare=None):
         for key, override in overrides.items():
             if (override['branch_id'], override['operation_id']) != (branch, operation):
                 continue
@@ -104,11 +109,23 @@ def coordinate(arguments, execution_identity):
             for name, value in changes.items():
                 native_args[name] = dict(native_args.get(name,{}), **value) if name=='kwargs' else value
             applied.add(key)
+        if differential_child is not None:
+            preparation_started = perf_counter()
+            prepared, provenance = prepare(differential_child, native_args['kwargs'])
+            native_args = dict(native_args, kwargs=prepared)
+            differential_preparations[branch, operation] = provenance
+            progress(branch_id=branch, operation_id=operation,
+                     differential_preparation_seconds=perf_counter()-preparation_started)
         progress(branch_id=branch, operation_id=operation, function_name=tool.removeprefix('run_')+'.'+native_args['function_name'])
+        invoked = perf_counter()
         inv.invoke(branch_id=branch, operation_id=operation, tool_name=tool,
                    arguments=native_args, parent_inputs=parent_inputs)
+        completed = perf_counter()
         binding = inv.output(branch, operation, 'dataset')
         _, native = _read(binding, **readers)
+        progress(branch_id=branch, operation_id=operation,
+                 child_invocation_seconds=completed-invoked,
+                 accepted_result_read_seconds=perf_counter()-completed)
         operations.append(dict(branch_id=branch, operation_id=operation,
             binding=binding.to_dict(), native_result=native))
         return binding, native
@@ -143,10 +160,12 @@ def coordinate(arguments, execution_identity):
             **({'grouping_path': PriorOutputRef(binding, 'matrix_path')} if binding is not None else {'group_column': column}),
             function_name='tl.rank_genes_groups', kwargs=kwargs),
             parent_inputs={'grouping_path': 'input_path'} if binding is None else None)
-        result = annotate_markers(markers, **readers, evidence=evidence, species=args.get('species'),
+        started = perf_counter()
+        result = annotate_markers(markers, **readers, evidence=evidence, reference=reference, species=args.get('species'),
             context=args.get('marker_context'), identity_kind=args.get('identity_kind', 'name'),
             identity_column=args.get('identity_column'), marker_alpha=args.get('marker_alpha', .05),
             ora_alpha=args.get('ora_alpha', .05))
+        progress(branch_id=round_id, marker_evidence_seconds=perf_counter()-started)
         annotations[round_id] = result
         return {row['cluster']: row for row in result['clusters']}
 
@@ -167,23 +186,22 @@ def coordinate(arguments, execution_identity):
     for label in initial_groups:
         add(None, label, 1, [i for i, g in enumerate(original_obs[groupby]) if g == label],
             grouping, initial, initial_annotation.get(label), 'initial')
-    while queue:
+    def process_branch(item):
         inv.check_cancelled()
-        branch, parent_binding, parent_native = queue.popleft()
-        progress(level=branch['level'], branch_id=branch['branch_id'], pending_branches=len(queue), outcome=None)
+        branch, parent_binding, parent_native = item
+        additions = []
+        with scheduling_lock:
+            pending.remove(branch['branch_id'])
+            progress(level=branch['level'], branch_id=branch['branch_id'], pending_branches=len(pending), outcome=None)
         if branch['cluster'] == '-1':
             branch['stopping_reason'] = 'native_unassigned'
             progress(outcome=branch['stopping_reason'], function_name=None, operation_id=None)
-            continue
-        if _peak_source(parent_binding, parent_native, readers['store']) is None:
-            branch['stopping_reason'] = 'missing_required_peak_space'
-            progress(outcome=branch['stopping_reason'], function_name=None, operation_id=None)
-            continue
+            return additions
         if branch['level'] >= maximum:
             branch['stopping_reason'] = 'maximum_levels'
             progress(outcome=branch['stopping_reason'], function_name=None, operation_id=None)
-            continue
-        column, parent_obs, _ = groups(parent_native, parent_binding)
+            return additions
+        column, _, _ = groups(parent_native, parent_binding)
         previous, local = parent_binding, []
         for i, method in enumerate(LOCAL_METHODS):
             function = method.removeprefix('snapatac2.')
@@ -200,15 +218,28 @@ def coordinate(arguments, execution_identity):
         candidates = [g for g in candidates if g != '-1']
         diffs = {}
         if len(candidates) > 1 or (candidates and '-1' in local_obs[local_column].tolist()):
+            preparation_started = perf_counter()
+            prepare = differential_preparer(previous, **readers)
+            progress(branch_id=branch['branch_id'], differential_population_preparation_seconds=perf_counter()-preparation_started)
             for label in candidates:
-                kwargs = dict(differential, **differential_kwargs(previous, label, **readers))
                 diff, _ = invoke(branch['branch_id'], 'diff-' + digest(label), 'run_snapatac2',
-                    dict(input_path=PriorOutputRef(previous, 'matrix_path'), function_name='tl.diff_test', kwargs=kwargs))
+                    dict(input_path=PriorOutputRef(previous, 'matrix_path'), function_name='tl.diff_test', kwargs=differential),
+                    differential_child=label, prepare=prepare)
                 diffs[label] = diff
+        started = perf_counter()
         decision = assess_subdivision(parent_binding, local, diffs, **readers,
             source_grouping=parent_native if parent_binding is None else None,
             adjusted_p_threshold=args.get('adjusted_p_threshold', .01),
             minimum_peak_features=args.get('minimum_peak_features', 5))
+        progress(branch_id=branch['branch_id'], subdivision_read_seconds=perf_counter()-started)
+        for child in decision['children']:
+            preparation = differential_preparations.get((branch['branch_id'], 'diff-' + digest(child['cluster'])))
+            if preparation is not None:
+                preparation = dict(preparation, native_tested_feature_count=len(child['differential']['rows']))
+                child['differential']['preparation'] = preparation
+                if preparation['testable_feature_count'] == 0:
+                    child['differential']['outcome'] = 'no_testable_features'
+                    child['reason'] = 'No testable binary-response features; insufficient differential evidence.'
         subdivisions[branch['branch_id']] = decision
         outcome = decision['outcome']
         if outcome not in {'no_candidate_subdivision', 'no_supported_subdivision',
@@ -218,7 +249,7 @@ def coordinate(arguments, execution_identity):
         progress(outcome=outcome, function_name=None, operation_id=None)
         retained = [c for c in decision['children'] if c['retained']]
         if not retained:
-            continue
+            return additions
         local_annotations = annotate(branch['branch_id'], previous, local_native)
         # The local axis is the exact parent branch in original order. The ICTA-3C
         # reader has already verified this selection against the accepted parent.
@@ -228,9 +259,25 @@ def coordinate(arguments, execution_identity):
         root_positions = dict(zip(selection, branch['positions']))
         branch['residual_positions'] = [root_positions[p] for p in decision['residual_parent']['positions']]
         for child in retained:
-            add(branch['branch_id'], child['cluster'], branch['level'] + 1,
+            additions.append((branch['branch_id'], child['cluster'], branch['level'] + 1,
                 [root_positions[p] for p in child['source_positions']], previous, local_native,
-                local_annotations.get(child['cluster']), branch['branch_id'])
+                local_annotations.get(child['cluster']), branch['branch_id']))
+        return additions
+    while queue:
+        wave = list(queue)
+        pending = {row['branch_id'] for row, _, _ in wave}
+        queue.clear()
+        results = (inv.map_branches(process_branch, wave) if hasattr(inv, 'map_branches') else
+                   [process_branch(item) for item in wave])
+        for additions in results:
+            for addition in additions:
+                add(*addition)
+    # Scheduling never defines scientific ordering. Each branch's dependencies
+    # run in sequence; aggregate complete waves in original BFS branch order.
+    order = {'initial': -1, **{b['branch_id']: i for i, b in enumerate(branches)}}
+    operations.sort(key=lambda row: order[row['branch_id']])
+    annotations = dict(sorted(annotations.items(), key=lambda row: order[row[0]]))
+    subdivisions = dict(sorted(subdivisions.items(), key=lambda row: order[row[0]]))
     if set(overrides) != applied:
         raise ValueError('The selected edited operation was not reached in this hierarchy')
     evidence._check()

@@ -67,6 +67,17 @@ def test_clarification_and_failure_share_generation_and_review(outcome):
     assert model.calls[1]['evidence']['outcome']==facts
 
 
+def test_new_freeform_prerequisite_after_choice_uses_reviewed_question():
+    sessions,interaction=outcome_session();model=OutcomeModel()
+    interaction.submission={'clarification_choice':{'question_turn_id':'previous','handle':'annotation-umap:generate'}}
+    interaction.admitted.update(tool='annotate_scATAC_cell_types',choices=['Specify the required native input.'])
+    outcome=TurnOutcome('clarify','clarification',Clarify('missing_resources',('Specify the required native input.',),True))
+    result=summarize(sessions,'s','q',outcome,model=model)
+    assert result.text=='请提供所需参数。'
+    assert len(model.calls)==2 and model.calls[0]['focus']=='outcome'
+    assert all('turn_schema_version' not in call for call in model.calls)
+
+
 def test_provider_failure_never_recurses_and_preserves_original_error():
     sessions,_=outcome_session();model=OutcomeModel(fail=True)
     native=TurnOutcome('execute','failed',error=ClientError('NATIVE_FUNCTION_FAILED','Native failure'))

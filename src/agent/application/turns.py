@@ -567,7 +567,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 _update(sessions, turn_id, admitted=admitted, status='clarification')
                 return TurnOutcome('clarify', 'clarification', Clarify('ambiguous_parameter'))
             if 'native_plan' not in admitted:
-                _update(sessions, turn_id, admitted=admitted, status='failed')
+                _update(sessions, turn_id, admitted=admitted)
+                _failed_admission(sessions, interaction, decision)
                 return TurnOutcome('execute', 'failed', error=error, text='' if error is None else error.message)
     except Exception as exc:
         log_operation_event(logger, 'turn.boundary_failed', context=diagnostic_context,

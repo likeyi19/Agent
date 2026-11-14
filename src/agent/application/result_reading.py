@@ -29,7 +29,7 @@ def dependency(store, run_id, step_id, argument):
     return source_run, source_step
 
 
-def analysis_lineage(store, run_id, step_id):
+def analysis_lineage(store, run_id, step_id, *, cell_axis=False):
     """The recorded cell-analysis chain, shared by source and method readers."""
     stored, planned, _ = _accepted_step(store, run_id, step_id)
     lineage = [(run_id, stored, planned)]
@@ -38,7 +38,7 @@ def analysis_lineage(store, run_id, step_id):
         descriptor = describe(stored.tool_name, stored.result)
         if stored.tool_name == 'annotate_scATAC_cell_types':
             argument = 'input_path'
-        elif descriptor and descriptor['preserves_counts'] and stored.tool_name != 'annotate_scATAC_cell_types':
+        elif descriptor and descriptor['preserves_cell_identity' if cell_axis else 'preserves_counts'] and stored.tool_name != 'annotate_scATAC_cell_types':
             argument = descriptor['input_argument']
             if stored.result['source_identity']['sha256'] != stored.resolved_arguments.get('input_sha256', stored.result['source_identity']['sha256']):
                 raise ValueError('Accepted native input digest changed.')
@@ -46,18 +46,24 @@ def analysis_lineage(store, run_id, step_id):
             break
         if not isinstance(planned.arguments.get(argument), (StepOutputRef, PriorOutputRef)):
             break
-        run_id, step_id = dependency(store, run_id, step_id, argument)
-        if (run_id, step_id) in seen:
+        parent_run, parent_step = dependency(store, run_id, step_id, argument)
+        parent, parent_plan, _ = _accepted_step(store, parent_run, parent_step)
+        # Inspection passes the original file through; it neither constructs
+        # a new scientific matrix nor terminates that file's native ancestry.
+        if parent.tool_name=='inspect_scATAC' or (cell_axis and describe(parent.tool_name,parent.result) is None):
+            break
+        if (parent_run, parent_step) in seen:
             raise ValueError('Cyclic accepted scientific lineage.')
+        run_id, step_id = parent_run, parent_step
         seen.add((run_id, step_id))
-        stored, planned, _ = _accepted_step(store, run_id, step_id)
+        stored, planned = parent, parent_plan
         lineage.append((run_id, stored, planned))
     return tuple(lineage)
 
 
-def original_source(store, run_id, step_id):
+def original_source(store, run_id, step_id, *, cell_axis=False):
     """Follow only exact accepted lineage; legacy EpiZoo has no input digest."""
-    run_id, stored, _ = analysis_lineage(store, run_id, step_id)[-1]
+    run_id, stored, _ = analysis_lineage(store, run_id, step_id,cell_axis=cell_axis)[-1]
     if stored.tool_name == 'annotate_scATAC_cell_types':
         if stored.resolved_arguments.get('input_path'):
             return dict(path=stored.resolved_arguments['input_path'],
@@ -67,7 +73,7 @@ def original_source(store, run_id, step_id):
     if descriptor and stored.tool_name.startswith('run_'):
         from agent.orchestration.verification_authority import _accepted
         _accepted(store, run_id, stored.step_id)
-        if descriptor['preserves_counts']:
+        if descriptor['preserves_cell_identity' if cell_axis else 'preserves_counts']:
             identity = stored.result['source_identity']
             if identity['sha256'] != stored.resolved_arguments.get('input_sha256', identity['sha256']):
                 raise ValueError('Native source identity changed.')
@@ -106,7 +112,8 @@ def handoff(store, run_id, step_id):
                 **result_file(parent.tool_name, parent.result))
             break
     source = original_source(store, run_id, step_id)
-    return dict(**descriptor, file=result_file(stored.tool_name, stored.result), source=source, groups=grouping)
+    return dict(**descriptor, file=result_file(stored.tool_name, stored.result), source=source, groups=grouping,
+        cell_source=original_source(store,run_id,step_id,cell_axis=True) if descriptor['coordinates'] else None)
 
 
 def _files(sessions, run, step):

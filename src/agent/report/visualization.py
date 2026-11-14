@@ -418,25 +418,33 @@ def _cell_results(run_result):
             return None
         artifact = file(step.tool_name, step.result)
         origin, grouping = artifact['sha256'], None
+        identity = step.result.get('source_identity', {}).get('sha256')
+        cell_origin = (identity or artifact['sha256']) if desc['preserves_cell_identity'] else artifact['sha256']
         if desc['grouping']:
             grouping = dict(**artifact, field=desc['grouping'], step_id=sid, tool_name=step.tool_name)
         if desc['preserves_counts']:
-            argument = desc['input_argument']
-            ref = planned[sid].arguments.get(argument)
-            identity = step.result.get('source_identity', {}).get('sha256')
             origin = identity or step.resolved_arguments.get('source_sha256')
-            if isinstance(ref, StepOutputRef):
-                parent = rows[ref.step_id]
-                if (ref.step_id not in planned[sid].depends_on
-                        or parent.result[ref.output_key] != step.resolved_arguments[argument]):
-                    raise ValueError('Figure source ancestry changed')
-                parent_view = view(ref.step_id)
-                if parent_view is not None:
-                    if identity and identity != parent_view['file']['sha256']:
-                        raise ValueError('Figure source digest changed')
+        argument = desc['input_argument']
+        ref = planned[sid].arguments.get(argument)
+        if isinstance(ref, StepOutputRef):
+            parent = rows[ref.step_id]
+            if (ref.step_id not in planned[sid].depends_on
+                    or parent.result[ref.output_key] != step.resolved_arguments[argument]):
+                raise ValueError('Figure source ancestry changed')
+            parent_view = view(ref.step_id)
+            if parent_view is not None:
+                if identity and identity != parent_view['file']['sha256']:
+                    raise ValueError('Figure source digest changed')
+                # Cell ancestry survives representation transforms; original
+                # count authority does not. Coordinate consumers still check
+                # the actual exact ordered cell axis before joining labels.
+                if desc['preserves_cell_identity']:
+                    cell_origin = parent_view['cell_source_sha256']
+                if desc['preserves_counts']:
                     origin = parent_view['source_sha256']
                     grouping = grouping or parent_view['groups']
-        result = dict(**desc, file=artifact, source_sha256=origin, groups=grouping)
+        result = dict(**desc, file=artifact, source_sha256=origin,
+                      cell_source_sha256=cell_origin, groups=grouping)
         views[sid] = result
         visiting.remove(sid)
         return result

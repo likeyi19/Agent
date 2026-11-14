@@ -141,27 +141,13 @@ def test_supervisor_fault_still_stops_owned_unit(tmp_path, monkeypatch, failure)
     else:
         assert execute('print("completed")', tmp_path) == 0
         assert 'diagnostic_error' in diagnostic(tmp_path)
-    state = original(['systemctl', '--user', 'show', 'agent-native-task.service',
+    unit = diagnostic(tmp_path)['unit']
+    state = original(['systemctl', '--user', 'show', unit,
                       '--property=LoadState', '--value'], capture_output=True, text=True)
     assert state.returncode == 0 and state.stdout.strip() == 'not-found'
     assert not list((Path('/run/user') / str(os.getuid())).glob('agent-native-*/request.json'))
 
 
-def test_concurrency_is_shared_across_callers(tmp_path):
-    ready=tmp_path/'ready'
-    failures=[]
-    def first():
-        try:execute(f'from pathlib import Path;import time;Path({str(ready)!r}).touch();time.sleep(2)',tmp_path)
-        except BaseException as exc:failures.append(exc)
-    thread=threading.Thread(target=first);thread.start()
-    try:
-        deadline=time.monotonic()+30
-        while not ready.exists() and thread.is_alive() and time.monotonic()<deadline:time.sleep(.1)
-        assert ready.exists(),failures
-        with pytest.raises(owner.NativeExecutionError) as exc:execute('raise AssertionError()',tmp_path)
-        assert exc.value.code=='NATIVE_EXECUTION_BUSY'
-    finally:thread.join(30)
-    assert not failures and not thread.is_alive()
 
 
 def test_kernel_failure_is_terminal_in_existing_session_and_runstore(tmp_path):
@@ -198,7 +184,7 @@ def test_kernel_failure_is_terminal_in_existing_session_and_runstore(tmp_path):
     assert calls==[1] and app.run_store.state_path(run_id).read_bytes()==before
 
 
-@pytest.mark.parametrize('failure', ['unavailable', 'timeout', 'stale'])
+@pytest.mark.parametrize('failure', ['unavailable', 'timeout', 'stale', 'oserror'])
 def test_manager_preflight_fails_without_launch_or_replacement(tmp_path, monkeypatch, failure):
     import subprocess
     calls = []
@@ -208,6 +194,8 @@ def test_manager_preflight_fails_without_launch_or_replacement(tmp_path, monkeyp
                            '--property=LoadState', '--value']
         if failure == 'timeout':
             raise subprocess.TimeoutExpired(command, 10)
+        if failure == 'oserror':
+            raise OSError('User execution manager unavailable')
         return subprocess.CompletedProcess(command, 1 if failure == 'unavailable' else 0,
                                            stdout='loaded\n' if failure == 'stale' else '', stderr='')
     monkeypatch.setattr(subprocess, 'run', manager)
@@ -259,3 +247,69 @@ while not Path({str(release)!r}).exists():time.sleep(.05)
     assert request is not None and not request.parent.exists()
     assert secret not in (tmp_path/'native.log').read_text()
     assert secret not in (tmp_path/'native.log.execution.json').read_text()
+
+
+@pytest.mark.parametrize('concurrent', [True, False])
+def test_memory_reservations_across_agent_processes(tmp_path, monkeypatch, concurrent):
+    import subprocess
+    monkeypatch.setenv('AGENT_NATIVE_TOTAL_MEMORY_BYTES', str((2 if concurrent else 1)*512*1024**2))
+    processes=[]
+    for i in range(2):
+        root=tmp_path/str(i);root.mkdir()
+        code=f'''from pathlib import Path
+import os,sys
+from agent.tools._native_process import run
+root=Path({str(root)!r})
+assert run([sys.executable,'-c','import time;time.sleep(1)'],root/'native.log',environment=dict(os.environ))==0
+'''
+        processes.append(subprocess.Popen([sys.executable,'-c',code],env=dict(os.environ,
+            PYTHONPATH=str(Path(__file__).resolve().parents[2]/'src'))))
+    for process in processes: assert process.wait(timeout=40)==0
+    records=[diagnostic(tmp_path/str(i)) for i in range(2)]
+    from datetime import datetime
+    overlap=(min(datetime.fromisoformat(d['finished_at']) for d in records)-
+             max(datetime.fromisoformat(d['started_at']) for d in records)).total_seconds()
+    assert (overlap>0)==concurrent
+    assert all(d['reservation']['reserved_memory_bytes']<=d['reservation']['aggregate_memory_bytes'] for d in records)
+    if not concurrent:assert max(d['admission_seconds'] for d in records)>.5
+    assert not list((Path('/run/user')/str(os.getuid())/'agent-native-reservations').glob('*.json'))
+
+
+def test_dead_supervisor_reservation_stops_orphan_before_reuse(tmp_path):
+    import subprocess
+    ready=tmp_path/'ready'
+    code=f'''from pathlib import Path
+import sys,os
+from agent.tools._native_process import run
+run([sys.executable,'-c',"from pathlib import Path;import os,time;Path({str(ready)!r}).write_text(str(os.getpid()));time.sleep(120)"],Path({str(tmp_path/'orphan.log')!r}),environment=dict(os.environ))
+'''
+    process=subprocess.Popen([sys.executable,'-c',code],env=dict(os.environ,
+        PYTHONPATH=str(Path(__file__).resolve().parents[2]/'src')))
+    try:
+        deadline=time.monotonic()+30
+        while not ready.exists() and process.poll() is None and time.monotonic()<deadline:time.sleep(.05)
+        assert ready.exists()
+    finally:
+        process.kill();process.wait(timeout=10)
+    assert execute('print("orphan stopped, fresh explicit operation")',tmp_path)==0
+    status=Path('/proc')/ready.read_text()/'stat'
+    assert not status.exists() or status.read_text().split()[2]=='Z'
+    assert not list((Path('/run/user')/str(os.getuid())).glob('agent-native-*/request.json'))
+    assert not list((Path('/run/user')/str(os.getuid())/'agent-native-reservations').glob('*.json'))
+
+
+def test_interrupted_initial_reservation_write_is_reclaimed(tmp_path):
+    import uuid
+    root=Path('/run/user')/str(os.getuid())/'agent-native-reservations'
+    root.mkdir(mode=0o700,exist_ok=True)
+    lease=root/('agent-native-task-'+uuid.uuid4().hex+'.service.json')
+    lease.write_text('{')
+    assert execute('print("explicit fresh task after partial reservation")',tmp_path)==0
+    assert not lease.exists()
+
+
+def test_worker_missing_input_keeps_its_original_error(tmp_path,monkeypatch):
+    monkeypatch.setenv('AGENT_NATIVE_MEMORY_BYTES',str(2*1024**3))
+    with pytest.raises(FileNotFoundError):
+        owner.call('annotation_observe',dict(path=str(tmp_path/'absent.h5ad'),sha256='a'*64),lambda:None)
+    assert not list((Path('/run/user')/str(os.getuid())/'agent-native-reservations').glob('*.json'))

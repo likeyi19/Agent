@@ -319,3 +319,34 @@ def test_motif_historical_cutoff_is_recorded_not_reinterpreted(app,monkeypatch,c
     meaning=de.field_semantics(app.registry,'compute_motif_accessibility','parameters')
     assert 'never infer the actual historical cutoff from current defaults' in meaning['description']
     assert path.read_bytes()==before
+
+
+def test_large_accepted_annotation_envelope_keeps_summary_and_bounded_report(app, monkeypatch):
+    import hashlib
+    parameters = dict(kwargs=dict(features=['x' * (de.MAX_EVIDENCE_BYTES + 1024)],
+        min_log_fc=.25, min_pct=.05, cell_group1=[0, 1]), count_slot='X')
+    methods = [dict(function='snapatac2.tl.diff_test', branch_id='branch', operation_id='diff',
+        producing_run_id='native:run', accepted_step_sha256='a'*64, manifest_sha256='b'*64,
+        parameters=parameters, software_versions={})]
+    rid, path, _ = accepted(app, 'annotate_scATAC_cell_types', overrides=dict(n_cells=8),
+        extra_facts=dict(native_methods=methods))
+    before = path.read_bytes()
+    guarded = forbid_work(app, monkeypatch)
+    view = guarded.sessions.evidence('session', rid, 'output0')
+    assert view.status == 'available', view
+    assert next(f for f in view.facts if f.field == 'n_cells').value == 8
+    report = de.annotation_report_methods(guarded.sessions, 'session', rid, 'output0')
+    recorded = report['native_methods'][0]
+    assert recorded['parameters']['kwargs'] == dict(min_log_fc=.25, min_pct=.05, cell_group1=[0, 1])
+    omitted = recorded['report_omitted_parameter_fields'][0]
+    assert omitted['parameter'] == 'kwargs' and omitted['field'] == 'features'
+    assert omitted['sha256'] == hashlib.sha256(de._bytes(parameters['kwargs']['features'])).hexdigest()
+    assert omitted['items'] == 1 and omitted['reason'] == 'report_field_size_limit'
+    from agent.report.analysis_report import render_annotation_facts
+    text = render_annotation_facts(report, technical=True)
+    assert omitted['sha256'] in text and 'report_field_size_limit' in text
+    assert 'hierarchy.json' in text and 'snapatac2.tl.diff_test' in text
+    assert path.read_bytes() == before
+    path.write_bytes(before + b' ')
+    changed = guarded.sessions.evidence('session', rid, 'output0')
+    assert changed.status == 'unavailable' and changed.reason == 'evidence_digest_mismatch'

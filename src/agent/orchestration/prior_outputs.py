@@ -79,13 +79,18 @@ def source_port(registry, tool_name, name):
 
 
 def bind_output(store, registry, run_id, step_id, port_name):
+    return _bound_output(store, registry, run_id, step_id, port_name)[0]
+
+
+def _bound_output(store, registry, run_id, step_id, port_name):
+    """Resolve the port and retain its already checked immutable step locally."""
     from .verification_authority import _accepted, _accepted_step
     state = store.load(run_id)
     if state.lifecycle_status is not RunLifecycleStatus.SUCCEEDED:
         from .annotation_runs import allows_prerequisite
         if not allows_prerequisite(store, run_id, step_id, _LOADING.get()):
             raise AuthorityError('Historical source run is not terminal successful.')
-    stored, _, _ = _accepted_step(store, run_id, step_id)
+    stored, _, _ = _accepted_step(store, run_id, step_id, state=state)
     port = source_port(registry, stored.tool_name, port_name)
     if any(stored.result.get(member.field_name) is None for member in port.members):
         raise AuthorityError('The accepted native function did not produce this output family')
@@ -101,29 +106,28 @@ def bind_output(store, registry, run_id, step_id, port_name):
         if not isinstance(path, str) or not Path(path).is_absolute():
             raise AuthorityError('Accepted file has no exact absolute identity.')
         return PriorOutputBinding(run_id, step_id, stored.tool_name, port_name, port.semantic_type,
-            accepted_step_digest(stored), sha, digest(stored.verification.to_dict()), 'accepted-file.v1')
-    stored, authority, _, _ = _accepted(store, run_id, step_id)
+            accepted_step_digest(stored), sha, digest(stored.verification.to_dict()), 'accepted-file.v1'), stored
+    stored, authority, _, _ = _accepted(store, run_id, step_id, state=state, registry=registry)
     if authority.record['schema_version'] != 2:
         raise AuthorityError('Historical execution requires reusable schema-2 authority.')
     from agent.tools.scientific_authority import qualified_port
     if not qualified_port(stored.tool_name, port_name, registry):
         raise AuthorityError('Historical output port lacks owner-qualified scientific authority.')
-    port = source_port(registry, stored.tool_name, port_name)
     if any(m.field_name not in stored.result for m in port.members):
         raise AuthorityError('Historical output is missing a semantic member.')
     return PriorOutputBinding(run_id, step_id, stored.tool_name, port_name, port.semantic_type,
-        accepted_step_digest(stored), authority.record['manifest_sha256'], authority.identity_sha256)
+        accepted_step_digest(stored), authority.record['manifest_sha256'], authority.identity_sha256), stored
 
 
 def validate_binding(binding, *, store=None, registry=None, integrity=False):
     from .registry import build_default_tool_registry
     store = required_store() if store is None else store
     registry = build_default_tool_registry() if registry is None else registry
-    if bind_output(store, registry, binding.run_id, binding.step_id, binding.source_port) != binding:
+    actual, stored = _bound_output(store, registry, binding.run_id, binding.step_id, binding.source_port)
+    if actual != binding:
         raise AuthorityError('Historical output anchor, publication, or authority changed.')
     if binding.verification_mode == 'accepted-file.v1':
         port = source_port(registry, binding.tool_name, binding.source_port)
-        stored = next(s for s in store.load(binding.run_id).steps if s.step_id == binding.step_id)
         from pathlib import Path
         try:
             with Path(stored.result[port.members[0].field_name]).open('rb') as stream:
@@ -133,9 +137,8 @@ def validate_binding(binding, *, store=None, registry=None, integrity=False):
             raise AuthorityError('Accepted file is unavailable.') from exc
     elif integrity:
         from .verification_authority import _load_context
-        _load_context(store, binding.run_id, 'historical_verified_sources.v1').validate_anchors()
-    state = store.load(binding.run_id)
-    return next(s for s in state.steps if s.step_id == binding.step_id)
+        _load_context(store, binding.run_id, 'historical_verified_sources.v1')
+    return stored
 
 
 def resolve(reference):

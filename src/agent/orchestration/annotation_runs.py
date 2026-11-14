@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
+from functools import wraps
 
 from agent.schemas import AgentPlan, AgentRequest, PlanStep, RunLifecycleStatus, StepStatus, TraceEventType, fingerprint_plan
 from agent.schemas.orchestration import _serialize
@@ -30,6 +32,13 @@ _TERMINAL = frozenset({RunLifecycleStatus.FAILED, RunLifecycleStatus.INTERRUPTED
 
 class AnnotationCheckpointError(RunStoreError):
     """A progress write failed; do not classify it as a scientific failure."""
+
+
+class AnnotationChildError(RuntimeError):
+    """Carry the child's already classified public error to its parent."""
+    def __init__(self, error):
+        self.error = error
+        super().__init__(error.message)
 
 
 @dataclass(frozen=True)
@@ -208,6 +217,14 @@ def tool_scope(plan, step, arguments, run_id, emit, *, required=False):
         _INVOCATION.reset(token)
 
 
+def _serialized(function):
+    @wraps(function)
+    def call(self, *args, **kwargs):
+        with self._lock:
+            return function(self, *args, **kwargs)
+    return call
+
+
 class _AnnotationInvocation:
     def __init__(self, runtime, plan, step, arguments, run_id, emit):
         self._runtime, self._step, self._plan = runtime, step, plan
@@ -216,9 +233,9 @@ class _AnnotationInvocation:
         self._spec = runtime.registry.get(step.tool_name)
         self._identity = execution_identity(run_id, plan, step, self._spec)
         self._active = True
-        self._busy = False
+        self._lock = RLock()
+        self._running = set()
         self._completed = {}
-        self._reuse = {}
         self._reservations, ancestors = _reservation_history(self._store, self._store.load(run_id), step.step_id)
         for state in ancestors:
             # A failed parent DAG can contain accepted prerequisite steps. Its
@@ -251,6 +268,7 @@ class _AnnotationInvocation:
         _verified_child_anchor(self._runtime, child, plan)
         return reservation
 
+    @_serialized
     def _checkpoint(self, event, **details):
         try:
             self._emit(dict(schema=_SCHEMA, event=event, **details))
@@ -265,10 +283,62 @@ class _AnnotationInvocation:
             raise RuntimeError('Annotation invocation is outside its execution scope.')
         cancellation_checkpoint()
 
+    def map_branches(self, function, items):
+        """One breadth-first wave, ordered aggregation and separate branch proofs.
+
+        Runtime/RunStore still own each child. All submitted siblings settle even
+        on failure, preserving their accepted evidence before parent failure.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+        from contextvars import copy_context
+        from agent.tools._native_process import resource_capacity
+        from agent.tools._cancellation import cancellation_scope, _check
+        from agent.tools.data.authority_context import snapshot_worker_context, restore_worker_context
+        from .prior_outputs import merge_context
+        items = list(items)
+        if not items:
+            return []
+        workers = min(len(items), resource_capacity())
+        if workers <= 1:
+            return [function(item) for item in items]
+        parent_context = current()
+        # Clone once before submission; threads never mutate the parent's proofs.
+        snapshot = snapshot_worker_context(parent_context)
+        parent_anchors = None if parent_context is None else parent_context.validate_anchors
+        cancelled = _check.get()
+        def check():
+            with self._lock:
+                return False if cancelled is None else cancelled()
+        def work(item):
+            context = restore_worker_context(snapshot)
+            if parent_anchors is not None:
+                context.validate_anchors = parent_anchors
+                context.defer_hash_cancellation = parent_context.defer_hash_cancellation
+            with authority_operation(context), cancellation_scope(check):
+                result = function(item)
+                return result, context
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='annotation-branch') as pool:
+            futures = [pool.submit(copy_context().run, work, item) for item in items]
+            results, contexts, errors = [], [], []
+            for future in futures:
+                try:
+                    result, context = future.result()
+                    results.append(result); contexts.append(context)
+                except BaseException as exc:
+                    errors.append(exc)
+            # Wait for every sibling before restoring parent execution/publication.
+        for context in contexts:
+            if parent_context is not None:
+                merge_context(parent_context, context)
+        if errors:
+            raise errors[0]
+        return results
+
     def _require_complete(self):
         if set(self._completed) != set(self._reservations):
             raise RuntimeError('Annotation has unfinished reserved children.')
 
+    @_serialized
     def output(self, branch_id, operation_id, port_name):
         """An existing PriorOutputBinding, scoped to an observed verified child."""
         self.check_cancelled()
@@ -280,6 +350,7 @@ class _AnnotationInvocation:
         self.check_cancelled()
         return dict(store=self._store, registry=self._runtime.registry)
 
+    @_serialized
     def input_binding(self, name):
         """Return an exact captured historical input, never infer one from a path."""
         self.check_cancelled()
@@ -300,7 +371,8 @@ class _AnnotationInvocation:
         validate_binding(reference.binding, **self.evidence_context(), integrity=True)
         return reference.binding
 
-    def invoke(self, *, branch_id, operation_id, tool_name, arguments=None, parent_inputs=None):
+    @_serialized
+    def _prepare_child(self, *, branch_id, operation_id, tool_name, arguments=None, parent_inputs=None):
         """One finite registered operation; parameters are passed exactly.
 
         Non-parameter inputs must explicitly name a captured parent argument or
@@ -308,8 +380,6 @@ class _AnnotationInvocation:
         The caller cannot allocate Run IDs or output paths.
         """
         self.check_cancelled()
-        if self._busy:
-            raise RuntimeError('Annotation children must execute sequentially.')
         if not all(isinstance(v, str) and v.strip() for v in (branch_id, operation_id)):
             raise ValueError('Child branch and operation identities must be nonempty.')
         if tool_name not in self._spec.annotation_children:
@@ -322,12 +392,16 @@ class _AnnotationInvocation:
         if 'output_dir' in args or 'output_dir' in sources or set(args) & set(sources):
             raise ValueError('Child destination is managed; input bindings cannot overlap.')
         from agent.schemas import StepOutputRef
-        allowed = {self.input_binding(name) for name, r in self._step.arguments.items()
-                   if isinstance(r, (PriorOutputRef, StepOutputRef))}
         dependencies = []
         for name, value in args.items():
             if isinstance(value, PriorOutputRef):
                 binding = value.binding
+                # Captured paths can come through descriptive inspection without
+                # granting accepted authority. Resolve only the producer whose
+                # scientific binding is actually being used by this child.
+                allowed = {self.input_binding(parent_name) for parent_name, ref in self._step.arguments.items()
+                    if isinstance(ref, PriorOutputRef) or (isinstance(ref, StepOutputRef)
+                        and ref.step_id == binding.step_id and binding.run_id == self._run_id)}
                 child = next((key for key, (rid, anchor) in self._completed.items()
                               if rid == binding.run_id and anchor == binding.accepted_step_sha256), None)
                 if binding not in allowed and child is None:
@@ -354,6 +428,8 @@ class _AnnotationInvocation:
                 raise AuthorityError('Captured parent input ports must be passed atomically.')
         operation = dict(tool_name=tool_name, arguments=_serialize(args), parent_inputs=sources)
         key = (branch_id, operation_id)
+        if key in self._running:
+            raise RuntimeError('The exact annotation operation is already active.')
         reservation = self._reservations.get(key)
         if reservation is None:
             reservation = self._editable_reservation(key, operation)
@@ -387,7 +463,20 @@ class _AnnotationInvocation:
             raise AuthorityError('Reserved child operation or exact inputs changed.')
         request, plan = _reserved_plan(reservation)
         run_id = request.request_id + ':run'
-        self._busy = True
+        self._running.add(key)
+        return key, request, plan
+
+    def invoke(self, **kwargs):
+        key, request, plan = self._prepare_child(**kwargs)
+        try:
+            return self._execute_child(key, request, plan)
+        finally:
+            with self._lock:
+                self._running.remove(key)
+
+    def _execute_child(self, key, request, plan):
+        branch_id, operation_id = key
+        run_id = request.request_id + ':run'
         child_token = _CHILD.set((self._run_id, current(), self))
         try:
             # Neither child execution nor recovery may borrow the parent's mutable
@@ -411,13 +500,15 @@ class _AnnotationInvocation:
                     anchor = _verified_child_anchor(self._runtime, saved, plan)
         finally:
             _CHILD.reset(child_token)
-            self._busy = False
         self._checkpoint('outcome', branch_id=branch_id, operation_id=operation_id, child_run_id=run_id,
                          status=saved.lifecycle_status.value, accepted_step_sha256=anchor)
         if anchor is None:
             self.check_cancelled()
+            if saved.steps and saved.steps[0].error is not None:
+                raise AnnotationChildError(saved.steps[0].error)
             raise RuntimeError('Annotation child did not succeed: ' + saved.lifecycle_status.value)
-        self._completed[key] = (run_id, anchor)
+        with self._lock:
+            self._completed[key] = (run_id, anchor)
         return result
 
 
@@ -428,25 +519,38 @@ def progress_view(store, state, step_id):
         return None
     context = {}
     children = {}
+    outcomes = {row['child_run_id']: row for row in events if row.get('event') == 'outcome'}
     for row in events:
         if row.get('event') == 'branch':
             context.update({k:v for k,v in row.items() if k not in ('schema','event')})
         if row.get('event') == 'reserved':
             rid = row['request']['request_id'] + ':run'
-            try:
-                child = store.load(rid)
-                status = child.lifecycle_status.value
-            except RunNotFoundError:
-                status = 'PENDING'
+            if rid in outcomes:
+                status = outcomes[rid]['status']
+            else:
+                try:
+                    child = store.load(rid)
+                    status = child.lifecycle_status.value
+                except RunNotFoundError:
+                    status = 'PENDING'
             children[rid] = dict(branch_id=row['branch_id'],operation_id=row['operation_id'],
                 function_name=row['plan']['steps'][0]['arguments'].get('function_name'), status=status)
+    # Exact continuation may reuse ancestor reservations. Its own durable
+    # outcomes still identify every completed child, without reopening them.
+    for rid, row in outcomes.items():
+        if rid not in children:
+            children[rid] = dict(branch_id=row['branch_id'], operation_id=row['operation_id'],
+                                 function_name=None, status=row['status'])
     rows = list(children.values())
     parent = next((s for s in state.steps if s.step_id==step_id),None)
+    completed = parent is not None and parent.status is StepStatus.SUCCEEDED
+    continued = next((row for row in events if row.get('event') == 'continued'), None)
     if parent is not None and parent.status.value in ('FAILED','CANCELLED','INTERRUPTED'):
         context['outcome'] = parent.status.value.lower()
     return dict(context, completed_children=sum(r['status']=='SUCCEEDED' for r in rows),
         known_children=len(rows), running=[r for r in rows if r['status']=='RUNNING'],
-        children=rows[-50:], children_omitted=max(0,len(rows)-50), future_total_known=False)
+        children=rows[-50:], children_omitted=max(0,len(rows)-50), future_total_known=completed,
+        **({'continued_from_run_id': continued['previous_run_id']} if continued else {}))
 
 
 def allows_prerequisite(store, run_id, step_id, loading=()):

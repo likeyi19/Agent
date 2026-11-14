@@ -220,3 +220,21 @@ def test_serialization_returns_fresh_mutable_data() -> None:
     first["inputs"]["nested"]["value"] = 2
 
     assert request.to_dict()["inputs"]["nested"]["value"] == 1
+
+
+def test_scalar_serialization_preserves_enum_conversion_models_and_validation():
+    from enum import Enum
+    from agent.schemas.orchestration import _serialize, freeze_json_mapping
+    from agent.schemas.verification_authority import digest
+    class IntegerEnum(int, Enum):
+        VALUE = 2
+    class StringEnum(str, Enum):
+        VALUE = 'recorded'
+    value = freeze_json_mapping(dict(parameters=[None,True,1,2.5,'native',IntegerEnum.VALUE,StringEnum.VALUE]),'native')
+    expected = dict(parameters=[None,True,1,2.5,'native',2,'recorded'])
+    assert _serialize(value) == expected
+    assert type(_serialize(IntegerEnum.VALUE)) is int
+    assert type(_serialize(StringEnum.VALUE)) is str
+    assert digest(value) == digest(expected)
+    for invalid in (float('nan'),float('inf'),float('-inf')):
+        with pytest.raises(ValueError,match='non-finite'): _serialize(invalid)

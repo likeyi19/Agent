@@ -19,9 +19,9 @@ def _qualified_records(store, run_id):
     return {} if loader is None else loader(run_id)
 
 
-def _accepted_step(store, run_id, step_id):
+def _accepted_step(store, run_id, step_id, *, state=None):
     """Read the accepted execution anchor without granting artifact authority."""
-    state = store.load(run_id)
+    state = store.load(run_id) if state is None else state
     if state.run_id != run_id or state.plan is None:
         raise AuthorityError('Missing accepted execution.')
     steps = [s for s in state.steps if s.step_id == step_id]
@@ -38,9 +38,10 @@ def _accepted_step(store, run_id, step_id):
     return stored, step, state
 
 
-def _accepted(store, run_id, step_id):
-    stored, step, state = _accepted_step(store, run_id, step_id)
-    spec = build_default_tool_registry().get(step.tool_name)
+def _accepted(store, run_id, step_id, *, state=None, registry=None):
+    stored, step, state = _accepted_step(store, run_id, step_id, state=state)
+    registry = build_default_tool_registry() if registry is None else registry
+    spec = registry.get(step.tool_name)
     identity = execution_identity(run_id, state.plan, step, spec)
     original = stored.verification.artifact_authority
     qualified = _qualified_records(store, run_id).get(step_id)
@@ -54,19 +55,21 @@ def _accepted(store, run_id, step_id):
             raise AuthorityError('Qualification conflicts with existing current authority.')
     if original is None and qualified is None:
         raise AuthorityError('No recorded scientific authority; legacy qualification is not implicit.')
-    authority = VerifiedArtifactAuthority(qualified if qualified is not None else original)
+    authority = previous if qualified is None else VerifiedArtifactAuthority(qualified)
     if qualified is not None and authority.record['schema_version'] != 2:
         raise AuthorityError('Qualification requires current scientific authority.')
     if authority.record['schema_version'] == 1:
         contract_for_tool(step.tool_name).require(authority)
     else:
         from agent.tools.scientific_authority import supports_tool
-        if not supports_tool(step.tool_name):
+        if not supports_tool(step.tool_name, registry):
             raise AuthorityError('Unsupported scientific authority contract.')
     if authority.record['execution_identity'] != identity:
         raise AuthorityError('Authority belongs to a different execution.')
     # Bind handle to the entire accepted step, not only its mutable artifact paths.
-    return stored, authority, identity, digest({'step': stored.to_dict(), 'authority': authority.to_dict()})
+    # canonical() already serializes these immutable models. Materializing two
+    # complete dictionaries first traversed large native parameter arrays twice.
+    return stored, authority, identity, digest({'step': stored, 'authority': authority.record})
 
 
 def load_fragment_authority(store, run_id, step_id, *, source_policy=None):
@@ -116,7 +119,7 @@ def _load_context(store, run_id, source_policy):
         if (step.step_id not in qualified
                 and (step.verification is None or step.verification.artifact_authority is None)):
             continue
-        stored, authority, identity, anchor = _accepted(store, run_id, step.step_id)
+        stored, authority, identity, anchor = _accepted(store, run_id, step.step_id, state=state)
         if authority.record['schema_version'] != 2:
             continue  # no implicit upgrade of .1 or legacy verification
         record = authority.record
@@ -137,8 +140,6 @@ def _load_context(store, run_id, source_policy):
                 raise AuthorityError('Current source bytes differ from historical verified identity.')
         kind = tool_kind(stored.tool_name)
         description, key = context.describe(kind, Path(record['publication_path']), record['manifest_sha256'])
-        if _accepted(store, run_id, stored.step_id)[3] != anchor:
-            raise AuthorityError('Accepted verification anchor changed.')
         context.proofs[key] = ScientificProof(key, kind, freeze_json_mapping(description, 'proof'),
                                             record['resources']['result_metadata'])
         context.locations[kind, record['publication_path']] = (key, record['manifest_sha256'])
@@ -175,7 +176,7 @@ def load_scientific_authority(store, run_id, step_id, *, source_policy='historic
             raise AuthorityError('Consumer requested a different artifact identity.')
         if producer_kind is not None and authority.record['producer_qualification'].get('kind') != producer_kind:
             raise AuthorityError('Producer qualification cannot substitute for another producer.')
-        _load_context(store, run_id, source_policy).validate_anchors()
+        _load_context(store, run_id, source_policy)
         if _accepted(store, run_id, step_id)[3] != original:
             raise AuthorityError('Accepted verification anchor changed.')
         return AuthorityValidation(authority.identity_sha256, VerificationScope.HISTORICAL_INTEGRITY)

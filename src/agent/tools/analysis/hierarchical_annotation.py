@@ -4,6 +4,7 @@ Copies the original encoded scientific slots. Only new observation columns and
 one descriptive uns field are written; neither is independent execution authority.
 """
 import os
+from copy import deepcopy
 from pathlib import Path
 import shutil
 import tempfile
@@ -16,8 +17,9 @@ from anndata.io import read_elem, write_elem
 from agent.schemas.orchestration import _serialize
 from agent.schemas.verification_authority import AuthorityError, digest
 from agent.tools._cancellation import cancellation_checkpoint
-from agent.tools._file_identity import file_closure
+from agent.tools._file_identity import file_closure, read_json
 from agent.tools.data.authority_context import current
+from agent.tools.data.scatac_matrix_contract import canonical
 from .native_publication import NativePublication
 from .sequence_prediction import arguments as path_arguments, read, write
 
@@ -30,6 +32,145 @@ RESULT_FIELDS = dict(status=(str,), contract_version=(str,), n_cells=(int,), n_b
     population_summary=(list,), inherited_label_cells=(int,), branch_summary=(list,), branches_omitted=(int,), limitations=(str,),
     **{name + suffix: (str,) for name in ('manifest','annotated_h5ad','hierarchy','annotations','subdivisions')
        for suffix in ('_path','_sha256')})
+
+
+# Marker tables retain every tested gene in every accepted round. These
+# scientific sidecars can exceed the generic small-metadata reader's 64 MiB.
+EVIDENCE_MAX_BYTES = 512 * 1024**2
+MARKER_COLUMNS = ('feature', 'identity', 'exclusion_reason', 'score', 'pvalue',
+                  'pvalue_adj', 'positive', 'detection_fractions')
+DIFFERENTIAL_COLUMNS = ('feature name', 'log2(fold_change)', 'p-value', 'adjusted p-value')
+BACKGROUND_FIELDS = ('tested_features', 'universe', 'reference', 'candidates')
+
+
+def _statistical_table(rows, columns):
+    fields = set(columns)
+    if any(set(row) != fields for row in rows):
+        raise AuthorityError('Unexpected statistical table fields')
+    return dict(columns=list(columns), rows=[[row[k] for k in columns] for row in rows])
+
+
+def _statistical_records(table, columns=None):
+    if columns is None and isinstance(table, dict):
+        columns = table.get('columns')
+    if (not isinstance(table, dict) or set(table) != {'columns', 'rows'}
+            or not isinstance(columns, (tuple, list)) or len(set(columns)) != len(columns)
+            or table['columns'] != list(columns) or not isinstance(table['rows'], list)
+            or any(not isinstance(row, list) or len(row) != len(columns) for row in table['rows'])):
+        raise AuthorityError('Invalid annotation statistical table')
+    return [dict(zip(columns, row)) for row in table['rows']]
+
+
+def annotation_tables(annotations):
+    """Self-contained marker tables: name each column once, retain every row.
+
+    This changes storage only. Rankings, repeated feature names, fraction arrays
+    and all native statistical values keep their original order and precision.
+    No external publication is needed to interpret the downloaded tables.
+    """
+    rounds, backgrounds = {}, []
+    for key, value in annotations.items():
+        background = {k: value[k] for k in BACKGROUND_FIELDS if k in value}
+        encoded = canonical(background)
+        index = next((i for i, row in enumerate(backgrounds) if canonical(row) == encoded), None)
+        if index is None:
+            index = len(backgrounds)
+            backgrounds.append(background)
+        clusters = []
+        for cluster in value['clusters']:
+            markers = cluster['markers']
+            table = _statistical_table(markers, MARKER_COLUMNS)
+            clusters.append(dict(cluster, markers=table))
+        rounds[key] = dict({k: v for k, v in value.items() if k not in BACKGROUND_FIELDS},
+            schema='marker-candidates.v2', background=index, clusters=clusters)
+    return dict(schema='annotation-evidence.v1', shared_backgrounds=backgrounds, rounds=rounds)
+
+
+def annotation_records(annotations):
+    """Read current column tables and the preserved accepted v1 row evidence."""
+    if annotations.get('schema') == 'annotation-evidence.v1':
+        backgrounds = annotations['shared_backgrounds']
+        restored = {}
+        for key, row in annotations['rounds'].items():
+            index = row['background']
+            if type(index) is not int or not 0 <= index < len(backgrounds):
+                raise AuthorityError('Invalid annotation background index')
+            restored[key] = dict(deepcopy(backgrounds[index]), **{k: v for k, v in row.items() if k != 'background'})
+        annotations = restored
+    rounds = {}
+    for key, value in annotations.items():
+        if not isinstance(value, dict) or value.get('schema') != 'marker-candidates.v2':
+            rounds[key] = value  # Historical accepted row representation.
+            continue
+        clusters = []
+        for cluster in value['clusters']:
+            table = cluster['markers']
+            clusters.append(dict(cluster, markers=_statistical_records(table, MARKER_COLUMNS)))
+        rounds[key] = dict(value, schema='marker-candidates.v1', clusters=clusters)
+    return rounds
+
+
+def _native_parameters(native, *, encode):
+    """Keep repeated explicit arrays once in this native record's kwargs.
+
+    Effective parameters name the inherited arrays and retain their other
+    values directly. Both requested and effective values remain in this record.
+    """
+    parameters = native.get('parameters', {})
+    effective = parameters.get('effective_native_parameters', {})
+    kwargs = parameters.get('kwargs', {})
+    if encode:
+        shared = [key for key, value in effective.items()
+                  if isinstance(value, list) and key in kwargs and canonical(value) == canonical(kwargs[key])]
+        if not shared:
+            return native
+        effective = dict(schema='effective-parameters.from-kwargs.v1', from_kwargs=shared,
+                         values={k: v for k, v in effective.items() if k not in shared})
+    elif effective.get('schema') == 'effective-parameters.from-kwargs.v1':
+        effective = dict(effective['values'], **{k: deepcopy(kwargs[k]) for k in effective['from_kwargs']})
+    else:
+        return native
+    return dict(native, parameters=dict(parameters, effective_native_parameters=effective))
+
+
+def scientific_evidence(value, name, *, encode=False):
+    """The annotation owner's three self-contained sidecar representations."""
+    if name == 'annotations.json':
+        return annotation_tables(value) if encode else annotation_records(value)
+    def native(row):
+        return dict(row, native_result=_native_parameters(row['native_result'], encode=encode)) if 'native_result' in row else row
+    if name == 'hierarchy.json':
+        updates = {}
+        if 'input_results' in value:
+            updates['input_results'] = [_native_parameters(r, encode=encode) for r in value['input_results']]
+        if 'operations' in value:
+            updates['operations'] = [native(r) for r in value['operations']]
+        return dict(value, **updates)
+    decisions = {}
+    for key, decision in value.items():
+        if not isinstance(decision, dict) or 'children' not in decision:
+            decisions[key] = decision
+            continue
+        children = []
+        for child in decision['children']:
+            if 'differential' in child:
+                differential = native(child['differential'])
+                rows = differential['rows']
+                rows = _statistical_table(rows, tuple(rows[0]) if rows else DIFFERENTIAL_COLUMNS) if encode else (
+                    _statistical_records(rows) if isinstance(rows, dict) else rows)
+                child = dict(child, differential=dict(differential, rows=rows))
+            children.append(child)
+        decisions[key] = dict(decision, parent=native(decision['parent']),
+            local_steps=[native(r) for r in decision['local_steps']], children=children)
+    return decisions
+
+
+def read_evidence(path, sha):
+    """Read one pinned hierarchical sidecar under its explicit storage bound."""
+    if Path(path).name not in FILES[1:]:
+        raise ValueError('Select a hierarchical annotation evidence sidecar')
+    value = read_json(path, sha, limit=EVIDENCE_MAX_BYTES)
+    return scientific_evidence(value, Path(path).name)
 
 
 def annotation_column(name):
@@ -82,7 +223,7 @@ def observation_columns(obs, hierarchy):
         if sorted(partition) != sorted(positions):
             raise AuthorityError('Children and residual lose or duplicate parent cells')
         stop = row['stopping_reason']
-        if stop not in {'native_unassigned', 'missing_required_peak_space', 'maximum_levels',
+        if stop not in {'native_unassigned', 'maximum_levels',
                         'no_candidate_subdivision', 'no_supported_subdivision',
                         'partial_supported_subdivision', 'supported_subdivision'}:
             raise AuthorityError('Incomplete or failed branch cannot become a biological stop')
@@ -182,9 +323,9 @@ def verify_h5ad(path, hierarchy):
 class HierarchicalPublication(NativePublication):
     def verify_publication(self, path, *, expected_sha256):
         result = super().verify_publication(path, expected_sha256=expected_sha256)
-        hierarchy = read(result['hierarchy_path'], result['hierarchy_sha256'])
-        annotations = read(result['annotations_path'], result['annotations_sha256'])
-        subdivisions = read(result['subdivisions_path'], result['subdivisions_sha256'])
+        hierarchy = read_evidence(result['hierarchy_path'], result['hierarchy_sha256'])
+        annotations = read_evidence(result['annotations_path'], result['annotations_sha256'])
+        subdivisions = read_evidence(result['subdivisions_path'], result['subdivisions_sha256'])
         with h5py.File(hierarchy['source']['path'], 'r') as source:
             obs = read_elem(source['obs'])
         if (result['n_cells'] != len(obs) or result['n_branches'] != len(hierarchy['branches'])
@@ -278,7 +419,7 @@ def publish(args, execution_identity, hierarchy, annotations, subdivisions, *, r
             write_elem(handle.require_group('uns'), UNS, portable_hierarchy(hierarchy))
         verify_h5ad(target, hierarchy)
         for name, value in [('hierarchy.json', hierarchy), ('annotations.json', annotations), ('subdivisions.json', subdivisions)]:
-            write(stage / name, value)
+            write(stage / name, scientific_evidence(value, name, encode=True))
         if file_closure(sources) != pins:
             raise AuthorityError('Annotation scientific sources changed during publication')
         for name in FILES:
@@ -356,10 +497,11 @@ def presentation_data(path, sha, *, level=None):
     from agent.tools._file_identity import checked_file
     manifest, actual = publication.load(path, sha)
     pins = {Path(p['path']).name:p for p in manifest['files']}
-    for pin in pins.values():
-        checked_file(pin['path'],pin['sha256'])
-    hierarchy = read(pins['hierarchy.json']['path'],pins['hierarchy.json']['sha256'])
-    annotations = read(pins['annotations.json']['path'],pins['annotations.json']['sha256'])
+    for name, pin in pins.items():
+        if name not in ('hierarchy.json', 'annotations.json'):
+            checked_file(pin['path'],pin['sha256'])
+    hierarchy = read_evidence(pins['hierarchy.json']['path'],pins['hierarchy.json']['sha256'])
+    annotations = read_evidence(pins['annotations.json']['path'],pins['annotations.json']['sha256'])
     with h5py.File(pins['annotated.h5ad']['path'], 'r') as f:
         obs = read_elem(f['obs'])
     reached = max((r['level'] for r in hierarchy['branches']),default=0)
@@ -374,8 +516,8 @@ def presentation_data(path, sha, *, level=None):
     for row in hierarchy['branches']:
         if row['branch_id'] not in group_order:
             continue
-        annotation = annotations.get(row['annotation_round'], {})
-        cluster = next((r for r in annotation.get('clusters',[]) if r['cluster']==row['cluster']),None)
+        round_evidence = annotations.get(row['annotation_round'], {})
+        cluster = next((r for r in round_evidence.get('clusters',[]) if r['cluster']==row['cluster']),None)
         if cluster is None:
             continue
         # First positive accepted native markers, preserving recorded rank order.
@@ -393,9 +535,15 @@ def presentation_data(path, sha, *, level=None):
         # Coordinator/marker handoff proved source correspondence; keep its exact order.
         if matrix.obs_names.tolist() != obs.index.tolist():
             raise AuthorityError('Accepted activity axis differs from the original ordered cell axis')
-        genes = [g for g in genes if matrix.var_names.tolist().count(g)==1]
+        feature_names = matrix.var_names.tolist()
+        feature_counts = Counter(feature_names)
+        ambiguous = [g for g in genes if feature_counts[g] > 1]
+        genes = [g for g in genes if feature_counts[g]==1]
         selected = [r for r in selected if r['gene'] in genes]
-        values = matrix[:,genes].X if genes else np.empty((len(obs),0))
+        # AnnData label indexing requires the entire axis to be unique. The
+        # selected names already have exactly one source column; use its position.
+        positions = [feature_names.index(g) for g in genes]
+        values = matrix[:,positions].X if genes else np.empty((len(obs),0))
         if hasattr(values,'toarray'): values=values.toarray()
         values=np.asarray(values,dtype=float)
     finally:
@@ -405,15 +553,31 @@ def presentation_data(path, sha, *, level=None):
         rows = values[np.asarray([g==group for g in groups])]
         mean.append(rows.mean(axis=0).tolist());fraction.append((rows>0).mean(axis=0).tolist())
     counts=Counter(labels)
+    status_cells = Counter(obs['annotation_status']) if 'annotation_status' in obs else Counter()
+    status_populations = Counter(status for _, status in dict.fromkeys(
+        zip(obs['annotation_branch_id'], obs['annotation_status']))) if status_cells else Counter()
     sources=[dict(path=str(path),sha256=actual),*pins.values(),
         dict(path=activity['matrix_path'],sha256=activity['matrix_sha256'])]
+    branch_views = []
+    for row in hierarchy['branches'][:60]:
+        annotation = row.get('annotation')
+        status = annotation['status'] if annotation else ('unassigned' if row.get('cluster') == '-1' else 'insufficient_evidence')
+        label = annotation['preferred'][0]['cell_name'] if status == 'assigned' else None
+        branch_views.append(dict({k: row[k] for k in ('branch_id','parent','level','n_cells','stopping_reason')},
+                                 label=label, status=status))
     return dict(cells=obs.index.tolist(),labels=labels,groups=groups,group_order=group_order,
         group_counts=[groups.count(g) for g in group_order],groups_omitted=max(0,len(set(groups)-{None})-len(group_order)),
         genes=genes,mean_activity=mean,fraction_positive=fraction,per_cell_activity=values.tolist(),
         selected_marker_sources=selected,marker_selection='First two positive accepted native markers per displayed branch in recorded rank order; at most 12 distinct genes and 30 branches.',
+        ambiguous_marker_names=ambiguous,
         measurement='Accepted Gene Activity X; accessibility-derived, not measured RNA expression',
-        composition=[dict(label=k,n_cells=v) for k,v in counts.items()], source_sha256=hierarchy['source']['sha256'],
+        composition=[dict(label=k,n_cells=v) for k,v in counts.items()],
+        population_summary=[dict(status=status, cells=status_cells[status], populations=status_populations[status])
+            for status in ('assigned','ambiguous','unresolved','insufficient_evidence','unassigned')] if status_cells else [],
+        inherited_label_cells=int(sum(pd.notna(label) and status != 'assigned'
+            for label, status in zip(obs['cell_type_final'], obs['annotation_status']))) if 'annotation_status' in obs else 0,
+        source_sha256=hierarchy['source']['sha256'],
         sources=sources,level=level,levels_reached=reached,
         coordinate_source_sha256s=[hierarchy['source']['sha256'],*(r['matrix_sha256'] for r in hierarchy['input_results'][:-1])],
-        branches=[{k:r[k] for k in ('branch_id','parent','level','n_cells','stopping_reason')} for r in hierarchy['branches'][:60]],
+        branches=branch_views,
         branches_omitted=max(0,len(hierarchy['branches'])-60))

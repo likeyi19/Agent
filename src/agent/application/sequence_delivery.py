@@ -108,18 +108,34 @@ def prepare(stream, role):
                       + '\n' + str(r.seq) + '\n' for i,r in enumerate(records)).encode()
     elif role == 'metadata.json':
         import json
-        def public(value):
-            if isinstance(value, dict):
-                return {k:public(v) for k,v in value.items() if not (k == 'path' or k.endswith('_path'))}
-            if isinstance(value, list):
-                return [public(v) for v in value]
-            if isinstance(value, str) and _unsafe_fact_value(value):
-                return '[private label omitted]'
-            return value
-        raw = json.dumps(public(json.loads(raw)),ensure_ascii=False,sort_keys=True,allow_nan=False).encode()
+        raw = metadata_bytes(json.loads(raw))
     elif role not in FILES:
         raise ValueError('Unknown sequence delivery role')
     return raw
+
+
+def metadata_bytes(value):
+    """The shared metadata privacy projection for an already decoded value."""
+    import json
+    from .dialogue_evidence import _unsafe_fact_value
+    def private_key(key):
+        return key == 'path' or key.endswith('_path')
+    def public(value):
+        if isinstance(value, dict):
+            if (set(value) == {'columns', 'rows'} and isinstance(value['columns'], list)
+                    and all(isinstance(k, str) for k in value['columns'])):
+                selected = [i for i, key in enumerate(value['columns']) if not private_key(key)]
+                return dict(columns=[value['columns'][i] for i in selected],
+                            rows=[[public(row[i]) for i in selected] for row in value['rows']])
+            if value.get('schema') == 'effective-parameters.from-kwargs.v1':
+                value = dict(value, from_kwargs=[k for k in value['from_kwargs'] if not private_key(k)])
+            return {k:public(v) for k,v in value.items() if not private_key(k)}
+        if isinstance(value, list):
+            return [public(v) for v in value]
+        if isinstance(value, str) and _unsafe_fact_value(value):
+            return '[private label omitted]'
+        return value
+    return json.dumps(public(value),ensure_ascii=False,sort_keys=True,allow_nan=False).encode()
 
 
 def accepted_figures(sessions, turn, revision):

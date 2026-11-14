@@ -35,7 +35,7 @@ CAPABILITY_DESCRIPTIONS = MappingProxyType({
         "Adopt an external exact canonical cell-by-cCRE matrix; ordinary cell-by-peak projection is unsupported."
     ),
     "marker_annotation": (
-        "Automatic hierarchical scATAC annotation using accepted native clustering, Gene Activity, Scanpy Wilcoxon/BH, CellMarker 3.0 exact matching and ORA, local peak-space SnapATAC2 subdivision and differential peak evidence. Reuse compatible accepted sources; the Planner arranges missing registered prerequisites. Gene-only sources can annotate current groups without peak subdivision. Computational labels are not biological validation."
+        "Automatic hierarchical scATAC annotation using accepted native clustering, Gene Activity, Scanpy Wilcoxon/BH, CellMarker 3.0 exact matching and ORA, local peak-space SnapATAC2 subdivision and differential peak evidence. Reuse compatible accepted sources; the Planner arranges missing registered prerequisites. The intended input is cell-by-peak accessibility. Branches below the depth budget reach native analysis without an Agent feature-space eligibility gate; native errors remain visible. Computational labels are not biological validation."
     ),
 })
 

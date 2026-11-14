@@ -6,6 +6,7 @@ or biological validity. Native consumers retain scientific qualification.
 import anndata as ad
 from pathlib import Path
 import pandas as pd
+import numpy as np
 from agent.tools import _file_identity as science
 from . import peak_h5ad
 
@@ -32,7 +33,13 @@ def _observe(path, sha256):
                    if not a.obs[name].isna().any() and 1 < a.obs[name].nunique() < len(a.obs)
                    and (isinstance(a.obs[name].dtype, pd.CategoricalDtype)
                         or a.obs[name].dtype.kind in 'Obiu')]
-        return dict(interface_version=5, source_sha256=sha256, declarations=declarations,
-                    grouping_columns=columns)
+        coordinates = a.obsm.get('X_umap')
+        compatible_umap = (coordinates is not None and coordinates.ndim == 2
+            and coordinates.shape == (a.n_obs, 2)
+            and coordinates.dtype.kind in 'fi' and np.isfinite(coordinates).all())
+        from .embedding_analysis import _cell_order_digest
+        return dict(interface_version=6, source_sha256=sha256, declarations=declarations,
+                    grouping_columns=columns, compatible_umap=bool(compatible_umap),
+                    cell_order_sha256=_cell_order_digest(a.obs_names.tolist()))
     finally:
         a.file.close()

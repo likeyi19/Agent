@@ -13,7 +13,7 @@ from agent.orchestration.prior_outputs import validate_binding
 from agent.schemas.orchestration import _serialize, StepOutputRef
 from agent.schemas.prior_output import PriorOutputBinding, PriorOutputRef
 from agent.schemas.verification_authority import AuthorityError
-from agent.tools._file_identity import snapshots, unchanged
+from agent.tools._file_identity import snapshots, unchanged, file_closure
 from .cell_result import describe
 
 LOCAL_METHODS = ('snapatac2.pp.select_features', 'snapatac2.tl.spectral',
@@ -23,57 +23,6 @@ LOCAL_METHODS = ('snapatac2.pp.select_features', 'snapatac2.tl.spectral',
 def _read(binding, store, registry):
     step = validate_binding(binding, store=store, registry=registry, integrity=True)
     return step, _serialize(step.result)
-
-
-def _peak_source(binding, parent, store):
-    """Read peak origin in the existing authority closure; do not infer from genes."""
-    # Measurement units do not identify a feature space. The existing native
-    # publication keeps source metadata and explicit supplied declarations apart
-    # from the effective measurement (e.g. binary accessibility/fragment counts).
-    if binding is None:
-        from .native_gene_activity import source_metadata
-        from agent.tools._file_identity import checked_file
-        pin = parent['source']
-        checked_file(pin['path'], pin['sha256'])
-        metadata = source_metadata(pin['path'], {})
-        if metadata['measurement'] in {'peak_counts', 'peak_accessibility'}:
-            return dict(origin='recorded_peak_declaration', source=pin,
-                matrix_semantics=metadata['measurement'],
-                qualification='Source declaration, not independent biological validation.')
-        return None
-    rows = None
-    native, declared, seen = parent, None, set()
-    while native['matrix_sha256'] not in seen:
-        seen.add(native['matrix_sha256'])
-        if 'gene_activity' in native.get('parameters', {}):
-            return None
-        if native['function_name'] == 'snapatac2.pp.make_peak_matrix':
-            return dict(origin='accepted_native_peak_matrix', native_result=native)
-        tool = 'run_' + native['function_name'].split('.')[0]
-        descriptor = describe(tool, native)
-        if not descriptor or not descriptor['preserves_counts']:
-            return None  # Gene constructors, tiles and raw imports retain their meaning.
-        source = native['source_identity']
-        for field in ('declarations', 'supplied_declarations'):
-            semantics = source.get(field, {}).get('matrix_semantics')
-            if semantics == 'peak_counts' or semantics == 'peak_accessibility':
-                declared = dict(origin='recorded_peak_declaration', native_result=native,
-                    declaration=dict(source_sha256=source['sha256'], field=field,
-                                     matrix_semantics=semantics),
-                    qualification='Source declaration, not independent biological validation.')
-        previous = source.get('accepted_publication')
-        if previous is None:
-            return declared
-        if rows is None:
-            from agent.orchestration.verification_authority import _load_context
-            context = _load_context(store, binding.run_id, 'historical_verified_sources.v1')
-            context.validate_anchors()
-            rows = {(p.result_metadata.get('manifest_path'), p.result_metadata.get('manifest_sha256')):
-                    _serialize(p.result_metadata) for p in context.proofs.values()}
-        native = rows.get((previous['manifest_path'], previous['manifest_sha256']))
-        if native is None or native.get('matrix_sha256') != source['sha256']:
-            return None
-    return None
 
 
 def _metadata(native, *slots):
@@ -130,10 +79,14 @@ def _failed_step(locator, source_binding, source, function, store):
 def differential_kwargs(local_binding, child, *, store, registry):
     """Derive child/rest positions from the actual accepted local Leiden output."""
     _, native = _read(local_binding, store, registry)
-    descriptor = describe(local_binding.tool_name, native)
+    obs, = _metadata(native, 'obs')
+    return _comparison(native, child, obs)
+
+
+def _comparison(native, child, obs):
+    descriptor = describe('run_snapatac2', native)
     if native['function_name'] != LOCAL_METHODS[-1] or not descriptor or not descriptor['grouping']:
         raise ValueError('Select an accepted native local Leiden grouping.')
-    obs, = _metadata(native, 'obs')
     labels = obs[descriptor['grouping']].tolist()
     if child == '-1':
         raise ValueError('SnapATAC2 -1 denotes unassigned cells, not a candidate child.')
@@ -141,6 +94,83 @@ def differential_kwargs(local_binding, child, *, store, registry):
         raise ValueError('Child is absent from the accepted local grouping.')
     return dict(cell_group1=[i for i, label in enumerate(labels) if label == child],
                 cell_group2=[i for i, label in enumerate(labels) if label != child], direction='positive')
+
+
+def testable_features(matrix, cells, names, features=None):
+    """ICTA-only preparation for installed SnapATAC2's sparse binary response.
+
+    SnapATAC2 sets every stored CSC value to one, including explicitly stored
+    zeros. Preserve that response exactly; do not alter X or its library sizes.
+    """
+    selected = _feature_positions(names, features)
+    testable, provenance = _testable_response(matrix, cells)
+    return [i for i in selected if testable[i]], dict(provenance,
+        available_feature_count=len(names), selected_feature_count=len(selected),
+        testable_feature_count=sum(bool(testable[i]) for i in selected))
+
+
+def _feature_positions(names, features):
+    from numbers import Integral
+    selected = list(range(len(names))) if features is None else _positions(list(features), names)
+    if any(isinstance(i, bool) or not isinstance(i, Integral) or not -len(names) <= i < len(names) for i in selected):
+        raise ValueError('Differential features must select existing feature positions.')
+    return [int(i) for i in selected]
+
+
+def _testable_response(matrix, cells):
+    import numpy as np
+    from scipy import sparse
+    response = sparse.csc_matrix(matrix[cells, :], copy=True)
+    response.data = np.ones(response.data.shape)
+    response.sum_duplicates()
+    detected = np.diff(response.indptr)
+    # Duplicate sparse entries can produce nonbinary native responses. They are
+    # not silently repaired or excluded by this binary-constant correction.
+    ones = np.asarray((response == 1).sum(axis=0)).ravel()
+    constant_zero = detected == 0
+    constant_one = ones == len(cells)
+    return ~(constant_zero | constant_one), dict(constant_zero_feature_count=int(constant_zero.sum()),
+        constant_one_feature_count=int(constant_one.sum()),
+        response='Installed SnapATAC2 CSC stored values replaced by one on comparison cells',
+        multiple_testing='Native BH over features passing native min_pct and min_log_fc after this selection; not the original feature universe')
+
+
+def prepare_differential(local_binding, child, kwargs, *, store, registry):
+    """Exact accepted child/rest population; only the native features argument changes."""
+    return differential_preparer(local_binding, store=store, registry=registry)(child, kwargs)
+
+
+def differential_preparer(local_binding, *, store, registry):
+    """Prepare one exact parent axis for its child-versus-all-rest comparisons.
+
+    Every comparison partitions this entire axis. Binary constant-feature counts
+    are invariant to that partition's row ordering. Feature selectors and other
+    kwargs remain per operation, including explicit result-edit overrides.
+    """
+    _, native = _read(local_binding, store, registry)
+    before = snapshots([native['matrix_path']])
+    obs, var, matrix = _metadata(native, 'obs', 'var', 'X')
+    testable, facts = _testable_response(matrix, list(range(len(obs))))
+    names = var.index.tolist()
+    def prepare(child, kwargs):
+        nonlocal before
+        try:
+            unchanged(before)
+        except AuthorityError:
+            # A timestamp/inode change invalidates reuse, not scientific input
+            # legality. Recheck exact bytes; identical replacements remain valid.
+            if file_closure([native['matrix_path']])[0]['sha256'] != native['matrix_sha256']:
+                raise AuthorityError('Accepted differential source changed')
+            before = snapshots([native['matrix_path']])
+        comparison = _comparison(native, child, obs)
+        selected = _feature_positions(names, kwargs.get('features'))
+        features = [i for i in selected if testable[i]]
+        provenance = dict(facts, available_feature_count=len(names), selected_feature_count=len(selected),
+            testable_feature_count=len(features), source_binding=local_binding.to_dict(),
+            source_sha256=native['matrix_sha256'], comparison=comparison,
+            cell_ids=obs.index[comparison['cell_group1'] + comparison['cell_group2']].tolist())
+        return dict(kwargs, **comparison, features=features), provenance
+    return prepare
 
 
 def _qualifying(rows, alpha):
@@ -213,18 +243,13 @@ def assess_subdivision(parent_binding, local_bindings=(), differentials=None, *,
         parent_record = dict(binding=None, source_grouping=source_grouping)
         descriptor = dict(preserves_counts=True, grouping=source_grouping['groupby'])
     result = dict(schema='local-subdivision.v1', parent=parent_record,
-        local_steps=[], children=[], parent_membership=None, residual_parent=None, annotation=None, peak_source=None,
+        local_steps=[], children=[], parent_membership=None, residual_parent=None, annotation=None,
         interpretation=dict(adjusted_p_threshold=adjusted_p_threshold, minimum_peak_features=minimum_peak_features,
             rule='distinct native features with positive log2 fold change and adjusted p strictly below threshold',
             method='IDclust-inspired retention using SnapATAC2 tl.diff_test logistic regression',
             references=['10.1093/nargab/lqae174', '10.1038/s41586-023-06824-9'],
             limitation='Exploratory within-data evidence, not independent biological validation or proof of a new cell type.'),
         execution_budget=dict(default_maximum_levels=5, supplied_reason=deepcopy(budget_reason), enforced=False))
-    if descriptor and descriptor['preserves_counts'] and descriptor['grouping']:
-        result['peak_source'] = _peak_source(parent_binding, parent, store)
-    if result['peak_source'] is None:
-        result.update(outcome='missing_input', reason='Accepted original peak-accessibility population is unavailable; peak-based subdivision could not be assessed.')
-        return result
     if not local_bindings and failed_local is None:
         result.update(outcome='missing_input', reason='Accepted local native clustering evidence is unavailable.')
         return result

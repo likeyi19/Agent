@@ -156,6 +156,27 @@ def reservations(state):
     return [e.details for e in state.trace if e.event_type is TraceEventType.ANNOTATION_PROGRESS and e.details['event'] == 'reserved']
 
 
+def test_inspection_handoff_forwards_captured_bytes_without_borrowing_authority(harness, tmp_path):
+    h=harness
+    inspection=ToolSpec('inspect_fixture',lambda input_path,input_sha256:dict(data_path=input_path,data_sha256=input_sha256),
+        {'input_path':ArgumentSpec((str,)), 'input_sha256':ArgumentSpec((str,))}, {},
+        ResultContract('inspection',{'data_path':(str,), 'data_sha256':(str,)}),
+        lambda e:ErrorClassification(ErrorCategory.TOOL_EXECUTION_ERROR,'FIXTURE_FAILURE'),
+        semantic_planning=SemanticToolSpec(producer_ports=(SemanticProducerPortSpec('dataset','fixture.data.v1',
+            (SemanticPortMember('path','data_path'),SemanticPortMember('sha256','data_sha256'))),)))
+    h.registry=ToolRegistry(tuple(h.registry.get(n) for n in h.registry.names())+(inspection,))
+    request,plan=h.prepare('inspected-parent')
+    parent=replace(plan.steps[0],arguments=dict(plan.steps[0].arguments,
+        input_path=StepOutputRef('inspect','data_path'),input_sha256=StepOutputRef('inspect','data_sha256')),
+        depends_on=('inspect',))
+    plan=replace(plan,steps=(PlanStep('inspect','inspect_fixture',dict(input_path=h.source,input_sha256=h.sha)),parent))
+    result=h.runtime().run_prepared(request,plan)
+    assert result.status is RunStatus.SUCCEEDED,(result.errors,h.exceptions)
+    assert h.calls[0]['input_path']==h.source and h.calls[0]['input_sha256']==h.sha
+    with pytest.raises(AuthorityError):
+        bind_output(h.store,h.registry,result.run_id,'inspect','dataset')
+
+
 def child_state(h, parent='parent-1:run'):
     row = reservations(h.store.load(parent))[0]
     return h.store.load(row['request']['request_id'] + ':run')
@@ -339,6 +360,39 @@ def test_failed_and_cancelled_children_remain_terminal(harness, cancel):
     assert h.runtime().run_prepared(*h.prepare()).status is RunStatus.FAILED
     child = child_state(h)
     assert child.lifecycle_status is (RunLifecycleStatus.CANCELLED if cancel else RunLifecycleStatus.FAILED)
+    h.child_action = None
+    assert continue_parent(h).status is RunStatus.FAILED
+    assert len(h.calls) == 1
+    assert h.store.load(child.run_id).to_dict() == child.to_dict()
+
+
+@pytest.mark.parametrize('failure', ['native_rejection', 'native_busy'])
+def test_parent_preserves_classified_native_child_failure(harness, failure):
+    from agent.orchestration.annotation_registry import classify as parent_classify
+    from agent.orchestration.native_matrix_registry import classify as native_classify
+    from agent.tools.analysis.native_matrix import NativeInvocationError
+    from agent.tools._native_process import NativeExecutionError
+    h = harness
+    h.registry = ToolRegistry((
+        replace(h.registry.get('parent'), exception_classifier=parent_classify),
+        replace(h.registry.get('child'), exception_classifier=native_classify)))
+    diagnostic = 'This solver needs samples of at least 2 classes in the data, but the data contains only one class: np.float64(1.0)'
+    def fail(*args):
+        if failure == 'native_rejection':
+            raise NativeInvocationError(diagnostic)
+        raise NativeExecutionError('NATIVE_EXECUTION_BUSY', 'A native task already occupies the slot.')
+    h.child_action = fail
+    result = h.runtime().run_prepared(*h.prepare())
+    child = child_state(h)
+    parent_error = result.steps[0].error
+    child_error = child.steps[0].error
+    assert result.status is RunStatus.FAILED
+    assert (parent_error.code, parent_error.category, parent_error.details) == (
+        child_error.code, child_error.category, child_error.details)
+    assert parent_error.message == child_error.message
+    if failure == 'native_rejection':
+        assert diagnostic in parent_error.message
+    assert result.steps[0].result is None
     h.child_action = None
     assert continue_parent(h).status is RunStatus.FAILED
     assert len(h.calls) == 1
@@ -789,3 +843,153 @@ def test_recovered_parent_requires_exact_verified_child_outcome(harness, monkeyp
     assert h.store.load('parent-1:run').lifecycle_status is RunLifecycleStatus.INTERRUPTED
     assert h.store.load(child.run_id).to_dict() == child.to_dict()
     assert len(h.calls) == 1
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_parallel_children_order_proofs_and_successful_recovery(harness, monkeypatch, reverse):
+    import time
+    h = harness
+    monkeypatch.setattr('agent.tools._native_process.resource_capacity', lambda: 2)
+    rendezvous = threading.Barrier(2)
+    completed = []
+    def child_action(args, identity):
+        label = args.get('kwargs', {}).get('branch')
+        if label is None: return
+        rendezvous.wait(timeout=10)
+        time.sleep(.02 if (label == 'a') == reverse else .06)
+        completed.append(label)
+    h.child_action = child_action
+    def parallel(inv):
+        def operation(label):
+            inv.invoke(branch_id=label, operation_id='parallel', tool_name='child',
+                arguments={'kwargs': {'branch': label}},
+                parent_inputs={'input_path':'input_path', 'input_sha256':'input_sha256'})
+            return inv.output(label, 'parallel', 'dataset')
+        bindings = inv.map_branches(operation, ['a', 'b'])
+        assert [h.store.load(b.run_id).request.inputs['branch_id'] for b in bindings] == ['a','b']
+    h.before_parent = parallel
+    first = h.runtime().run_prepared(*h.prepare())
+    assert first.status is RunStatus.SUCCEEDED, (first.errors, h.exceptions)
+    assert completed == (['a','b'] if reverse else ['b','a'])
+    before = [h.store.load(r['request']['request_id']+':run').to_dict() for r in reservations(h.store.load(first.run_id))]
+    assert h.runtime().resume(first.run_id).status is RunStatus.SUCCEEDED
+    assert len(h.calls) == 3
+    assert before == [h.store.load(r['request']['request_id']+':run').to_dict() for r in reservations(h.store.load(first.run_id))]
+
+
+@pytest.mark.parametrize('mode', ['failure','cancel','interrupt'])
+def test_parallel_sibling_lifecycle_and_no_reexecution(harness, monkeypatch, mode):
+    h = harness
+    monkeypatch.setattr('agent.tools._native_process.resource_capacity', lambda: 2)
+    rendezvous = threading.Barrier(2)
+    def child_action(args, identity):
+        label = args.get('kwargs',{}).get('branch')
+        rendezvous.wait(timeout=10)
+        if mode == 'cancel':
+            h.runtime().cancel('parent-1:run')
+            cancellation_checkpoint()
+        if label == 'a':
+            if mode == 'interrupt': raise Crash()
+            raise ValueError('real child failure remains failure')
+    h.child_action = child_action
+    def parallel(inv):
+        return inv.map_branches(lambda label: inv.invoke(branch_id=label, operation_id='parallel', tool_name='child',
+            arguments={'kwargs':{'branch':label}},
+            parent_inputs={'input_path':'input_path','input_sha256':'input_sha256'}), ['a','b'])
+    h.before_parent = parallel
+    if mode == 'interrupt':
+        with pytest.raises(Crash): h.runtime().run_prepared(*h.prepare())
+    else:
+        result = h.runtime().run_prepared(*h.prepare())
+        assert result.status is (RunStatus.CANCELLED if mode == 'cancel' else RunStatus.FAILED)
+        assert result.steps[0].result is None
+    rows = reservations(h.store.load('parent-1:run'))
+    children = [h.store.load(r['request']['request_id']+':run') for r in rows]
+    if mode != 'cancel':
+        accepted = [c for c in children if c.lifecycle_status is RunLifecycleStatus.SUCCEEDED]
+        assert len(accepted) == 1
+        exact = accepted[0].to_dict()
+        h.child_action = None
+        assert continue_parent(h).status is RunStatus.FAILED
+        assert h.store.load(accepted[0].run_id).to_dict() == exact
+        assert len(h.calls) == 2
+    else:
+        assert all(c.lifecycle_status is RunLifecycleStatus.CANCELLED for c in children)
+
+
+def test_exact_annotation_continuation_uses_session_acceptance_owners(harness, tmp_path, monkeypatch):
+    """Real lifecycle/Session persistence, transparent synthetic scientific tool."""
+    from agent.application import ResearchAgentApplication, ApplicationResult, ApplicationStatus, ArtifactReference, OutputSelection
+    from agent.application.session_state import SessionConflictError
+    h = harness
+    app = ResearchAgentApplication(tmp_path/'application', registry=h.registry)
+    app._runtime, app._run_store = h.runtime(), h.store
+    app.sessions.create('session')
+    request, plan = h.prepare()
+    request, location = app._prepare_request(replace(request, prompt='Original fixture objective.'))
+    plan = replace(plan, steps=(replace(plan.steps[0], arguments=dict(plan.steps[0].arguments,
+        output_dir=str(location.scientific))),))
+    outputs = (OutputSelection('result', 'annotate', 'data_path'),)
+    app.sessions.start_turn('session', 'old', replace(request, inputs={}), outputs, expected_generation=0)
+    app.sessions.link_run('session', 'old')
+    def crash(*args): raise Crash()
+    h.after_child = crash
+    with pytest.raises(Crash): app.runtime.run_prepared(request, plan)
+    child = child_state(h)
+    child_bytes = h.store.state_path(child.run_id).read_bytes()
+    assert app.runtime.resume(request.request_id+':run').status is RunStatus.FAILED
+    assert h.store.load(request.request_id+':run').lifecycle_status is RunLifecycleStatus.INTERRUPTED
+    app.sessions.recover('session', 'old')
+    h.after_child = None
+    def remove_empty_fixture_destination(inv):
+        # Fixture publisher requires a new directory; the real publisher owns staging.
+        Path(inv._arguments['output_dir']).rmdir()
+    h.before_parent = remove_empty_fixture_destination
+    def complete(result, root):
+        references=[]
+        for directory in (root.evidence, root.report):
+            path=directory/'fixture.json';path.write_text(json.dumps({'run_id':result.run_id}))
+            references.append(ArtifactReference('fixture',str(path),hashlib.sha256(path.read_bytes()).hexdigest()))
+        return ApplicationResult(result.request_id,result.run_id,ApplicationStatus.SUCCEEDED,result.status,
+            str(root.root),result,evidence=references[0],report=references[1])
+    monkeypatch.setattr(app, '_complete', complete)
+    req, prepared, anchor, selected = app.sessions.prepare_annotation_continuation(
+        'session','continued','old',expected_generation=0)
+    assert selected==outputs and anchor.run_id==request.request_id+':run'
+    assert req.prompt==request.prompt
+    previous=dict(plan.steps[0].arguments);changed=dict(prepared.steps[0].arguments)
+    assert previous.pop('output_dir')!=changed.pop('output_dir')
+    assert previous==changed
+    assert len(h.calls)==1 and len(app.sessions.load('session').turns)==1
+    accepted=app.sessions.continue_annotation('session','continued','old',expected_generation=0)
+    assert accepted.generation==1 and len(accepted.revisions)==1
+    assert accepted.turn('continued').status=='activated'
+    assert accepted.revisions[0].run_id==req.request_id+':run'
+    from agent.application import InteractiveAgentApplication
+    browser=InteractiveAgentApplication(app.workspace_root,registry=h.registry,model_profiles=(),default_profile_id=None)
+    browser._application=app
+    view=browser.turn('session','continued')
+    assert view.status=='succeeded' and view.revision_id==accepted.active_revision_id
+    assert view.response is None, 'Backend continuation must not fabricate conversational prose'
+    assert h.store.state_path(child.run_id).read_bytes()==child_bytes and len(h.calls)==1
+    state=h.store.load(req.request_id+':run')
+    assert any(e.details.get('previous_run_id')==anchor.run_id for e in state.trace)
+    from agent.orchestration.annotation_runs import progress_view
+    progress=progress_view(h.store,state,'annotate')
+    assert progress['completed_children']==1 and progress['future_total_known']
+    assert progress['continued_from_run_id']==anchor.run_id
+    with pytest.raises(SessionConflictError):
+        app.sessions.continue_annotation('session','duplicate','old',expected_generation=0)
+    assert h.store.state_path(child.run_id).read_bytes()==child_bytes and len(h.calls)==1
+
+
+def test_binding_consumes_one_fresh_decoded_state_and_still_checks_changed_files(harness,monkeypatch):
+    h=harness;request,plan=h.prepare();assert h.runtime().run_prepared(request,plan).status is RunStatus.SUCCEEDED
+    child=child_state(h);binding=bind_output(h.store,h.registry,child.run_id,'operation','dataset')
+    original=h.store._load_path;calls=[]
+    def load(*a,**k):calls.append(1);return original(*a,**k)
+    monkeypatch.setattr(h.store,'_load_path',load)
+    step=validate_binding(binding,store=h.store,registry=h.registry)
+    assert calls==[1]
+    Path(step.result['data_path']).write_text('changed native payload')
+    with pytest.raises(AuthorityError):validate_binding(binding,store=h.store,registry=h.registry,integrity=True)

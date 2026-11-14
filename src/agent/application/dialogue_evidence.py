@@ -231,9 +231,15 @@ def _accepted(sessions, state, revision, output):
     workspace.require_regular_file(path)
     if path.resolve(strict=True) != path:
         raise _Unavailable('unsafe_evidence_path')
+    evidence_limit = MAX_EVIDENCE_BYTES
+    if step.tool_name == 'annotate_scATAC_cell_types':
+        # Complete native parameter arrays can exceed the generic envelope bound.
+        # This accepted annotation envelope retains its hash and compact fact caps.
+        from agent.tools.analysis.hierarchical_annotation import EVIDENCE_MAX_BYTES
+        evidence_limit = EVIDENCE_MAX_BYTES
     with path.open('rb') as stream:
-        raw = stream.read(MAX_EVIDENCE_BYTES + 1)
-    if len(raw) > MAX_EVIDENCE_BYTES:
+        raw = stream.read(evidence_limit + 1)
+    if len(raw) > evidence_limit:
         raise _Unavailable('evidence_size_limit')
     if hashlib.sha256(raw).hexdigest() != completion.sha256:
         raise _Unavailable('evidence_digest_mismatch')
@@ -549,7 +555,7 @@ def _detail(sessions, step, request):
         raise _Unsupported('unsupported_detail_candidate')
     result = step.result
 
-    def read(path, sha, size=None):
+    def read(path, sha, size=None, *, limit=MAX_DETAIL_BYTES):
         path = Path(path)
         if not path.is_absolute() or path.resolve(strict=True) != path:
             raise _Unavailable('unsafe_detail_path')
@@ -558,8 +564,8 @@ def _detail(sessions, step, request):
             raise _Unavailable('unsafe_detail_path')
         # Read at most the declared bound, including corrupt/enlarged files.
         with path.open('rb') as stream:
-            raw = stream.read(MAX_DETAIL_BYTES + 1)
-        if len(raw) > MAX_DETAIL_BYTES:
+            raw = stream.read(limit + 1)
+        if len(raw) > limit:
             raise _Unsupported('detail_artifact_size_limit')
         if (size is not None and len(raw) != size) or hashlib.sha256(raw).hexdigest() != sha:
             raise _Unavailable('detail_digest_mismatch')
@@ -590,7 +596,11 @@ def _detail(sessions, step, request):
             entry = _one([f for f in authority['files'] if f['path'] == str(path.parent / name)])
             if entry['sha256'] != binding['sha256'] or entry['size_bytes'] != binding['size_bytes']:
                 raise _Unavailable('detail_authority_binding_mismatch')
-        raw = read(path.parent / name, binding['sha256'], binding['size_bytes'])
+        limit = MAX_DETAIL_BYTES
+        if request.section == 'annotation_rationale':
+            from agent.tools.analysis.hierarchical_annotation import EVIDENCE_MAX_BYTES
+            limit = EVIDENCE_MAX_BYTES
+        raw = read(path.parent / name, binding['sha256'], binding['size_bytes'], limit=limit)
         return raw
 
     def emit(field, value, name, sha, pointer):
@@ -620,6 +630,12 @@ def _detail(sessions, step, request):
         pins = {Path(p['path']).name:p for p in manifest['files']}
         hierarchy = parse(sidecar('hierarchy.json', pins['hierarchy.json']))
         annotations = parse(sidecar('annotations.json', pins['annotations.json']))
+        from agent.tools.analysis.hierarchical_annotation import annotation_records
+        shared_backgrounds = annotations.get('schema') == 'annotation-evidence.v1'
+        recorded_rounds = annotations['rounds'] if shared_backgrounds else annotations
+        table_rounds = {key for key, value in recorded_rounds.items()
+                        if value.get('schema') == 'marker-candidates.v2'}
+        annotations = annotation_records(annotations)
         rows = [(i,r) for i,r in enumerate(hierarchy['branches'])
                 if request.subject is None or r['branch_id'] == request.subject]
         if request.subject is not None and len(rows) != 1:
@@ -634,7 +650,7 @@ def _detail(sessions, step, request):
             if not matches:
                 continue  # Native unassigned group has no marker comparison.
             ci, cluster = _one(matches)
-            prefix = '/' + round_id.replace('~','~0').replace('/','~1') + '/clusters/' + str(ci)
+            prefix = ('/rounds' if shared_backgrounds else '') + '/' + round_id.replace('~','~0').replace('/','~1') + '/clusters/' + str(ci)
             tests = [(i,t) for i,t in enumerate(cluster['tests']) if request.candidate is None
                      or t['candidate']['cell_name'] == request.candidate]
             if request.candidate is not None and len(tests)!=1:
@@ -645,11 +661,12 @@ def _detail(sessions, step, request):
             emit(f'candidate.records_omitted.{index}', max(0,len(tests)-request.limit),
                 'annotations.json', pins['annotations.json']['sha256'],prefix+'/tests')
             markers = [(i,m) for i,m in enumerate(cluster['markers']) if m['positive']]
+            marker_pointer = prefix + '/markers' + ('/rows' if round_id in table_rounds else '')
             for n,(i,marker) in enumerate(markers[:request.limit]):
                 emit(f'marker.{index * request.limit+n}', dict(branch_id=row['branch_id'], **marker),
-                    'annotations.json', pins['annotations.json']['sha256'],prefix+'/markers/'+str(i))
+                    'annotations.json', pins['annotations.json']['sha256'],marker_pointer+'/'+str(i))
             emit(f'marker.records_omitted.{index}', max(0,len(markers)-request.limit),
-                'annotations.json', pins['annotations.json']['sha256'],prefix+'/markers')
+                'annotations.json', pins['annotations.json']['sha256'],marker_pointer)
         emit('assignment.records_omitted', max(0,len(rows)-request.limit), 'hierarchy.json', pins['hierarchy.json']['sha256'], '/branches')
 
     else:
@@ -729,8 +746,6 @@ def annotation_report_methods(sessions, session_id, revision_id, output_name):
         raise ValueError('Technical annotation methods require an accepted annotation.')
     _, _, _, evidence = _step_summary(sessions, run, step, planned, value)
     facts = {key: evidence['facts'][key] for key in METHOD_FIELDS if key in evidence['facts']}
-    if len(_bytes(facts)) > 1_048_576:
-        raise ValueError('Technical annotation methods exceed the report byte bound.')
     # Project recorded method fields individually, so a private source path in
     # grouping provenance does not hide every native function and parameter.
     # Scientific values are retained exactly or explicitly omitted.
@@ -743,12 +758,39 @@ def annotation_report_methods(sessions, session_id, revision_id, output_name):
         row['parameters'] = {key: value for key, value in parameters.items() if key not in omitted}
         if omitted:
             row['privacy_omitted_parameter_fields'] = omitted
+        # Keep exact scalar settings and identities in the bounded client report.
+        # Large native feature arrays remain complete in the accepted sidecars;
+        # explicitly locate and hash each omission rather than changing its value.
+        report_omissions = []
+        for key, value in tuple(row['parameters'].items()):
+            fields = value.items() if isinstance(value, Mapping) else ((None, value),)
+            projected = dict(value) if isinstance(value, Mapping) else None
+            for field, child in fields:
+                raw = _bytes(child)
+                if len(raw) <= MAX_FACT_BYTES:
+                    continue
+                report_omissions.append(dict(parameter=key, field=field,
+                    reason='report_field_size_limit', size_bytes=len(raw),
+                    sha256=hashlib.sha256(raw).hexdigest(),
+                    items=len(child) if isinstance(child, (tuple, list, Mapping)) else None,
+                    complete_record='hierarchy.json: operations/native_result/parameters'))
+                if projected is None:
+                    row['parameters'].pop(key)
+                else:
+                    projected.pop(field)
+            if projected is not None:
+                row['parameters'][key] = projected
+        if report_omissions:
+            row['report_omitted_parameter_fields'] = report_omissions
         if not _unsafe_fact_value(row):
             methods.append(row)
     if 'native_methods' in facts:
         facts['native_methods_omitted'] = facts.get('native_methods_omitted', 0) + len(facts['native_methods']) - len(methods)
         facts['native_methods'] = methods
-    return {key: value for key, value in facts.items() if not _unsafe_fact_value(value)}
+    facts = {key: value for key, value in facts.items() if not _unsafe_fact_value(value)}
+    if len(_bytes(facts)) > 1_048_576:
+        raise ValueError('Technical annotation methods exceed the report byte bound.')
+    return facts
 
 
 def annotation_field_semantics(field):
@@ -932,6 +974,8 @@ def figure_metadata(record, *, manifest_sha256, run_id=None, revision=None, publ
         step_ids=record['source_step_ids'], output_names=names, sources=sources)
     if 'compatible_umap_available' in record.get('presentation', {}):
         public['compatible_umap_available'] = record['presentation']['compatible_umap_available']
+    if 'ambiguous_marker_names' in record.get('presentation', {}):
+        public['ambiguous_marker_count'] = len(record['presentation']['ambiguous_marker_names'])
     if 'annotation_level' in record.get('presentation', {}):
         public['annotation_level'] = record['presentation']['annotation_level']
         public['levels_omitted'] = record['presentation']['levels_omitted']

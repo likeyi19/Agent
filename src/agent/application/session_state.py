@@ -268,7 +268,9 @@ class Interaction:
                     raise SessionError('Invalid missing scientific parameters.')
                 for name in missing:
                     text(name)
-            carrier = (self.status == 'failed' and self.admitted is None or
+            carrier = (self.status == 'failed' and (self.admitted is None or
+                       self.admitted.get('kind') == 'execute' and 'continuation' in self.admitted
+                       and 'native_planning_trace' in self.admitted and 'native_plan' not in self.admitted) or
                        self.status in {'admitted', 'answered', 'failed'} and self.admitted is not None
                        and self.admitted.get('kind') == 'answer' and self.admitted.get('intent') == 'guidance')
             if carrier:

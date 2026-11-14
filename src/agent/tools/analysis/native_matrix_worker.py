@@ -8,6 +8,8 @@ from pathlib import Path
 import sys
 sys.dont_write_bytecode = True
 import traceback
+import time
+from datetime import datetime, timezone
 
 
 def returned_data(result):
@@ -51,6 +53,7 @@ def _receipt_default(value):
 
 
 def main(request_path):
+    started = time.perf_counter()
     raw = Path(request_path).read_bytes(); req = json.loads(raw)
     stage = Path(req['stage'])
     sys.path.insert(0, str(Path(__file__).parent))
@@ -59,6 +62,7 @@ def main(request_path):
         import anndata as ad
         import numpy as np
         a = ad.read_h5ad(stage / 'input.h5ad')
+        loaded = time.perf_counter()
         package = req['package']; name = req['function_name']; kwargs = req['kwargs']
         version = importlib.metadata.version(package)
         if version != req['version']:
@@ -105,8 +109,12 @@ def main(request_path):
                 adaptation = dict(slot='obsm.' + key, source_dtype='float32', execution_dtype='float64',
                     conversion='lossless widening for native KD-tree FFI; original representation restored')
         try:
+            invoking = time.perf_counter()
+            native_started_at = datetime.now(timezone.utc).isoformat()
             result, selection = invoke(function, a, package, name, call_kwargs,
                                        req.get('parameter_selection'), graphs)
+            invoked = time.perf_counter()
+            native_finished_at = datetime.now(timezone.utc).isoformat()
         finally:
             if restored_rep is not None:
                 a.obsm[restored_rep[0]] = restored_rep[1]
@@ -184,11 +192,17 @@ def main(request_path):
         if name == 'pp.tfidf': layer_semantics = {kwargs.get('layer_tfidf_key', 'tf-idf'): 'episcanpy_tfidf'}
         # Native variants may omit auxiliary slots; list only actual outputs.
         slots = sorted(set(s for s in slots if s == 'X' or s.partition('.')[2] in getattr(a, s.partition('.')[0])))
+        writing = time.perf_counter()
         a.write_h5ad(stage / 'result.h5ad')
+        written = time.perf_counter()
         versions = {p: importlib.metadata.version(p) for p in (package, 'anndata', 'numpy', 'scipy', 'scikit-learn')}
         if package == 'episcanpy': versions['scanpy'] = importlib.metadata.version('scanpy')
         source = Path(inspect.getsourcefile(function))
         receipt = dict(completion='succeeded', package=package, function_name=name,
+            native_started_at=native_started_at, native_finished_at=native_finished_at,
+            timing_seconds=dict(import_and_input_loading=loaded-started,
+                native_preparation=invoking-loaded, native_call_including_asw=invoked-invoking,
+                return_preparation=writing-invoked, h5ad_writing=written-writing),
             request_sha256=hashlib.sha256(raw).hexdigest(), versions=versions,
             native_signature=str(inspect.signature(function)), native_output_type=native_type, result_slots=slots,
             function_source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),

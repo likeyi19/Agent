@@ -284,3 +284,57 @@ def test_partial_identity_ambiguity_keeps_unaffected_genes(tmp_path, monkeypatch
     assert truncated['clusters'][0]['status'] == 'insufficient_evidence'
     assert any('full tested' in reason for reason in truncated['clusters'][0]['reasons'])
     assert truncated['clusters'][0]['tests'] == []
+
+
+def test_fraction_index_preserves_duplicate_native_rows_and_nonfinite_values():
+    import numpy as np
+    import pandas as pd
+    from agent.tools.analysis.marker_candidates import _fractions, _number
+    frame = pd.DataFrame({'group': [0.1, np.nan, 0.8, 1.]},
+                         index=['repeat', 'unique', 'repeat', 'last'])
+    ranked = dict(pts=frame, pts_rest=1-frame)
+    indexed = _fractions(ranked, 'group')
+    for slot, values in ranked.items():
+        for feature in dict.fromkeys(frame.index):
+            actual = values.loc[feature, 'group']
+            expected = ([_number(v) for v in actual.tolist()] if hasattr(actual, 'tolist')
+                        and getattr(actual, 'ndim', 0) else _number(actual))
+            assert indexed[slot][feature] == expected
+    assert indexed['pts']['repeat'] == [0.1, 0.8]
+    assert indexed['pts']['unique'] is None
+    assert _fractions(ranked, 'absent') == {}
+
+
+def test_reference_projection_reuses_only_exact_operation_local_queries(tmp_path, monkeypatch):
+    from agent.tools.analysis import marker_candidates as owner
+    lookup = reference_fixture(tmp_path, [source_row(marker='Gene', symbol='Gene')])
+    calls=[];original=owner._reference
+    def observed(*args):
+        calls.append(args[1:]);return original(*args)
+    monkeypatch.setattr(owner,'_reference',observed)
+    reference=owner.MarkerReference(lookup)
+    universe=['Gene','Other']
+    first=reference.read(universe,'name','Mouse',{})
+    second=reference.read(universe,'name','Mouse',{})
+    assert first==second and len(calls)==1
+    first[0][0]['genes'].clear();first[1]['names'].clear()
+    assert reference.read(universe,'name','Mouse',{})==second
+    assert len(calls)==1
+    universe.clear()
+    assert reference.read(['Gene','Other'],'name','Mouse',{})==second
+    assert len(calls)==1
+    universe=['Gene','Other']
+    reference.read(['Gene'],'name','Mouse',{})
+    reference.read(['Gene'],'gene_id','Mouse',{})
+    reference.read(['Gene'],'gene_id',None,{})
+    reference.read(['Gene'],'gene_id',None,{'tissue_type':'Blood'})
+    assert len(calls)==5
+    # A different operation owns a fresh projection, even for the same resource.
+    owner.MarkerReference(lookup).read(universe,'name','Mouse',{})
+    assert len(calls)==6
+    # Resource mutation within a live scope cannot reuse the prepared projection.
+    from pathlib import Path
+    path=Path(lookup.path)
+    path.write_bytes(path.read_bytes()+b'changed')
+    with pytest.raises(ValueError,match='changed'):
+        reference.read(universe,'name','Mouse',{})

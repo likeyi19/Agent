@@ -355,7 +355,7 @@ summary { cursor: pointer; font-size: 13px; font-weight: 600; overflow-wrap: any
 .native-argument select, .native-argument textarea, .native-argument input:not([type=checkbox]) { width: 100%; margin: .3rem 0; }
 .native-results pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
 .native-result { border-top: 1px solid var(--border, #dce3e8); padding: 1rem 0; }
-body[data-mode=native] .header-actions, body[data-mode=native] .workspace-switch, body[data-mode=native] #research-layout { display: none; }
+body[data-mode=native] .header-actions, body[data-mode=native] .workspace-switch, body[data-mode=native] #research-layout, body[data-mode=native] #client-error { display: none; }
 body[data-mode=native] #native-workspace { display: block; }
 @media (max-width: 760px) { .native-layout { grid-template-columns: 1fr; } .mode-switch button { flex: 1; } }
 

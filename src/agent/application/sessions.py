@@ -251,8 +251,48 @@ class AnalysisSessions:
             return _replace_turn(state, replace(turn, run_id=turn.request_id + ':run', status='linked'))
         return self._store._update(session_id, change)
 
+    def prepare_annotation_continuation(self, session_id, turn_id, previous_turn_id, *, expected_generation):
+        """Reissue the saved one-step annotation plan without scientific replanning.
+
+        Only request/plan identities and the managed output destination change.
+        Runtime validates the exact captured arguments and terminal old anchor.
+        Preparation grants no native execution and creates no SessionTurn.
+        """
+        from agent.orchestration.annotation_runs import continuation_anchor, checked_continuation
+        from .service import RESERVED_APPLICATION_INPUTS
+        state = self.load(session_id)
+        origin = state.turn(previous_turn_id)
+        if (state.generation != expected_generation or state.active_revision_id != origin.base_revision_id
+                or expected_generation != origin.base_generation):
+            raise SessionConflictError('The interrupted annotation base changed.')
+        old = self._run(origin)
+        if old.plan is None or len(old.plan.steps) != 1 or old.request.prompt is None:
+            raise SessionError('Exact annotation continuation requires one captured research operation.')
+        step = old.plan.steps[0]
+        if not self._application.registry.get(step.tool_name).annotation_children:
+            raise SessionError('Selected operation has no annotation continuation contract.')
+        previous = continuation_anchor(self._application.run_store, old.run_id, step.step_id)
+        request_id = 'turn-' + digest(dict(session=session_id, turn=turn_id))
+        request = replace(old.request, request_id=request_id,
+            inputs={k:v for k,v in old.request.inputs.items() if k not in RESERVED_APPLICATION_INPUTS})
+        _, destination = self._application._prepare_request(request)
+        saved = next(s for s in old.steps if s.step_id == step.step_id)
+        arguments = dict(saved.resolved_arguments or step.arguments)
+        arguments['output_dir'] = str(destination.scientific)
+        plan = replace(old.plan, plan_id=request_id + ':annotation-continuation', request_id=request_id,
+            steps=(replace(step, arguments=arguments),))
+        checked_continuation(self._application.runtime, previous, plan)
+        return request, plan, previous, origin.selections
+
+    def continue_annotation(self, session_id, turn_id, previous_turn_id, *, expected_generation):
+        """Explicit scientific continuation; ordinary recover remains storage-only."""
+        request, plan, previous, outputs = self.prepare_annotation_continuation(
+            session_id, turn_id, previous_turn_id, expected_generation=expected_generation)
+        return self.run(session_id, turn_id, request, outputs, expected_generation=expected_generation,
+            prepared_plan=plan, annotation_continuation=previous)
+
     def run(self, session_id, turn_id, request, outputs, *, expected_generation,
-            use_active_context=False, retain=(), prepared_plan=None):
+            use_active_context=False, retain=(), prepared_plan=None, annotation_continuation=None):
         """Explicit session-aware new run; duplicate calls never restart linked work.
 
         Returns session metadata. The ordinary run/result remains accessible through
@@ -285,8 +325,13 @@ class AnalysisSessions:
         try:
             frozen = self.active_context(session_id, turn_id) if use_active_context else None
             with planning_context(frozen) if frozen is not None else nullcontext():
-                result = (self._application.run(request) if prepared_plan is None else
-                          self._application.run_prepared(request, prepared_plan))
+                if annotation_continuation is not None:
+                    if prepared_plan is None:
+                        raise SessionError('Annotation continuation requires its exact captured plan.')
+                    result = self._application.continue_annotation(request, prepared_plan, previous=annotation_continuation)
+                else:
+                    result = (self._application.run(request) if prepared_plan is None else
+                              self._application.run_prepared(request, prepared_plan))
         except Exception:
             # Configuration/submission can fail before a scientific run exists.
             # Preserve the outcome without claiming anything about a live run.

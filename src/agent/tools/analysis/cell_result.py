@@ -33,7 +33,8 @@ def describe(tool, result):
         return None
     if tool == 'annotate_scATAC_cell_types':
         return dict(path_field='annotated_h5ad_path', sha_field='annotated_h5ad_sha256',
-                    coordinates=None, grouping=None, preserves_counts=True, input_argument='input_path')
+                    coordinates=None, grouping=None, preserves_counts=True,
+                    preserves_cell_identity=True, input_argument='input_path')
     package = tool.removeprefix('run_')
     if result.get('contract_version') != 'native-' + package + '-matrix.v1' or not result.get('matrix_path'):
         return None
@@ -55,6 +56,9 @@ def describe(tool, result):
         coordinates=coordinate if inplace and function == 'tl.umap' and 'obsm.' + coordinate in slots else None,
         grouping=grouping if inplace and grouping and 'obs.' + grouping in slots else None,
         preserves_counts=function in _PRESERVE and parameters.get('count_slot', 'X') == 'X',
+        preserves_cell_identity=(function in _PRESERVE or
+            package=='episcanpy' and function in ('pp.tfidf','tl.lsi'))
+            and parameters.get('input_orientation')!='features_by_cells',
         input_argument='input_path')
 
 

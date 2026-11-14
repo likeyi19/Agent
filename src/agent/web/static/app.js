@@ -456,12 +456,12 @@ function resultFigureGallery(artifacts) {
   section.append(heading);
   const captions = {
     qc_metrics: "Saved native QC measurements and recorded producer populations. Missing values are explicit; profiles are not recomputed after filtering. Thresholds describe the selected filtering result.",
-    annotation_composition: "Native groups and predicted cell-type composition, including unassigned coverage. Candidate labels are computational annotations.",
+    annotation_composition: "Final cell_type_final labels may be inherited from an ancestor. Current-round annotation_status retains ambiguous or unresolved evidence; inherited labels are not independent confident subtype assignments. Branch IDs identify computational populations, not biological truth.",
     marker_activity_dot: "Accepted Gene Activity: color = log1p(mean Gene Activity), size = fraction activity > 0. Representative positive native markers; accessibility-derived activity, not measured RNA expression or independent validation.",
     marker_activity_heatmap: "Color = log1p(mean accepted Gene Activity). Representative positive native markers; accessibility-derived activity, not measured RNA expression. Bounded groups and genes are named on the plot.",
     annotation_hierarchy: "Accepted branch relationships and actual stopping outcomes. Computational subdivisions are not independently validated cell types.",
     marker_activity_umap: "Color = log1p(Gene Activity), without additional normalization. All cells use the same accepted UMAP. Accessibility-derived activity is not measured RNA expression. Native markers can help inspect candidate annotations and within-cluster heterogeneity; they are dependent evidence, not independent biological validation.",
-    annotation_umap: "Accepted UMAP colored by hierarchical annotations using exact original-source ancestry and ordered cells. Gray = unassigned. Coordinates were reused.",
+    annotation_umap: "Accepted UMAP colored by hierarchical annotations using exact original-source ancestry and ordered cells. Final labels may be inherited; annotation_status retains current-round evidence. Gray = unassigned. Coordinates were reused.",
     umap_leiden: "UMAP colored by accepted native clustering groups. Separation is descriptive, not independent validation of cell identity.",
     umap_coordinates: "Accepted UMAP coordinates. No cluster or cell-type assignment is implied by this coordinate plot.",
     umap_categorical: "Accepted UMAP coordinates colored by the recorded categorical field. Supplied or predicted labels are not independent validation.",
@@ -494,6 +494,7 @@ function resultFigureGallery(artifacts) {
     image.src = `/api/v1${artifactPath(state.session.session_id, artifact.revision_id, artifact.handle, artifact.turn_id)}`;
     const caption = document.createElement("figcaption"); caption.className = "small";
     caption.textContent = captions[artifact.figure.kind] || "Published scientific figure; exact sources are available below.";
+    if (artifact.figure.ambiguous_marker_count > 0) caption.textContent += ` ${artifact.figure.ambiguous_marker_count} repeated selected names omitted because native ranks do not identify a unique feature column; see the complete marker evidence.`;
     if (artifact.figure.compatible_umap_available === false) caption.textContent += " No compatible accepted UMAP was available for this publication.";
     image.addEventListener("error", () => {
       image.hidden = true;
@@ -1325,7 +1326,7 @@ function renderHistory() {
   const captured = captureConversationUi(history);
   const followLatest = history.scrollHeight - history.scrollTop - history.clientHeight < 80;
   const scrollTop = history.scrollTop;
-  const turns = state.session ? state.session.turns.filter((turn) => turn.utterance || turn.response || turn.rerun_revision_id) : [];
+  const turns = state.session ? state.session.turns.filter((turn) => turn.utterance || turn.response || turn.rerun_revision_id || turn.run_id) : [];
   const visibleFileKeys = new Set(turns.map((turn) =>
     JSON.stringify([state.session.session_id, turn.turn_id, turn.revision_id])));
   for (const key of state.scientificFiles.keys()) {
@@ -1352,7 +1353,7 @@ function renderHistory() {
       const attachments = document.createElement("ul"); attachments.className = "message-attachments";
       for (const a of turn.attachments) {
         const item = document.createElement("li");
-        item.textContent = `${a.label} · ${a.use === "staged" ? "Not yet used in an analysis" : a.use === "consumed" ? "Used in the accepted analysis" : "Attached for analysis"}`;
+        item.textContent = `${a.label} · ${a.use === "staged" ? "Not used by this request" : a.use === "consumed" ? "Used in the accepted analysis" : "Attached for analysis"}`;
         attachments.append(item);
       }
       (article.querySelector(".user") || article).append(attachments);
@@ -1385,7 +1386,8 @@ function renderHistory() {
           button.addEventListener("click", () => {
             if (option.action === "parameter") {
               openRequestedParameter(option, turn.turn_id);
-            } else submitRequest("", null, {question_turn_id: turn.turn_id, handle: option.handle});
+            } else submitRequest(option.handle.startsWith("annotation-umap:") ? option.label : "", null,
+              {question_turn_id: turn.turn_id, handle: option.handle});
           });
           choices.append(button);
         }
@@ -1396,7 +1398,10 @@ function renderHistory() {
     }
     const status = document.createElement("p");
     status.className = "turn-status-note";
-    status.textContent = statusLabel(turn.status, turn.response && turn.response.kind, turn.revision_id, turn.run_id, turn.steps) + ((turn.attachments || []).some((a) => a.use === "staged") ? " · Some attachments remain unresolved" : "");
+    status.textContent = statusLabel(turn.status, turn.response && turn.response.kind, turn.revision_id, turn.run_id, turn.steps) + ((turn.attachments || []).some((a) => a.use === "staged") ? " · Some attachments were not used by this request" : "");
+    if (turn.revision_id && turn.steps?.some((step) => step.status === "SUCCEEDED" && step.annotation_progress?.continued_from_run_id)) {
+      status.textContent += " · Accepted continuation result. Earlier interruption notices describe prior attempts.";
+    }
     const metadata = document.createElement("details");
     metadata.className = "turn-metadata";
     metadata.dataset.detailKey = "turn-details";
@@ -1576,7 +1581,9 @@ function stepProgress(steps, status, expanded = false) {
     if (step.annotation_progress) {
       const progress = step.annotation_progress;
       const note = document.createElement("p");
-      note.textContent = `Annotation: ${progress.completed_children} native child steps completed; ${progress.pending_branches ?? "unknown"} known pending branches. Future total is unknown.`;
+      note.textContent = step.status === "SUCCEEDED"
+        ? `Annotation completed: ${progress.completed_children} accepted native child steps; all recorded branches finished.`
+        : `Annotation: ${progress.completed_children} native child steps completed; ${progress.pending_branches ?? "unknown"} known pending branches. Future total is unknown.`;
       if (progress.level) note.textContent += ` Level ${progress.level}.`;
       if (progress.branch_id) note.textContent += ` Branch ${progress.branch_id}.`;
       if (progress.function_name) note.textContent += ` Native function: ${progress.function_name}.`;

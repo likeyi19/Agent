@@ -97,13 +97,13 @@ def prepare(stream, role):
     """Common JSON/TSV privacy projection; original publication bytes stay pinned."""
     if role.endswith('.json'):
         import json
-        from .sequence_delivery import prepare as metadata_prepare
+        from .sequence_delivery import metadata_bytes
         value = json.load(stream)
         if isinstance(value, dict):
             value.pop('session', None)
             if isinstance(value.get('receipt'), dict):
                 value['receipt'].pop('session', None)
-        return metadata_prepare(io.BytesIO(json.dumps(value).encode()), 'metadata.json')
+        return metadata_bytes(value)
     raw = stream.read()
     if role.endswith('.tsv'):
         from .dialogue_evidence import _unsafe_fact_value

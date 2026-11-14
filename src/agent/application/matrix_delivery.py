@@ -229,10 +229,10 @@ class MatrixDeliveryError(ValueError):
     _MESSAGES = {
         'MATRIX_DOWNLOAD_UNAVAILABLE': 'The accepted matrix is unavailable or ineligible for download.',
         'MATRIX_DOWNLOAD_LIMIT': 'The accepted matrix exceeds the configured download limit.',
-        'MATRIX_DOWNLOAD_BUSY': 'Matrix download capacity is unavailable. Try again shortly.',
+        'MATRIX_DOWNLOAD_BUSY': 'Download capacity is busy. Let an active download finish, then retry this file.',
         'SCIENTIFIC_DOWNLOAD_UNAVAILABLE': 'The accepted scientific file is unavailable or ineligible for download.',
         'SCIENTIFIC_DOWNLOAD_LIMIT': 'The accepted scientific file exceeds the configured download limit.',
-        'SCIENTIFIC_DOWNLOAD_BUSY': 'Scientific download capacity is unavailable. Try again shortly.',
+        'SCIENTIFIC_DOWNLOAD_BUSY': 'Download capacity is busy. Let an active download finish, then retry this file.',
         'MODEL_DOWNLOAD_LIMIT': 'The accepted model checkpoint exceeds the 5 GiB download limit.',
     }
 

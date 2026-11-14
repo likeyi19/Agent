@@ -7,7 +7,7 @@ from pathlib import Path
 from agent.schemas.orchestration import _serialize
 from agent.schemas.verification_authority import AuthorityError, VerifiedArtifactAuthority, digest
 from agent.tools.data.authority_context import owned_verification
-from agent.tools._file_identity import file_closure
+from agent.tools._file_identity import file_closure, snapshot
 from .sequence_prediction import read
 
 
@@ -27,6 +27,11 @@ class NativePublication:
                 or Path(path).name!='manifest.json' or value['native_completion']!='succeeded'
                 or {r['path'] for r in value['files']}!={str(root/name) for name in files} or len(value['files'])!=len(files)):
             raise AuthorityError('Invalid native scientific publication identity or membership')
+        if sha is not None:
+            # read() checked the exact parsed bytes against sha. Keep the file
+            # type check without reading and hashing those same bytes again.
+            snapshot(path)
+            return value,sha
         return value,file_closure([path])[0]['sha256']
 
 
@@ -81,14 +86,15 @@ class NativePublication:
 
 
     def publication_record(self,context,tool_name,args,output,execution_identity,result_metadata):
-        value,sha = self.load(output['manifest_path'],output['manifest_sha256'])
+        description,key = context.describe(self.kind,Path(output['manifest_path']),output['manifest_sha256'])
+        value,sha = description['manifest'],description['manifest_sha256']
+        serialized_output = _serialize(output)
         if (value['profile']!=self.profile or tool_name!=self.tool or value['execution_identity']!=execution_identity or value['arguments']!=self.arguments(args)
-                or _serialize(result_metadata)!=_serialize(output) or self.result(value,output['manifest_path'],sha)!=_serialize(output)):
+                or _serialize(result_metadata)!=serialized_output or self.result(value,output['manifest_path'],sha)!=serialized_output):
             raise AuthorityError('Native scientific publication lacks its exact producing execution')
-        description,key = context.describe(self.kind,Path(output['manifest_path']),sha)
         return VerifiedArtifactAuthority(dict(schema_version=2,artifact_type='agent.'+self.kind,artifact_contract=self.contract,
             publication_path=output['manifest_path'],manifest_sha256=sha,files=description['files'],execution_identity=execution_identity,
             arguments_sha256=digest(self.arguments(args)),receipt_sha256=sha,upstream={'producer_inputs':digest(description['proof_identity'])},
-            resources=dict(scientific_proof_sha256=key,manifest_identity=value,result_metadata=_serialize(output)),science_profile=self.profile,
+            resources=dict(scientific_proof_sha256=key,manifest_identity=value,result_metadata=serialized_output),science_profile=self.profile,
             producer_qualification={},verifier=self.verifier,scope='scientific_correctness.v1',completion='succeeded',
             integrity_scope='artifact_integrity_lineage_historical_sources.v1',source_policy='historical_verified_sources.v1',historical_sources=description['historical_sources']))

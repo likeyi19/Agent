@@ -1256,6 +1256,16 @@ def _missing_species(error, submission):
 def _role_source(reference, preceding):
     origin = next(i for i in preceding if i.turn_id == reference['origin_turn_id'])
     source = next(i for i in preceding if i.turn_id == reference['binding_turn_id'])
+    # A failed preparation can have valid newly captured declarations even
+    # though it cannot authorize execution. Keep those exact accepted inputs
+    # when the next explicit answer addresses the same captured question.
+    prior = next((i for i in preceding if i.turn_id == reference.get('predecessor_turn_id')), None)
+    if (prior is not None and prior.status == 'failed' and prior.admitted is not None
+            and prior.admitted.get('kind') == 'execute'
+            and 'native_planning_trace' in prior.admitted and 'native_plan' not in prior.admitted
+            and prior.admitted.get('continuation') == {k: reference[k]
+                for k in ('origin_turn_id', 'binding_turn_id', 'field')}):
+        source = prior
     return origin, source
 
 
@@ -1891,6 +1901,19 @@ def planning_task(interaction, state, registry=None):
             selected_group_column=current.get('annotation_arguments', {}).get('group_column'),
             grouping_columns=_serialize(evidence['grouping_columns']),
             selected_count_slot=current.get('annotation_arguments', {}).get('count_slot', 'X'))
+        if current['annotation'].get('generate_umap') is not None:
+            task['annotation_umap'] = dict(generate=current['annotation']['generate_umap'],
+                instruction=('Compute optional UMAP using registered native scATAC methods in this same plan, '
+                    'with its necessary representation prerequisites. Do not run Leiden to obtain UMAP. '
+                    'The uploaded source is assigned to annotation; native prerequisites can consume its registered inspect_scATAC dataset handoff. '
+                    'Native tools expose multiple output ports: explicitly select source_port=dataset for the processed AnnData '
+                    'when chaining default inplace representation and UMAP operations; a bare step source is ambiguous. '
+                    'Keep annotation source on the original accessibility input and bind its supplied group_column. '
+                    'Inspection and optional UMAP do not require annotation groups, activity or activity_source inputs. '
+                    'Construct missing Gene Activity inside annotation by selecting activity_method and applicable kwargs. '
+                    'Include UMAP and annotation in the accepted outputs.'
+                    if current['annotation']['generate_umap'] else
+                    'Skip optional UMAP computation. Continue annotation and its other available figures and downloads.'))
     from .structured_parameters import bound_records
     if registry is None:
         from agent.orchestration.registry import build_default_tool_registry

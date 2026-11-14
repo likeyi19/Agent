@@ -717,10 +717,9 @@ class FileRunStore:
     def _load_qualified_authorities(self, run_id):
         """Read additive qualification; never modify terminal execution history."""
         with self._lock(run_id, exclusive=False):
-            state = self._load_path(self.state_path(run_id), expected_run_id=run_id)
-            return self._load_qualification_path(run_id, state)
+            return self._load_qualification_path(run_id)
 
-    def _load_qualification_path(self, run_id, state):
+    def _load_qualification_path(self, run_id, state=None):
         path = self.state_path(run_id).with_suffix('.authority.json')
         if path.is_symlink():
             raise RunStateCorruptionError('Qualification sidecar must not be a symlink.')
@@ -730,6 +729,10 @@ class FileRunStore:
             return {}
         except OSError as exc:
             raise RunStoreIOError('Unable to read scientific qualification.') from exc
+        # An absent optional sidecar grants no authority. Decode the Run only
+        # when there is qualification content whose state anchor must be checked.
+        if state is None:
+            state = self._load_path(self.state_path(run_id), expected_run_id=run_id)
         try:
             value = json.loads(raw, object_pairs_hook=_reject_duplicate_keys,
                                parse_constant=_reject_constant)

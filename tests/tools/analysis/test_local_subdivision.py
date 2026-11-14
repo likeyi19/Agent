@@ -81,7 +81,7 @@ def bound(tmp_path,monkeypatch):
                     result_slots=[['obs.leiden','var.selected','obsm.X_spectral','obsp.distances','obs.leiden'][i]])
         args={}
         if i==0:
-            native['source_identity']=dict(sha256='d'*64,declarations={'matrix_semantics':'peak_counts'})
+            native['source_identity']=dict(sha256='d'*64)
         if i:
             prev=natives[-1]; args['input_path']=prev['matrix_path']
             native['source_identity']=dict(sha256=prev['matrix_sha256'],accepted_publication={k:prev[k] for k in ('manifest_path','manifest_sha256')})
@@ -112,12 +112,6 @@ def test_one_cluster_no_differential_needed_and_budget_separate(bound):
     assert result['residual_parent']['positions']==[4,1,3]
     assert result['execution_budget']['supplied_reason']['maximum_levels']==3
     assert not result['execution_budget']['enforced']
-
-
-def test_missing_gene_only_peak_source_is_unassessed(bound):
-    _,native,_=bound; native[0]['measurement']='gene_activity'; native[0]['parameters']['gene_activity']={'interface':'gene-activity.v1'}
-    result=assess(bound)
-    assert result['outcome']=='missing_input' and 'peak' in result['reason']
 
 
 def test_derive_positions_and_rest_no_researcher_hashes(bound):
@@ -169,21 +163,6 @@ def test_annotation_full_evidence_preserved_and_bound(bound,tmp_path):
     with pytest.raises(AuthorityError): assess(bound,annotation=annotation,annotation_bindings=[binding])
 
 
-def test_native_peak_counting_semantics_use_accepted_ancestry(bound,monkeypatch):
-    from agent.orchestration import verification_authority
-    bindings,natives,_=bound
-    original=dict(function_name='snapatac2.pp.make_peak_matrix',matrix_sha256='e'*64,
-                  manifest_path='peak-manifest.json',manifest_sha256='f'*64)
-    natives[0]['measurement']='paired_insertion_counts'
-    natives[0]['source_identity']=dict(sha256=original['matrix_sha256'],accepted_publication={k:original[k] for k in ('manifest_path','manifest_sha256')})
-    context=SimpleNamespace(validate_anchors=lambda:None,proofs={'peak':SimpleNamespace(result_metadata=original)})
-    monkeypatch.setattr(verification_authority,'_load_context',lambda *a:context)
-    result=assess(bound)
-    assert result['peak_source']==dict(origin='accepted_native_peak_matrix',native_result=original)
-    original['function_name']='snapatac2.pp.add_tile_matrix'
-    assert assess(bound)['peak_source'] is None  # Do not invent peak calling from bins.
-
-
 @pytest.mark.parametrize('selector', [[2,0],['c2','c0'],[True,False,True]])
 def test_native_selector_forms_preserve_membership_without_order_gate(selector):
     assert sorted(owner._positions(selector,['c0','c1','c2']))==[0,2]
@@ -207,54 +186,3 @@ def test_native_unassigned_cells_are_residual_not_a_candidate(bound,labels,expec
     assert result['unassigned_local_positions']==[i for i,label in enumerate(labels) if label=='-1']
     with pytest.raises(ValueError,match='unassigned'):
         owner.differential_kwargs(bindings[-1],'-1',store=None,registry=None)
-
-
-@pytest.mark.parametrize('measurement', ['peak_counts','binary_accessibility','fragment_counts','researcher_count_unit'])
-@pytest.mark.parametrize('field', ['declarations','supplied_declarations'])
-def test_explicit_peak_declaration_is_independent_of_measurement(bound,measurement,field):
-    _,native,_=bound
-    parent=native[0]; parent['measurement']=measurement
-    parent['source_identity']=dict(sha256='d'*64,measurement=measurement,
-        **{field:{'matrix_semantics':'peak_accessibility'}})
-    result=assess(bound)
-    assert result['peak_source']['declaration']==dict(source_sha256='d'*64,field=field,matrix_semantics='peak_accessibility')
-    assert result['peak_source']['native_result']['measurement']==measurement
-    assert result['parent_membership']['positions']==[4,1,3]
-
-
-@pytest.mark.parametrize('measurement', ['binary_accessibility','fragment_counts','gene_activity','native_fragment_positions_and_lengths'])
-def test_units_alone_do_not_establish_peak_feature_identity(bound,measurement):
-    _,native,_=bound
-    native[0]['measurement']=measurement
-    native[0]['source_identity']=dict(sha256='d'*64,declarations={'matrix_semantics':measurement})
-    result=assess(bound)
-    assert result['peak_source'] is None and result['outcome']=='missing_input'
-
-
-@pytest.mark.parametrize('function', ['snapatac2.pp.add_tile_matrix','snapatac2.pp.import_fragments','snapatac2.pp.make_gene_matrix','episcanpy.tl.geneactivity'])
-def test_known_native_representation_cannot_be_overridden_by_downstream_declaration(bound,monkeypatch,function):
-    from agent.orchestration import verification_authority
-    _,native,_=bound
-    original=dict(function_name=function,matrix_sha256='e'*64,
-        manifest_path='origin.json',manifest_sha256='f'*64)
-    parent=native[0]
-    parent['source_identity'].update(sha256='e'*64,accepted_publication={k:original[k] for k in ('manifest_path','manifest_sha256')})
-    context=SimpleNamespace(validate_anchors=lambda:None,proofs={'origin':SimpleNamespace(result_metadata=original)})
-    monkeypatch.setattr(verification_authority,'_load_context',lambda *a:context)
-    assert assess(bound)['peak_source'] is None
-
-
-def test_exact_accepted_peak_declaration_survives_preserving_chain(bound,monkeypatch):
-    from agent.orchestration import verification_authority
-    _,native,_=bound
-    original=deepcopy(native[0]); original.update(matrix_sha256='e'*64,manifest_path='origin.json',manifest_sha256='f'*64)
-    original['source_identity']=dict(sha256='d'*64,declarations={'matrix_semantics':'binary_accessibility'},
-                                    supplied_declarations={'matrix_semantics':'peak_accessibility'})
-    native[0]['measurement']='binary_accessibility'
-    native[0]['source_identity']=dict(sha256='e'*64,declarations={'matrix_semantics':'binary_accessibility'},
-                                    accepted_publication={k:original[k] for k in ('manifest_path','manifest_sha256')})
-    context=SimpleNamespace(validate_anchors=lambda:None,proofs={'origin':SimpleNamespace(result_metadata=original)})
-    monkeypatch.setattr(verification_authority,'_load_context',lambda *a:context)
-    assert assess(bound)['peak_source']['native_result']==original
-    native[0]['source_identity']['sha256']='c'*64
-    assert assess(bound)['peak_source'] is None

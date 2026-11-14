@@ -368,6 +368,12 @@ class ResearchAgentApplication:
         result = self._runtime.run_prepared(effective, plan)
         return self._complete(result, run)
 
+    def continue_annotation(self, request, plan, *, previous):
+        """Complete an explicitly selected exact continuation with shared delivery."""
+        effective, run = self._prepare_request(request)
+        result = self._runtime.continue_annotation(effective, plan, previous=previous)
+        return self._complete(result, run)
+
     def resume(self, run_id: str) -> ApplicationResult:
         """Resume durable execution without planning, then compose reporting."""
 

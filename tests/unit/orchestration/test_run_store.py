@@ -267,3 +267,14 @@ def test_failed_replace_leaves_previous_revision_readable(
     assert isinstance(raised.value.__cause__, OSError)
     assert store.load(state.run_id) == state
     assert not tuple(tmp_path.glob("*.tmp"))
+
+
+def test_absent_qualification_does_not_decode_run_but_present_sidecar_does(tmp_path,monkeypatch):
+    store=FileRunStore(tmp_path);state=store.create(_planning_state())
+    original=store._load_path;calls=[]
+    def load(*a,**k):calls.append(1);return original(*a,**k)
+    monkeypatch.setattr(store,'_load_path',load)
+    assert store._load_qualified_authorities(state.run_id)=={} and calls==[]
+    store.state_path(state.run_id).with_suffix('.authority.json').write_text('{}')
+    with pytest.raises(RunStateCorruptionError):store._load_qualified_authorities(state.run_id)
+    assert calls==[1]

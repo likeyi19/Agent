@@ -412,18 +412,16 @@ Registry, Runtime, native workers, publication and exact PriorOutput owners reta
 all execution and integrity responsibilities; existing ASW and explicit parameter
 precedence are unchanged.
 
-The selected parent clustering must retain the original peak X. Existing
-source-bound peak declarations or accepted `pp.make_peak_matrix` ancestry identify
-that space independently of measurement units. For example, an input recording
-`matrix_semantics='binary_accessibility'` or `'fragment_counts'` can carry the
-explicit existing `matrix_semantics='peak_accessibility'` invocation declaration.
-The native owner retains the original measurement and the supplied declaration
-separately, tied to the exact source bytes. No new field or measurement whitelist
-is required. A counting unit alone does not establish peaks. Gene constructors,
-tile construction and raw fragments retain their actual native identity even if
-a later declaration calls them peaks; filenames, shapes and matching cells do not
-establish peak space. Accepted count-preserving ancestry carries a peak declaration
-without requiring SnapATAC2-specific construction history.
+The selected parent clustering retains the actual original X and exact cell
+membership. The intended scientific input is cell-by-peak accessibility. Agent
+performs no peak-space eligibility test before local execution or evidence
+reading: ordinary H5ADs need no `var.feature_type`, `uns.matrix_semantics`,
+coordinate-format test, source certificate or particular producing package.
+Native packages receive the actual data and parameters. Native failures remain
+failures, never successful biological stopping evidence. The unchanged ICTA-3C
+retention rule remains specific to differential accessibility in the supplied
+peak matrix; native numerical success does not certify gene/tile features as
+peaks or establish biological validity.
 The first local step uses ICTA-2 `cell_subset={"groupby": actual_parent_key,
 "groups": [actual_parent_label]}`. The adapter derives positions, cell IDs and
 source hashes. Complete parent membership and actual local-written feature,
@@ -537,10 +535,9 @@ Naming, ambiguity and the number of significant labels do not control recursion.
 
 `maximum_levels` defaults to **5**, counting the initial annotation as level 1.
 This is a configurable execution budget. Branches can stop independently for no
-candidate, no support, partial/full retention, missing original peak space,
-native-unassigned membership or budget exhaustion. Gene-only accepted data still
-receive current-round annotation and a factual missing-peak limitation. Native
-failure, cancellation and interruption propagate through the existing lifecycle;
+candidate, no support, partial/full retention, native-unassigned membership or
+budget exhaustion. There is no automatic level-one stop based on feature-space
+metadata recognition. Native failure, cancellation and interruption propagate through the existing lifecycle;
 they do not become biological stopping evidence or a completed publication.
 
 The existing reservation/outcome trace is the only durable progress owner.

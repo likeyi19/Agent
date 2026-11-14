@@ -210,3 +210,29 @@ def test_whole_annotation_rationale_preserves_group_marker_correspondence(app, m
     assert all(c.source['revision_id'] == rid for c in response.scientific.claims)
     # Science is forbidden; only the ordinary answer Session envelope is written.
     assert all(files(app)[path] == value for path, value in before.items() if '/published/' in path)
+
+
+def test_column_marker_detail_uses_actual_table_row_pointer(app, monkeypatch):
+    from agent.tools.analysis.hierarchical_annotation import annotation_tables
+    rid, root = publication(app)
+    path = root/'annotations.json'
+    value = json.loads(path.read_bytes())
+    value['initial']['schema']='marker-candidates.v1'
+    for cluster in value['initial']['clusters']:
+        cluster['markers'][0].update(identity='MS4A1',exclusion_reason=None,score=3.,pvalue=.001,detection_fractions={})
+    packed = annotation_tables(value)
+    raw=json.dumps(packed).encode();path.write_bytes(raw)
+    # Use the same fixture publication/authority handoff with exact updated pins.
+    manifest=json.loads((root/'manifest.json').read_bytes())
+    pin=next(p for p in manifest['files'] if p['path']==str(path))
+    pin.update(sha256=hashlib.sha256(raw).hexdigest(),size_bytes=len(raw))
+    (root/'manifest.json').write_text(json.dumps(manifest))
+    # This fixture has a mocked accepted boundary; update its selected result only.
+    original=de._detail
+    from types import SimpleNamespace
+    step=type('Step',(),dict(tool_name='annotate_scATAC_cell_types',verification=SimpleNamespace(artifact_authority=None),result=dict(manifest_path=str(root/'manifest.json'),
+        manifest_sha256=hashlib.sha256((root/'manifest.json').read_bytes()).hexdigest(),contract_version=manifest['contract_version'])))()
+    detail=original(app.sessions,step,DetailRequest('annotation_rationale','3',1))
+    facts={f.field:f for f in detail}
+    assert facts['marker.0'].value['feature']=='MS4A1'
+    assert facts['marker.0'].source_pointer=='/rounds/initial/clusters/0/markers/rows/0'

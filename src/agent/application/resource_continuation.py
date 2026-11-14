@@ -124,6 +124,14 @@ def selected_answer(interaction, preceding):
         return RoleAnswer('@roles', (), arguments=(ExplicitArgument('annotate_scATAC_cell_types',
             'group_column', option['value']),))
     from .raw_handoff import empty
+    if reference['field'] == 'annotation' and selection['handle'].startswith('annotation-species:'):
+        from .raw_handoff import AnnotationDeclaration
+        option = next(row for row in choices if row['handle'] == selection['handle'])
+        return RoleAnswer('@roles', (), annotation=AnnotationDeclaration(species=option['value']))
+    if reference['field'] == 'annotation' and selection['handle'].startswith('annotation-umap:'):
+        from .raw_handoff import AnnotationDeclaration
+        return RoleAnswer('@roles', (), annotation=AnnotationDeclaration(
+            generate_umap=selection['handle'] == 'annotation-umap:generate'))
     declared = replace(empty(reference['field']), resource=selection['handle'])
     return RoleAnswer('@roles', (), **{reference['field']: declared})
 

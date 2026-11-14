@@ -113,6 +113,15 @@ def freeze_json_mapping(value: Mapping[str, object], field_name: str) -> Mapping
 
 
 def _serialize(value: object) -> Any:
+    # Native parameter arrays contain millions of plain JSON scalars. Handle
+    # exact builtins before reference/model/Mapping checks; Enum subclasses must
+    # still take their existing conversion path below.
+    if value is None or type(value) in (str, bool, int):
+        return value
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ValueError("Cannot serialize a non-finite float.")
+        return value
     if isinstance(value, PriorOutputRef):
         return value.to_dict()
     if isinstance(value, StepOutputRef):

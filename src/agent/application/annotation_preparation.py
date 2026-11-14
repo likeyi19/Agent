@@ -133,7 +133,54 @@ def admit(sessions, interaction, decision, input_sets):
         if decision.unknown_fields:
             result['unknown_fields'] = list(decision.unknown_fields)
         result['context'] = (origin.admitted or {}).get('context', 'none')
+    observed = result.get('annotation_source_evidence')
+    questions, options = [], []
+    if observed is not None:
+        unknown = [name for name in ('species', 'assembly')
+            if getattr(declared, name) is None and observed['declarations'].get(name) is None]
+        if unknown:
+            questions = ['Please specify the sample ' + ' and '.join(unknown)
+                + ' so the native gene annotation and CellMarker evidence can be matched. '
+                'You may also identify the original grouping column to reuse.']
+        elif declared.generate_umap is None and not umap_available(sessions, interaction, result):
+            questions = ['Generate UMAP? No compatible UMAP coordinates were found. Would you like to compute UMAP for visualization? This will run an additional scientific analysis.']
+            options = [dict(handle='annotation-umap:' + action, label=label, description=label)
+                for action, label in (('generate', 'Generate UMAP'), ('skip', 'Skip UMAP'))]
+    if questions:
+        result.update(reason='missing_annotation_declarations', choices=questions)
+        if options:
+            result['resource_options'] = options
+        pending = dict(origin_turn_id=origin.turn_id, binding_turn_id=interaction.turn_id,
+            field='annotation', tool=result['tool'], resource_context_sha256=digest(rows))
+        return result, pending
     return result, None
+
+
+def umap_available(sessions, interaction, admitted):
+    """Read coordinate availability from exact source/accepted native evidence."""
+    observed = admitted['annotation_source_evidence']
+    if observed.get('compatible_umap'):
+        return True
+    if interaction.base_revision_id is None:
+        return False
+    from .result_reading import handoff
+    from agent.tools.analysis.local_subdivision import _metadata
+    from agent.tools.analysis.embedding_analysis import _cell_order_digest
+    context, _ = sessions.execution_context_for_interaction(
+        sessions._interaction_session_id, interaction.turn_id, admitted=admitted)
+    for item in (() if context is None else context.items):
+        binding = item.binding
+        from agent.orchestration.prior_outputs import validate_binding
+        validate_binding(binding, store=sessions._application.run_store,
+            registry=sessions._application.registry, integrity=True)
+        result = handoff(sessions._application.run_store, binding.run_id, binding.step_id)
+        source=None if result is None else result.get('cell_source') or result['source']
+        if (result is not None and result['coordinates'] and source is not None
+                and source['sha256'] == observed['source_sha256']):
+            obs, = _metadata(dict(matrix_path=result['file']['path']), 'obs')
+            if _cell_order_digest(obs.index.tolist()) == observed['cell_order_sha256']:
+                return True
+    return False
 
 
 def validate(interaction, preceding):
@@ -193,14 +240,16 @@ def preparer(sessions, interaction, admitted):
         if tool.name != 'annotate_scATAC_cell_types':
             return arguments
         from agent.tools.analysis.sequence_prediction import library
-        from agent.tools.data.cellmarker import CellMarkerEvidence
+        from agent.tools.data.cellmarker import CellMarkerEvidence, resolve_species
         from .raw_handoff import AnnotationDeclaration, declaration
         lib = library()
         values = dict(arguments)
         annotation = admitted.get('annotation', admitted.get('downstream_annotation'))
         declared = declaration(_serialize(annotation), 'annotation') if annotation else AnnotationDeclaration()
         if declared.species is not None:
-            if values.get('species', declared.species) != declared.species:
+            def species_name(value):
+                return value.casefold()
+            if species_name(values.get('species', declared.species)) != species_name(declared.species):
                 raise ValueError('Selected annotation species differs from the captured declaration')
             values['species'] = declared.species
         entries = [entry for entry in lib.entries() if entry['kind'] == 'cellmarker'
@@ -211,6 +260,16 @@ def preparer(sessions, interaction, admitted):
         if values.get('cellmarker_identity', evidence.identity) != evidence.identity:
             raise ValueError('Captured CellMarker evidence identity changed')
         values.update(cellmarker_id=entries[0]['id'], cellmarker_identity=evidence.identity)
+        if values.get('species') is not None:
+            try:
+                # Preserve the declaration in the captured context and plan;
+                # the evidence owner resolves the exact query and records both.
+                resolve_species(values['species'], evidence.metadata['species'])
+            except ValueError as exc:
+                options = [dict(handle='annotation-species:' + str(i), label=species,
+                    description='Use the exact CellMarker species value ' + species,
+                    value=species) for i, species in enumerate(evidence.metadata['species'])]
+                raise AnnotationPrerequisite((str(exc) + '. Select the sample species from the pinned CellMarker reference.',), options) from exc
         if declared.groups_result is not None:
             from .annotation_groups import choices
             from agent.orchestration.prior_outputs import bind_output
@@ -270,12 +329,22 @@ def preparer(sessions, interaction, admitted):
             if 'activity_method' not in values:
                 raise AnnotationPrerequisite(('Select compatible accepted Gene Activity or its applicable native construction.',))
             if 'gene_anno_path' not in values:
-                refs = [e for e in lib.entries() if e['kind'] == 'gene_annotation'
-                        and (declared.species is None or e['resource'].get('species') == declared.species)
-                        and (declared.assembly is None or e['resource'].get('assembly') == declared.assembly)]
-                if len(refs) != 1:
-                    raise AnnotationPrerequisite(('Select the applicable gene annotation reference for native Gene Activity.',))
-                resource = lib.check(refs[0])['file']
+                from .input_sets import ScientificInputSet
+                from .native_raw_handoff import resource_evidence, _component, ResourcePrerequisite
+                catalog = resource_evidence(tuple(ScientificInputSet(**_serialize(row))
+                    for row in admitted.get('resource_catalog', ())))
+                reference_species=declared.species
+                if reference_species is not None:
+                    reference_species=next((key for key in ('human','mouse')
+                        if species_name(reference_species)==species_name(key)),reference_species)
+                receipt = dict(catalog=catalog, custom={}, species=reference_species,
+                    assembly=declared.assembly,
+                    selected=None if declared.resource is None else declared.resource.removeprefix('resource.'))
+                try:
+                    resource, _, _ = _component(receipt, 'gene_anno',
+                        'Native Gene Activity requires its applicable gene annotation reference.')
+                except ResourcePrerequisite as exc:
+                    raise AnnotationPrerequisite(exc.questions, exc.options) from exc
                 values.update(gene_anno_path=resource['path'], gene_anno_sha256=resource['sha256'])
             if (values['activity_method'] == 'snapatac2.pp.make_gene_matrix'
                     and not values.get('activity_kwargs', {}).get('use_x') and 'activity_source_path' not in values):

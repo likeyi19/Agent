@@ -59,3 +59,22 @@ def test_missing_library_is_environment_error_and_matrix_errors_remain_input_err
     invalid = registry.classify_exception('run_snapatac2', ValueError('Invalid matrix'))
     assert invalid.code == 'NATIVE_MATRIX_INPUT_INVALID'
     assert invalid.category.value == 'USER_INPUT_ERROR'
+
+
+def test_native_cpu_default_respects_ancestor_quota_and_single_operation(monkeypatch):
+    from agent.tools import _native_process as owner
+    monkeypatch.setattr(owner,'_resource_limits',lambda:(8*1024**3,8*1024**3,1))
+    monkeypatch.delenv('AGENT_NATIVE_CPU_COUNT',raising=False)
+    monkeypatch.setenv('AGENT_NATIVE_MEMORY_BYTES',str(4*1024**3))
+    assert owner.native_cpu_count()==1 and owner.resource_capacity()==1
+    monkeypatch.setenv('AGENT_NATIVE_CPU_COUNT','2')
+    with pytest.raises(owner.NativeExecutionError):owner.native_cpu_count()
+
+
+@pytest.mark.parametrize('value',[None,'0','invalid'])
+def test_invalid_branch_resource_budget_is_an_operational_error(monkeypatch,value):
+    from agent.tools import _native_process as owner
+    monkeypatch.delenv('AGENT_NATIVE_MEMORY_BYTES',raising=False)
+    if value is not None:monkeypatch.setenv('AGENT_NATIVE_MEMORY_BYTES',value)
+    with pytest.raises(owner.NativeExecutionError) as error:owner.resource_capacity()
+    assert error.value.code=='NATIVE_EXECUTION_UNAVAILABLE'

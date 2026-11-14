@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 from copy import deepcopy
 from importlib.metadata import version
 import math
+from threading import Lock
 
 import h5py
 from anndata._io.specs import read_elem
@@ -32,9 +33,30 @@ def _number(value):
     return value if math.isfinite(value) else None
 
 
+def _fractions(ranked, group):
+    """Index each native fraction column once, retaining repeated-name order.
+
+    Scanpy ranks names without a feature-position mapping. A repeated name
+    therefore retains every native fraction, exactly as pandas label lookup did.
+    It never selects an arbitrary column or changes the distinct-gene ORA rule.
+    """
+    result = {}
+    for slot in ('pts', 'pts_rest'):
+        if slot not in ranked or group not in ranked[slot]:
+            continue
+        frame = ranked[slot]
+        values = defaultdict(list)
+        for feature, value in zip(frame.index, frame[group].to_numpy()):
+            values[feature].append(_number(value))
+        result[slot] = {feature: rows[0] if len(rows) == 1 else rows
+                        for feature, rows in values.items()}
+    return result
+
+
 def _interpret(universe, positive, candidates, alpha):
     """One cluster's complete test family; SciPy owns both statistics."""
-    universe, positive = set(universe), set(positive) & set(universe)
+    universe = set(universe)
+    positive = set(positive) & universe
     tests, uncovered = [], []
     for candidate in candidates:
         genes = set(candidate['genes']) & universe
@@ -44,7 +66,12 @@ def _interpret(universe, positive, candidates, alpha):
         overlap = sorted(genes & positive)
         tests.append(dict(candidate=candidate['candidate'], N=len(universe), K=len(genes),
             n=len(positive), k=len(overlap), matched_genes=overlap,
-            pvalue=float(hypergeom.sf(len(overlap) - 1, len(universe), len(genes), len(positive)))))
+            pvalue=None))
+    # SciPy's vectorized evaluation is the same test family in the same order.
+    probabilities = hypergeom.sf([t['k'] - 1 for t in tests], len(universe),
+                                [t['K'] for t in tests], len(positive)) if tests else []
+    for test, p in zip(tests, probabilities):
+        test['pvalue'] = float(p)
     adjusted = false_discovery_control([t['pvalue'] for t in tests], method='bh') if tests else []
     for test, q in zip(tests, adjusted):
         test.update(pvalue_adj=float(q), significant=bool(q <= alpha))
@@ -66,7 +93,10 @@ def _reference(lookup, universe, kind, species, context):
         if r['cell_name'] != ''}
     query = dict(names=universe if kind == 'name' else [],
                  gene_ids=universe if kind == 'gene_id' else [], species=species, filters=context)
-    for page in lookup.query(**query):
+    # This internal consumer reads every record, rather than displaying UI
+    # pages. Larger bounded batches avoid copying the complete gene query and
+    # rechecking the same resource registration for every 128 evidence rows.
+    for page in lookup.query(**query, page_size=4096):
         for item in page['items']:
             fields = item['fields']
             candidate = candidates.get((fields['species'], fields['cell_name']))
@@ -101,6 +131,32 @@ def _reference(lookup, universe, kind, species, context):
     return result, query
 
 
+class MarkerReference:
+    """One coordinator's exact reference projection, never persisted across Runs.
+
+    Local rounds normally test the same Gene Activity universe. Reuse only that
+    exact query; resource registration and file snapshots are checked on every
+    read. Independent returned containers protect one round from another's edits.
+    This carries no native-result or accepted-publication authority.
+    """
+    def __init__(self, evidence):
+        self.evidence = evidence
+        self._key = self._value = None
+        self._lock = Lock()
+
+    def read(self, universe, kind, species, context):
+        key = (tuple(universe), kind, species, tuple(sorted(context.items())))
+        self.evidence._check()
+        with self._lock:
+            if key != self._key:
+                value = _reference(self.evidence, list(universe), kind, species, dict(context))
+                self.evidence._check()
+                self._key, self._value = key, value
+            value = deepcopy(self._value)
+        self.evidence._check()
+        return value
+
+
 def candidate_evidence(result, candidate, lookup, *, page_size=128):
     """Read original fields, exact field matches and source-row references lazily.
 
@@ -115,7 +171,8 @@ def candidate_evidence(result, candidate, lookup, *, page_size=128):
 
 
 def annotate_markers(binding, *, store, registry, evidence=None, species=None, context=None,
-                     identity_kind='name', identity_column=None, marker_alpha=0.05, ora_alpha=0.05):
+                     identity_kind='name', identity_column=None, marker_alpha=0.05, ora_alpha=0.05,
+                     reference=None):
     """Interpret one exact accepted marker publication; never execute native work.
 
     Identity is one explicitly selected exact name/ID per feature, defaulting to
@@ -189,25 +246,25 @@ def annotate_markers(binding, *, store, registry, evidence=None, species=None, c
         reasons.append('CellMarker reference evidence is unavailable.')
     if evidence is not None:
         # No new identity system: each query uses exactly one declared namespace.
-        candidates, query = _reference(evidence, universe, identity_kind, species, context)
-        result['reference'] = dict(resource=deepcopy(evidence.identity), query=query)
+        from agent.tools.data.cellmarker import resolve_species
+        resolved_species = resolve_species(species, evidence.metadata['species'])
+        if reference is not None and (not isinstance(reference, MarkerReference) or reference.evidence is not evidence):
+            raise AuthorityError('Reference projection belongs to a different evidence scope.')
+        candidates, query = (_reference(evidence, universe, identity_kind, resolved_species, context)
+            if reference is None else reference.read(universe, identity_kind, resolved_species, context))
+        result['reference'] = dict(resource=deepcopy(evidence.identity), query=query,
+            species_binding=dict(declared=species, resolved=resolved_species))
         result['candidates'] = candidates
     for group in groups:
         markers, positive = [], set()
+        fractions_by_name = _fractions(ranked, group)
         for i, feature in enumerate(ranked['names'][group]):
             score, p, q = (_number(ranked[k][group][i]) for k in ('scores', 'pvals', 'pvals_adj'))
             identity = mapping.get(feature)
             selected = score is not None and score > 0 and q is not None and q <= marker_alpha
             if selected and identity is not None:
                 positive.add(identity)
-            fractions = {}
-            for slot in ('pts', 'pts_rest'):
-                if slot in ranked and group in ranked[slot]:
-                    value = ranked[slot].loc[feature, group]
-                    # Repeated feature names have no rank-to-position mapping in
-                    # Scanpy. Retain all native fractions, without inventing one.
-                    fractions[slot] = ([_number(v) for v in value.tolist()] if hasattr(value, 'tolist')
-                                       and getattr(value, 'ndim', 0) else _number(value))
+            fractions = {slot: values[feature] for slot, values in fractions_by_name.items()}
             markers.append(dict(feature=str(feature), identity=identity, exclusion_reason=exclusions.get(feature), score=score, pvalue=p,
                 pvalue_adj=q, positive=bool(selected), detection_fractions=fractions))
         group_reasons = list(reasons)

@@ -104,6 +104,23 @@ def test_explicit_reference_and_custom_regions_are_preserved(inputs):
     assert set(result.steps[0].arguments)=={'input_path','output_dir','function_name','peaks_path','peaks_sha256'}
 
 
+@pytest.mark.parametrize('available_regions',[False,True])
+def test_accepted_peak_caller_regions_are_not_replaced_by_reference_discovery(inputs,available_regions):
+    imported=plan(inputs,'pp.import_fragments').steps[0]
+    peaks=PlanStep('peaks','call_scATAC_peaks',dict(input_path=StepOutputRef('0','matrix_path'),
+        output_dir=str(inputs.root/'peaks'),effective_genome_size=10000,
+        genome_size_basis='Explicit technical fixture'),('0',))
+    matrix=PlanStep('matrix','run_snapatac2',dict(function_name='pp.make_peak_matrix',
+        input_path=StepOutputRef('0','matrix_path'),output_dir=str(inputs.root/'matrix'),
+        peaks_path=StepOutputRef('peaks','peaks_path'),peaks_sha256=StepOutputRef('peaks','peaks_sha256')),('0','peaks'))
+    candidate=AgentPlan('native-peaks','native-peaks','Current producer/consumer handoff',(imported,peaks,matrix))
+    choices=(inputs.genome,inputs.regions) if available_regions else (inputs.genome,)
+    bindings=[]
+    bound=bind_plan(candidate,receipt(inputs,choices),bindings=bindings)
+    assert bound.steps[-1]==matrix
+    assert [(b['step_id'],b['port']) for b in bindings]==[('0','chrom_sizes')]
+
+
 @pytest.mark.parametrize('selection',['missing','conflict'])
 def test_invalid_explicit_preference_is_never_substituted(inputs,selection):
     preference=dict(literal='unknown' if selection=='missing' else 'mouse reference',start=0,end=7 if selection=='missing' else 15)
@@ -680,6 +697,24 @@ def test_finite_choice_dispatch_also_uses_existing_resource_answer():
         submission=dict(clarification_choice=dict(question_turn_id='question',handle='resource.exact')))
     answer=selected_answer(received,(question,))
     assert isinstance(answer,ResourceAnswer) and answer.pending=='@resources' and answer.choice=='resource.exact'
+
+
+@pytest.mark.parametrize('field',['fastq','bam','fragments','annotation'])
+@pytest.mark.parametrize('handle,value',[('annotation-species:0','Human'),('annotation-umap:skip',False)])
+def test_captured_annotation_choices_keep_their_owner_inside_raw_objectives(field,handle,value):
+    from agent.application.resource_continuation import selected_answer
+    from agent.application.session_state import Interaction
+    from agent.application.turn_decisions import RoleAnswer,IntentError
+    reference=dict(field=field,origin_turn_id='question',binding_turn_id='question',predecessor_turn_id='question')
+    question=SimpleNamespace(turn_id='question',admitted=dict(resource_options=[dict(handle=handle,label='Exact captured choice',value=value)]))
+    received=Interaction('answer','',None,0,dict(prerequisite=reference),
+        submission=dict(clarification_choice=dict(question_turn_id='question',handle=handle)))
+    answer=selected_answer(received,(question,))
+    assert isinstance(answer,RoleAnswer) and answer.pending=='@roles'
+    assert answer.annotation is not None and all(getattr(answer,k) is None for k in ('bam','fastq','fragments'))
+    assert (answer.annotation.species if handle.startswith('annotation-species:') else answer.annotation.generate_umap)==value
+    with pytest.raises(IntentError,match='invalid_reference'):
+        selected_answer(replace(received,submission=dict(clarification_choice=dict(question_turn_id='other',handle=handle))),(question,))
 
 
 @pytest.mark.parametrize('tool,function', [('run_snapatac2','pp.make_gene_matrix'), ('run_episcanpy','tl.geneactivity')])

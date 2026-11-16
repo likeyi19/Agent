@@ -986,9 +986,9 @@ def test_exact_annotation_continuation_uses_session_acceptance_owners(harness, t
 def test_binding_consumes_one_fresh_decoded_state_and_still_checks_changed_files(harness,monkeypatch):
     h=harness;request,plan=h.prepare();assert h.runtime().run_prepared(request,plan).status is RunStatus.SUCCEEDED
     child=child_state(h);binding=bind_output(h.store,h.registry,child.run_id,'operation','dataset')
-    original=h.store._load_path;calls=[]
+    original=h.store._decode_state;calls=[]
     def load(*a,**k):calls.append(1);return original(*a,**k)
-    monkeypatch.setattr(h.store,'_load_path',load)
+    monkeypatch.setattr(h.store,'_decode_state',load)
     step=validate_binding(binding,store=h.store,registry=h.registry)
     assert calls==[1]
     Path(step.result['data_path']).write_text('changed native payload')

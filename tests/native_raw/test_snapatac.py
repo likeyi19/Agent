@@ -162,22 +162,6 @@ def test_native_h5ad_handoff_cannot_follow_unbound_external_storage(inputs,monke
         call(inputs,'pp.filter_cells',input_path=path)
 
 
-def test_existing_peak_caller_reads_exact_explicit_cell_contract_without_raw_producer(tmp_path):
-    from types import SimpleNamespace
-    from agent.tools.data.explicit_cells import publish_explicit_cells
-    from agent.tools.analysis.macs3 import selected_population
-    result = publish_explicit_cells(cells=[('library', 'B'), ('library', 'A')],
-        declaration='Explicit caller order', output_dir=tmp_path/'cells')
-    source = SimpleNamespace(libraries=[SimpleNamespace(namespace='library')])
-    args = dict(explicit_cells_manifest_path=result['manifest_path'],
-        explicit_cells_manifest_sha256=result['manifest_sha256'])
-    namespace, pairs, label, pins = selected_population(args, source)
-    assert namespace == 'library' and pairs == [('library', 'B'), ('library', 'A')]
-    assert label == 'explicit supplied ordered cells; no QC claim' and len(pins) == 2
-    with pytest.raises(ValueError, match='changed'):
-        selected_population(dict(args, explicit_cells_manifest_sha256='0'*64), source)
-
-
 def test_native_tiles_and_explicit_ordmag_keep_independent_returns(native, inputs):
     import numpy as np
     source = imported(inputs)

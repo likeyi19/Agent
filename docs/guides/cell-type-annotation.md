@@ -24,6 +24,12 @@ clustering and differential evidence; they do not reuse the original groups as
 local subdivisions. Equal filenames, dimensions or cell names do not establish source
 correspondence. An unresolved required identity uses the existing scoped question.
 
+When a selected UMAP or another count-preserving native result retains an
+upstream clustering, input preparation binds annotation's grouping port to that
+actual native clustering producer and records its dependency. Retained columns
+do not make UMAP a new clustering operation. Accepted results use the shared
+read-only lineage handoff; planned sources use the same native capability metadata.
+
 The ScientificResourceLibrary selects installed CellMarker 3.0 evidence and pins
 its identity. Biological species declarations are matched to the pinned reference's
 actual species value by unique `casefold()` equality. The captured researcher
@@ -91,7 +97,11 @@ environments are bounded. CPU quota is effective only when the host delegates
 the CPU controller. Execution diagnostics distinguish memory limits, sampled
 cgroup use, process RSS, native timings and resource waiting.
 
-Default depth is five, including initial level one. Current-level marker and ORA
+Default `maximum_levels` is **3**, including initial level one. Explicit positive
+integer budgets retain their existing range and take precedence. The coordinator
+owns this single default; the hierarchy, H5AD metadata and result facts record the
+effective budget. This budget does not change scientific stopping or subdivision
+decisions. Current-level marker and ORA
 thresholds remain 0.05; subdivision retains the reviewed adjusted-p threshold 0.01
 and five qualifying peak features. Configured values, actual ASW selections and
 native execution identities are retained. Native failures are failed work, never

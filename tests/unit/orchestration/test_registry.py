@@ -276,7 +276,7 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
         "run_archr": "native-archr-project-v1",
         "run_chromap": "native-chromap-v1",
         "adopt_scATAC_cell_by_ccre": "adopt-scatac-cell-by-ccre-v1",
-        "call_scATAC_peaks": "macs3-frag-unit-record-v1",
+        "call_scATAC_peaks": "macs3-native-fragment-population-v2",
         "predict_regulatory_sequences": "regulatory-sequence-native-v1",
         "optimize_regulatory_sequences": "regulatory-sequence-optimization-native-v1",
         "generate_regulatory_sequences": "regulatory-sequence-generation-native-v1",

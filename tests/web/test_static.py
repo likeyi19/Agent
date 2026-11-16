@@ -364,15 +364,17 @@ def test_authoritative_interruption_offers_recovery_with_the_original_native_err
     code = (STATIC / 'app.js').read_text()
     history = code[code.index('function renderHistory'):code.index('function updateControls')]
     condition = next(line.strip()[4:-3] for line in history.splitlines()
-                     if line.strip().startswith('if ((!turn.response && turn.status === "interrupted")'))
+                     if line.strip().startswith('if ((!turn.response &&'))
     turns = [
         dict(status='interrupted', response=None, error=dict(code='NATIVE_RUN_FAILED')),
+        dict(status='cancelled', response=None, error=dict(code='RUN_CANCELLED')),
+        dict(status='cancelled', response=dict(kind='execute'), error=dict(code='RUN_CANCELLED')),
         dict(status='finalizing', response=None, error=dict(code='NATIVE_RUN_FAILED')),
         dict(status='unavailable', response=None, error=dict(code='INTERACTIVE_PRESENTATION_UNAVAILABLE')),
         dict(status='finalizing', response=dict(kind='execute'), error=dict(code='APP_REPORT_FAILED')),
     ]
     script = '(() => { return ' + json.dumps(turns) + '.map(turn => {const error=turn.error; return Boolean(' + condition + ');});})()'
-    assert _javascript_value(script) == [True, False, False, True]
+    assert _javascript_value(script) == [True, True, False, False, False, True]
 
 
 class HierarchyPage(Page):

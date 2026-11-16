@@ -42,6 +42,17 @@ def _accepted(store, run_id, step_id, *, state=None, registry=None):
     stored, step, state = _accepted_step(store, run_id, step_id, state=state)
     registry = build_default_tool_registry() if registry is None else registry
     spec = registry.get(step.tool_name)
+    if step.tool_name == 'call_scATAC_peaks':
+        from agent.tools.analysis import macs3
+        if stored.result.get('contract_version') == macs3.LEGACY_CONTRACT:
+            # Read-only v1 identity uses its recorded policy. The current v2
+            # Registry still rejects legacy arguments and cannot execute v1.
+            from types import SimpleNamespace
+            policy = state.recovery_policy_snapshot
+            if policy is None or not any(t.tool_name == step.tool_name
+                    and t.classifier_version == macs3.LEGACY_POLICY for t in policy.tools):
+                raise AuthorityError('Historical peaks lack their original recovery policy.')
+            spec = SimpleNamespace(name=spec.name, recovery_policy_version=macs3.LEGACY_POLICY)
     identity = execution_identity(run_id, state.plan, step, spec)
     original = stored.verification.artifact_authority
     qualified = _qualified_records(store, run_id).get(step_id)
@@ -107,6 +118,7 @@ def _load_context(store, run_id, source_policy):
     from pathlib import Path
     if source_policy not in ('historical_verified_sources.v1', 'current_source_freshness.v1'):
         raise AuthorityError('Unsupported source freshness policy.')
+    registry = build_default_tool_registry()
     state = store.load(run_id)
     context = VerificationContext()
     from .prior_outputs import import_plan_sources
@@ -119,7 +131,7 @@ def _load_context(store, run_id, source_policy):
         if (step.step_id not in qualified
                 and (step.verification is None or step.verification.artifact_authority is None)):
             continue
-        stored, authority, identity, anchor = _accepted(store, run_id, step.step_id, state=state)
+        stored, authority, identity, anchor = _accepted(store, run_id, step.step_id, state=state, registry=registry)
         if authority.record['schema_version'] != 2:
             continue  # no implicit upgrade of .1 or legacy verification
         record = authority.record
@@ -155,8 +167,13 @@ def _load_context(store, run_id, source_policy):
     previous_anchors = context.validate_anchors
     def validate_anchors():
         previous_anchors()
-        if any(_accepted(store, run_id, step_id)[3] != anchor for step_id, anchor in anchors.items()):
-            raise AuthorityError('Accepted execution authority changed during consumption.')
+        # One fresh, fully validated Run snapshot binds every accepted step in
+        # this check. Do not decode its entire trace again for each step.
+        if anchors:
+            observed = store.load(run_id)
+            if any(_accepted(store, run_id, step_id, state=observed, registry=registry)[3] != anchor
+                   for step_id, anchor in anchors.items()):
+                raise AuthorityError('Accepted execution authority changed during consumption.')
         if source_policy == 'current_source_freshness.v1':
             for _, authority, _, _ in selected:
                 expected = authority.to_dict()['historical_sources']

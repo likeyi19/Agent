@@ -1350,6 +1350,25 @@ class AgentRuntime:
         except RunStoreError:
             raise
         except Exception as exc:
+            from agent.tools._cancellation import ToolWorkCancelled
+            # Authority preparation wraps execute(), so cooperative cancellation
+            # can arrive before the executor installs its per-tool scope. Consult
+            # the owning callback; it also persists a child's exact parent intent.
+            if isinstance(exc, ToolWorkCancelled) and should_cancel is not None:
+                requested_at = should_cancel()
+                if requested_at is not None:
+                    _record_cancellation_observation(trace, requested_at, 'executor_preparation')
+                    # Resumption passes only successful restored steps. Keep the
+                    # full durable step set for ordinary cancellation finalization.
+                    steps = (self._required_run_store().load(run_id).steps
+                             if self._run_store is not None else tuple(completed_steps))
+                    return AgentRunResult(
+                        run_id=run_id, request_id=request.request_id,
+                        status=RunStatus.CANCELLED, planning_only=False, plan=plan,
+                        steps=steps,
+                        errors=(_cancellation_error(requested_at, 'executor_preparation'),),
+                        trace=trace.events,
+                    )
             error = _internal_error(
                 "EXECUTOR_UNEXPECTED_ERROR",
                 "PlanExecutor raised an unexpected orchestration error.",

@@ -11,7 +11,7 @@ import json
 import inspect
 import re
 
-from agent.schemas import AgentRequest
+from agent.schemas import AgentRequest, StepOutputRef
 from agent.schemas.orchestration import _serialize, freeze_json_mapping
 from .session_state import OutputSelection, SessionTurn, SessionConflictError, digest, selection_uses
 from .turn_decisions import (IntentError, ExplicitArgument, ScalarChoiceArgument, SourceFieldArgument, SourceScopedArgument, SourceScopedChoiceArgument, InputRole,
@@ -2106,7 +2106,9 @@ def prepare_native_task(sessions, interaction, admitted):
         for step in plan.steps:
             arguments = prepare_selected_inputs(app.registry.get(step.tool_name), dict(step.arguments), selected)
             selected[step.step_id] = (step.tool_name, arguments)
-            steps.append(replace(step, arguments=arguments))
+            dependencies = tuple(dict.fromkeys((*step.depends_on,
+                *(value.step_id for value in arguments.values() if isinstance(value, StepOutputRef)))))
+            steps.append(replace(step, arguments=arguments, depends_on=dependencies))
         plan = replace(plan, steps=tuple(steps))
         if field == 'annotation':
             return plan

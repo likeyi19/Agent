@@ -248,7 +248,7 @@ def test_valid_content_length_accepts_leading_zeroes_without_integer_overflow(up
     assert not backend.models and not backend.science_calls
 
 
-@pytest.mark.parametrize('limit', [256 * 1024**2, 2 * 1024**3, 8 * 1024**3])
+@pytest.mark.parametrize('limit', [256 * 1024**2, 2 * 1024**3, 8 * 1024**3, 16 * 1024**3])
 def test_catalog_advertises_actual_bounded_upload_limit(uploaded_web, limit):
     client, backend, uploads, _ = uploaded_web
     uploads.max_bytes = limit

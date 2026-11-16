@@ -232,6 +232,28 @@ def validate(interaction, preceding):
         if _serialize(interaction.prerequisite) != expected or not value.get('choices'):
             raise ValueError('Annotation prerequisite lost its exact pending scope.')
 
+def _native_grouping_reference(reference, selected):
+    """Resolve retained groups to their actual native producer; no field inference."""
+    from agent.tools.analysis.cell_result import NATIVE, grouping_key, planned_count_preservation
+    seen = set()
+    while isinstance(reference, StepOutputRef):
+        # Deferred preparation may not yet have this selected producer. Its
+        # ordinary compiled/runtime source checks remain authoritative.
+        if reference.step_id not in (selected or {}):
+            return reference
+        if reference.output_key != 'matrix_path' or reference.step_id in seen:
+            return None
+        seen.add(reference.step_id)
+        tool, arguments = selected[reference.step_id]
+        if (tool in NATIVE and arguments.get('kwargs', {}).get('inplace', True) is not False
+                and grouping_key(tool.removeprefix('run_'), arguments.get('function_name'), arguments.get('kwargs', {}))):
+            return reference
+        if not planned_count_preservation(tool, arguments):
+            return None
+        reference = arguments.get('input_path')
+    # Accepted grouping selections already use annotation_groups' shared
+    # lineage handoff and keep their captured binding/integrity owner.
+    return reference if isinstance(reference, PriorOutputRef) else None
 
 
 def preparer(sessions, interaction, admitted):
@@ -288,6 +310,11 @@ def preparer(sessions, interaction, admitted):
             values.pop('grouping_path', None)
         if supplied is not None and 'grouping_path' in values:
             raise ValueError('An explicit source grouping must be reused directly; do not plan another initial clustering')
+        if supplied is None and isinstance(values.get('grouping_path'), (StepOutputRef, PriorOutputRef)):
+            grouping = _native_grouping_reference(values['grouping_path'], selected)
+            if grouping is None:
+                raise AnnotationPrerequisite(('Select compatible accepted native clustering or plan its registered prerequisites.',))
+            values['grouping_path'] = grouping
         if supplied is None and not isinstance(values.get('grouping_path'), PriorOutputRef):
             source = values.get('input_path')
             observed = admitted.get('annotation_source_evidence')
@@ -308,19 +335,7 @@ def preparer(sessions, interaction, admitted):
         if supplied is None and 'grouping_path' not in values:
             raise AnnotationPrerequisite(('Select an original obs grouping column, compatible initial clustering, or plan the necessary registered native clustering steps.',))
         if declared.grouping_strategy == 'reuse_only' and supplied is None:
-            reference = values.get('grouping_path')
-            # Same-plan inspection/identity projection can preserve an existing
-            # grouping. A newly selected clustering operation cannot satisfy reuse.
-            def reuses_groups(ref, seen=()):
-                if isinstance(ref, PriorOutputRef):
-                    return True
-                if not isinstance(ref, StepOutputRef) or ref.step_id in seen or ref.step_id not in (selected or {}):
-                    return False
-                _, step_args = selected[ref.step_id]
-                if step_args.get('function_name') in {'tl.leiden', 'tl.louvain', 'tl.kmeans', 'tl.hc'}:
-                    return False
-                return reuses_groups(step_args.get('input_path'), (*seen, ref.step_id))
-            if not reuses_groups(reference):
+            if not isinstance(values.get('grouping_path'), PriorOutputRef):
                 raise AnnotationPrerequisite(('Select existing source groups or compatible accepted clustering to honor the request to reuse existing groups.',))
         for name, label in (('grouping_path','initial clustering'),('activity_path','Gene Activity'),('activity_source_path','native Gene Activity source')):
             if name in values and not isinstance(values[name],(PriorOutputRef,StepOutputRef)):

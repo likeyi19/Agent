@@ -39,7 +39,7 @@ def annotation_tool_spec():
         activity_method=((str,), 'Registered native Gene Activity construction when accepted activity is absent.'),
         activity_kwargs=((dict,), 'Exact native Gene Activity kwargs.'),
         activity_count_slot=((str,), 'Selected native X or layer for Gene Activity construction.'),
-        maximum_levels=((int,), 'Maximum hierarchy depth, including initial level 1; default five.'),
+        maximum_levels=((int,), f'Maximum hierarchy depth, including initial level 1; default {coordinator.DEFAULT_MAXIMUM_LEVELS}.'),
         local_kwargs=((dict,), 'Exact local SnapATAC2 parameters by native function.'),
         differential_kwargs=((dict,), 'Native differential-test parameters; populations are derived from accepted membership.'),
         parameter_selection=((str,), 'Bounded ASW for unspecified local resolution, or explicitly requested native_defaults.'),

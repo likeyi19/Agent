@@ -1499,7 +1499,7 @@ function renderHistory() {
       note.className = "turn-error";
       note.textContent = `${error.code}: ${error.message}`;
       article.append(note);
-      if ((!turn.response && turn.status === "interrupted") || error.code === "INTERACTIVE_PROCESSING_INTERRUPTED" || (turn.status === "finalizing" && turn.response)) {
+      if ((!turn.response && ["interrupted", "cancelled"].includes(turn.status)) || error.code === "INTERACTIVE_PROCESSING_INTERRUPTED" || (turn.status === "finalizing" && turn.response)) {
         const recover = document.createElement("button");
         recover.type = "button"; recover.className = "secondary";
         recover.textContent = "Recover saved progress";

@@ -6,6 +6,11 @@ with Registry operations, parameters and captured source roles. Agent binds the
 actual supplied values and recorded identities. Native scientific tools retain
 parameter validity, algorithms and defaults.
 
+Source-scoped native parameters on a BAM or external-fragments task bind to the
+exact original attachment in its captured raw declaration. Its derived native
+registration does not replace that identity or extend the parameter to a
+downstream matrix, another file, or another input port.
+
 ## Values and scope
 
 Structured file/result selections and parameter entries are authoritative. A
@@ -38,6 +43,14 @@ Accepted parameter reuse carries the selected result's recorded function identit
 A parameter with several matching operations uses the existing prepared-plan step
 selection. Selecting a step reuses that plan and the original objective.
 
+FASTQ, BAM and fragment objectives can include explicit downstream scientific
+values, such as MACS3 effective genome size or native clustering kwargs. Raw
+intake retains them through the same Registry parameter and exact-text binding
+owners. It does not restrict them to the import tool. Source composition still
+protects dataset paths and output locations; a parameter alone selects no tool,
+supplies no derived dataset and grants no execution authority. The compiled plan
+must consume each accepted declaration at its actual registered operation.
+
 ## Local continuation
 
 The existing Interaction prerequisite contains the original turn, most recent
@@ -53,6 +66,12 @@ call represents the click. Ordinary planning happens once when still needed.
 Selection of an already prepared step plan requires no second Planner call.
 Clarifications reserve no scientific SessionTurn or Run. Preparation failures
 remain distinct from failed native execution.
+
+Captured annotation species and UMAP choices retain their annotation meaning
+when the original objective starts from FASTQ, BAM or fragments. The enclosing
+raw prerequisite does not turn an annotation choice into a reference-resource
+selection. Exact offered membership and the pending question identity still bind
+the click; the ordinary continuation preserves the original raw sources.
 
 Files retain captured resource IDs, hashes and source order. Role selection binds
 actual offered files to Registry ports. Resource component selection and accepted

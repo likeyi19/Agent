@@ -17,6 +17,7 @@ from agent.application import InteractiveAgentApplication
 from agent.application.input_sets import ScientificInputSet, _label
 from agent.application.local_resources import QualifiedEpiZooResource, ResourceConfigurationError
 from agent.application.workspace import ManagedWorkspace, ApplicationWorkspaceError
+from agent.application.uploads import DEFAULT_UPLOAD_BYTES, validate_upload_limit
 from agent.orchestration import PlanningModelProfile
 from agent.providers import PlanningModelFactoryRegistry, build_default_planning_model_factory_registry
 
@@ -38,7 +39,7 @@ class WebConfiguration:
     display_labels: Mapping[str, str] = field(default_factory=dict)
     input_sets: tuple[ScientificInputSet, ...] = ()
     upload_root: Path | None = None
-    upload_max_bytes: int = 256 * 1024 * 1024
+    upload_max_bytes: int = DEFAULT_UPLOAD_BYTES
     upload_max_concurrent: int = 2
     scientific_resource_root: Path | None = None
 
@@ -74,8 +75,10 @@ class WebConfiguration:
                          {'qc_reference_manifest_path', 'qc_reference_manifest_sha256'})
                     or {'qualified_genome', 'library_genome'}.intersection(keys)):
                 raise WebConfigurationError('Install common references in ScientificResourceLibrary; input sets describe task bindings.')
-        if type(self.upload_max_bytes) is not int or not 1 <= self.upload_max_bytes <= 8 * 1024 ** 3:
-            raise WebConfigurationError("The attachment size limit must be between one byte and eight GiB.")
+        try:
+            validate_upload_limit(self.upload_max_bytes)
+        except ValueError as exc:
+            raise WebConfigurationError(str(exc)) from exc
         if type(self.upload_max_concurrent) is not int or not 1 <= self.upload_max_concurrent <= 4:
             raise WebConfigurationError("Concurrent attachments must be between one and four.")
         if self.scientific_resource_root is not None:
@@ -168,7 +171,7 @@ def load_web_configuration(path):
             library = Path(library).expanduser()
             if not library.is_absolute(): library = path.parent / library
         return WebConfiguration(workspace, tuple(profiles), value.get("default_profile_id"), labels, tuple(input_sets),
-            value.get('upload_root'), value.get('upload_max_bytes', 256 * 1024 * 1024),
+            value.get('upload_root'), value.get('upload_max_bytes', DEFAULT_UPLOAD_BYTES),
             value.get('upload_max_concurrent', 2), library)
     except WebConfigurationError:
         raise

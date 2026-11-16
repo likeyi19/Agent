@@ -227,6 +227,7 @@ def assess_subdivision(parent_binding, local_bindings=(), differentials=None, *,
     External Gene Activity without accepted ancestry cannot establish that join.
     A supplied budget reason is recorded separately, without enforcing depth.
     """
+    from .iterative_annotation import DEFAULT_MAXIMUM_LEVELS
     if (type(adjusted_p_threshold) not in (int, float) or not math.isfinite(adjusted_p_threshold)
             or not 0 <= adjusted_p_threshold <= 1):
         raise ValueError('Adjusted-p interpretation threshold must lie in [0, 1].')
@@ -249,7 +250,7 @@ def assess_subdivision(parent_binding, local_bindings=(), differentials=None, *,
             method='IDclust-inspired retention using SnapATAC2 tl.diff_test logistic regression',
             references=['10.1093/nargab/lqae174', '10.1038/s41586-023-06824-9'],
             limitation='Exploratory within-data evidence, not independent biological validation or proof of a new cell type.'),
-        execution_budget=dict(default_maximum_levels=5, supplied_reason=deepcopy(budget_reason), enforced=False))
+        execution_budget=dict(default_maximum_levels=DEFAULT_MAXIMUM_LEVELS, supplied_reason=deepcopy(budget_reason), enforced=False))
     if not local_bindings and failed_local is None:
         result.update(outcome='missing_input', reason='Accepted local native clustering evidence is unavailable.')
         return result

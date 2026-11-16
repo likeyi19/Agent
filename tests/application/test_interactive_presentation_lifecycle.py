@@ -261,6 +261,54 @@ def test_real_run_failure_remains_visible_during_publication_and_after_interrupt
     assert len(models) == 1
 
 
+def test_cancelled_run_stays_visible_without_a_saved_presentation(tmp_path, monkeypatch):
+    from agent.tools._cancellation import cancellation_checkpoint
+    source = _tiny_h5ad(tmp_path / 'tiny.h5ad')
+    entered, release = Event(), Event()
+    calls = []
+    counted = _counting_registry([])
+    def cancelled_tool(**arguments):
+        calls.append('native')
+        entered.set()
+        assert release.wait(20)
+        cancellation_checkpoint()
+        pytest.fail('Cancelled tool continued')
+    registry = ToolRegistry(tuple(replace(counted.get(n), function=cancelled_tool)
+        if n == 'inspect_scATAC' else counted.get(n) for n in counted.names()))
+    service, models = boundary(tmp_path, registry=registry)
+    service.create_session('session')
+    publishing, finish = Event(), Event()
+    def lost(*args, **kwargs):
+        publishing.set()
+        assert finish.wait(20)
+        raise RuntimeError('Interrupted before cancelled response was saved')
+    monkeypatch.setattr(AnalysisSessions, 'store_presentation', lost)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(first, service, source)
+        try:
+            assert entered.wait(20)
+            service.cancel_turn('session', 'first')
+            release.set()
+            assert publishing.wait(20)
+            assert service.status('session', 'first').status == 'cancelled'
+        finally:
+            release.set()
+            finish.set()
+        with pytest.raises(InteractiveBoundaryError):
+            future.result(timeout=20)
+    sessions = service._application.sessions
+    monkeypatch.undo()
+    path = sessions._store._path('session', '.json')
+    raw = path.read_bytes()
+    view = service.status('session', 'first')
+    assert view.status == 'cancelled' and view.response is None and view.error.code == 'RUN_CANCELLED'
+    assert path.read_bytes() == raw
+    recovered = service.recover_turn('session', 'first')
+    assert recovered.status == 'cancelled' and recovered.response is not None
+    assert service.recover_turn('session', 'first') == recovered
+    assert calls == ['native'] and len(models) == 1
+
+
 def test_missing_accepted_run_is_not_masked_by_live_presentation_lease(tmp_path, monkeypatch):
     source = _tiny_h5ad(tmp_path / 'tiny.h5ad')
     service, models = boundary(tmp_path)

@@ -394,7 +394,10 @@ class FileRunStore:
     def load(self, run_id: str) -> PersistedRunState:
         path = self.state_path(run_id)
         with self._lock(run_id, exclusive=False):
-            return self._load_path(path, expected_run_id=run_id)
+            raw = self._read_path(path, expected_run_id=run_id)
+        # Atomic replacement pins these bytes. Decoding this immutable snapshot
+        # need not block cancellation or other writers on the state lock.
+        return self._decode_state(raw, expected_run_id=run_id)
 
     def request_cancellation(self, run_id: str) -> CancellationReceipt:
         """Atomically record idempotent cancellation intent without a main update."""
@@ -500,14 +503,20 @@ class FileRunStore:
         return state
 
     def _load_path(self, path: Path, *, expected_run_id: str) -> PersistedRunState:
+        return self._decode_state(self._read_path(path, expected_run_id=expected_run_id),
+                                  expected_run_id=expected_run_id)
+
+    def _read_path(self, path: Path, *, expected_run_id: str) -> bytes:
         try:
-            raw = path.read_bytes()
+            return path.read_bytes()
         except FileNotFoundError as exc:
             raise RunNotFoundError(
                 f"Durable run {expected_run_id!r} was not found."
             ) from exc
         except OSError as exc:
             raise RunStoreIOError("Unable to read durable run state.") from exc
+
+    def _decode_state(self, raw: bytes, *, expected_run_id: str) -> PersistedRunState:
         try:
             decoded = json.loads(
                 raw.decode("utf-8"),

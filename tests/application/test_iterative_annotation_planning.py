@@ -36,6 +36,70 @@ def test_declared_species_binds_the_exact_cellmarker_value(monkeypatch,species,e
     assert captured['annotation']['species']==species
 
 
+@pytest.mark.parametrize('package,function',[('snapatac2','tl.leiden'),('scanpy','tl.leiden'),
+    ('episcanpy','tl.louvain'),('episcanpy','tl.kmeans'),('episcanpy','tl.hc')])
+def test_annotation_grouping_uses_the_actual_cluster_before_a_retaining_umap(monkeypatch,package,function):
+    from agent.application.annotation_preparation import preparer
+    from agent.application.raw_handoff import AnnotationDeclaration,declaration_dict
+    from agent.tools.analysis import sequence_prediction
+    from agent.tools.data import cellmarker
+    monkeypatch.setattr(sequence_prediction,'library',lambda:SimpleNamespace(entries=lambda:[dict(kind='cellmarker',id='installed')]))
+    monkeypatch.setattr(cellmarker,'CellMarkerEvidence',lambda *a:SimpleNamespace(identity={},metadata={'species':['Human','Mouse']}))
+    captured=dict(annotation=declaration_dict(AnnotationDeclaration(species='Human')))
+    cluster=StepOutputRef('cluster','matrix_path');umap=StepOutputRef('umap','matrix_path')
+    args=dict(input_path=umap,grouping_path=umap,activity_path=StepOutputRef('activity','matrix_path'))
+    selected=dict(cluster=('run_'+package,dict(function_name=function,input_path='/original.h5ad')),
+        umap=('run_'+package,dict(function_name='tl.umap',input_path=cluster)))
+    prepare=preparer(None,None,captured);tool=build_default_tool_registry().get('annotate_scATAC_cell_types')
+    bound=prepare(tool,args,selected)
+    assert bound['grouping_path']==cluster and bound['input_path']==umap
+    assert args['grouping_path']==umap and prepare(tool,bound,selected)==bound
+
+
+@pytest.mark.parametrize('function,kwargs',[('pp.log1p',{}),('tl.leiden',{'inplace':False})])
+def test_annotation_grouping_does_not_invent_a_cluster_from_unqualified_slots(monkeypatch,function,kwargs):
+    from agent.application.annotation_preparation import preparer,AnnotationPrerequisite
+    from agent.application.raw_handoff import AnnotationDeclaration,declaration_dict
+    from agent.tools.analysis import sequence_prediction
+    from agent.tools.data import cellmarker
+    monkeypatch.setattr(sequence_prediction,'library',lambda:SimpleNamespace(entries=lambda:[dict(kind='cellmarker',id='installed')]))
+    monkeypatch.setattr(cellmarker,'CellMarkerEvidence',lambda *a:SimpleNamespace(identity={},metadata={'species':['Human','Mouse']}))
+    captured=dict(annotation=declaration_dict(AnnotationDeclaration(species='Human')))
+    ref=StepOutputRef('selected','matrix_path')
+    args=dict(input_path=ref,grouping_path=ref,activity_path=StepOutputRef('activity','matrix_path'))
+    selected=dict(selected=('run_scanpy',dict(function_name=function,kwargs=kwargs,input_path='/original.h5ad')))
+    with pytest.raises(AnnotationPrerequisite,match='clustering'):
+        preparer(None,None,captured)(build_default_tool_registry().get('annotate_scATAC_cell_types'),args,selected)
+
+
+def test_compiled_annotation_records_the_prepared_clustering_dependency(monkeypatch,tmp_path):
+    from agent.application.annotation_preparation import preparer
+    from agent.application.raw_handoff import AnnotationDeclaration,declaration_dict
+    from agent.tools.analysis import sequence_prediction
+    from agent.tools.data import cellmarker
+    from agent.orchestration.active_context import input_preparation
+    from agent.orchestration.semantic_compiler import (SemanticPlanCandidate,SemanticPlanStep as Step,
+        SemanticRequestInputSource as Input,SemanticStepOutputSource as Output,
+        SemanticRegisteredChoiceSource as Choice,compile_semantic_plan,build_semantic_compiler_contract)
+    from agent.schemas import AgentRequest
+    monkeypatch.setattr(sequence_prediction,'library',lambda:SimpleNamespace(entries=lambda:[dict(kind='cellmarker',id='installed')]))
+    monkeypatch.setattr(cellmarker,'CellMarkerEvidence',lambda *a:SimpleNamespace(identity={},metadata={'species':['Human','Mouse']}))
+    registry=build_default_tool_registry()
+    candidate=SemanticPlanCandidate((
+        Step('cluster','run_snapatac2',(Input('dataset','input_path'),Choice('function_name','tl.leiden'))),
+        Step('umap','run_snapatac2',(Output('dataset','cluster','dataset'),Choice('function_name','tl.umap'))),
+        Step('annotation','annotate_scATAC_cell_types',(Output('source','umap','dataset'),Output('groups','umap','dataset'),
+            Choice('activity_method','episcanpy.tl.geneactivity'),Input('gene_anno','gene_anno_path')))))
+    request=AgentRequest('grouping-binding','Technical compilation only',dict(input_path='/original.h5ad',
+        output_dir=str(tmp_path/'outputs'),gene_anno_path='/genes.gtf',gene_anno_sha256='b'*64))
+    with input_preparation(preparer(None,None,dict(annotation=declaration_dict(AnnotationDeclaration(species='Human'))))):
+        compiled=compile_semantic_plan(request,candidate,registry,build_semantic_compiler_contract(registry))
+    annotation=compiled.steps[-1]
+    assert annotation.arguments['grouping_path']==StepOutputRef('cluster','matrix_path')
+    assert annotation.arguments['input_path']==StepOutputRef('umap','matrix_path')
+    assert set(annotation.depends_on)=={'cluster','umap'}
+
+
 @pytest.mark.parametrize('species,available', [('Homo sapiens',['Human']), ('unavailable',['Human','Mouse']), ('human',['Human','HUMAN'])])
 def test_species_requires_unique_casefold_equality(species,available):
     from agent.tools.data.cellmarker import resolve_species
@@ -419,8 +483,8 @@ def test_reuse_only_follows_selected_dependency_semantics(monkeypatch):
     prepare=preparer(None,None,dict(annotation=declaration_dict(AnnotationDeclaration(grouping_strategy='reuse_only'))))
     tool=build_default_tool_registry().get('annotate_scATAC_cell_types')
     args=dict(grouping_path=StepOutputRef('identity','matrix_path'),activity_path=ref)
-    selected={'identity':('run_scanpy',dict(function_name='pp.log1p',input_path=ref))}
-    assert prepare(tool,args,selected)['grouping_path']==args['grouping_path']
+    selected={'identity':('run_scanpy',dict(function_name='tl.umap',input_path=ref))}
+    assert prepare(tool,args,selected)['grouping_path']==ref
     selected['identity'][1]['input_path']=StepOutputRef('new_groups','matrix_path')
     selected['new_groups']=('run_snapatac2',dict(function_name='tl.leiden',input_path=ref))
     with pytest.raises(AnnotationPrerequisite,match='reuse existing groups'):

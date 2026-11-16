@@ -278,3 +278,36 @@ def test_absent_qualification_does_not_decode_run_but_present_sidecar_does(tmp_p
     store.state_path(state.run_id).with_suffix('.authority.json').write_text('{}')
     with pytest.raises(RunStateCorruptionError):store._load_qualified_authorities(state.run_id)
     assert calls==[1]
+
+
+def test_reader_decoding_does_not_hold_cancellation_lock(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, get_ident
+    from agent.schemas.run_state import CancellationDisposition
+    store = FileRunStore(tmp_path)
+    original = store.create(_planning_state())
+    entered, release = Event(), Event()
+    decode = store._decode_state
+    reader = []
+    def blocked(raw, **kwargs):
+        if reader and get_ident() == reader[0]:
+            entered.set()
+            assert release.wait(10)
+        return decode(raw, **kwargs)
+    monkeypatch.setattr(store, '_decode_state', blocked)
+    def read():
+        reader.append(get_ident())
+        return store.load(original.run_id)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        result = pool.submit(read)
+        try:
+            assert entered.wait(10)
+            receipt = pool.submit(store.request_cancellation, original.run_id).result(timeout=5)
+            assert receipt.disposition is CancellationDisposition.REQUESTED
+            updated = store.update(replace(original, revision=1, updated_at=_now()), expected_revision=0)
+        finally:
+            release.set()
+        # Decode validates the exact bytes read before the concurrent update.
+        assert result.result(timeout=5) == original
+    assert store.load(original.run_id) == updated
+    assert store.load_cancellation(original.run_id).requested_at == receipt.requested_at

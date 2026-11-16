@@ -811,7 +811,7 @@ class InteractiveAgentApplication:
         # An explicit backend Session execution can have accepted completion
         # without a conversational Interaction. Display its recorded result;
         # never invent assistant prose or downgrade its accepted Revision.
-        if (response is None and status != 'unavailable'
+        if (response is None and status not in {'unavailable', 'cancelled'}
                 and not (interaction is None and turn is not None and turn.revision_id is not None)):
             if processing is not None:
                 if processing:

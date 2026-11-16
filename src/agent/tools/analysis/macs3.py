@@ -1,6 +1,5 @@
 """Native single-population MACS3 FRAG calling; no peak or counting algorithm."""
 import math
-import json
 import os
 from pathlib import Path
 import shutil
@@ -10,43 +9,41 @@ import time
 
 from agent.schemas.orchestration import _serialize
 from agent.schemas.verification_authority import AuthorityError, VerifiedArtifactAuthority, digest
-from agent.tools._cancellation import cancellation_checkpoint
 from agent.tools.data.authority_context import current, owned_verification
 from agent.tools._file_identity import file_closure
-from agent.tools.data import explicit_cells
 from .sequence_prediction import read, write, arguments, library
 
 TOOL = 'call_scATAC_peaks'
 KIND = 'scatac_peaks'
-CONTRACT = 'macs3-scatac-peaks.v1'
-POLICY = 'macs3-frag-unit-record-v1'
-PROFILE = digest(dict(contract=CONTRACT, native='MACS3 3.1.0', format='FRAG', max_count=1,
+LEGACY_CONTRACT = 'macs3-scatac-peaks.v1'
+CONTRACT = 'macs3-scatac-peaks.v2'
+POLICY = 'macs3-native-fragment-population-v2'
+LEGACY_POLICY = 'macs3-frag-unit-record-v1'
+LEGACY_PROFILE = digest(dict(contract=LEGACY_CONTRACT, native='MACS3 3.1.0', format='FRAG', max_count=1,
     population='one namespace', coordinates='already Tn5-adjusted; no shift'))
+PROFILE = digest(dict(contract=CONTRACT, native='MACS3 3.1.0', format='FRAG', max_count=1,
+    population='selected native fragment-backed H5AD', export='snapatac2.ex.export_fragments',
+    coordinates='already Tn5-adjusted; no shift'))
 VERIFIER = dict(id='agent.macs3-native-completion', compatibility_version='1')
 LIMITATIONS = ('Experimental pooled-population enrichment peaks, not replicate-level differential accessibility, '
     'cell-type truth or biological validation. Native p/q fields are -log10 probabilities; narrowPeak score '
     'is a native display score, not a fragment count. Source support is not independent molecule count. '
-    'Whole-library barcode identities are not QC-called cells. No second Tn5 shift, coverage truncation, '
-    'threshold relaxation, biological-replicate pooling or weighted-support inference is performed.')
+    'The selected H5AD defines the pooled population; its QC and donor history remain upstream evidence. '
+    'No second Tn5 shift, coverage truncation, threshold relaxation or weighted-support inference is performed. '
+    'Native fragment storage does not establish original read-pair duplicate support.')
 FILES = ('peaks_peaks.narrowPeak', 'peaks_summits.bed', 'peaks_peaks.xls', 'features.bed',
          'distributions.png', 'metadata.json', 'native-receipt.json')
-FACT_FIELDS = ('n_peaks','n_barcodes','n_fragment_records','total_source_support','namespace','population',
-    'species','assembly','contigs','parameters','native_statistics','limitations')
-RESULT_FIELDS = dict(status=(str,), contract_version=(str,),manifest_path=(str,),manifest_sha256=(str,),
-    reference_manifest_path=(str,),reference_manifest_sha256=(str,),
-    cells_manifest_path=(str,),cells_manifest_sha256=(str,),n_peaks=(int,),n_barcodes=(int,),
-    n_fragment_records=(int,),total_source_support=(int,),namespace=(str,),population=(str,),species=(dict,),
-    assembly=(str,),contigs=(list,),parameters=(dict,),native_statistics=(dict,),limitations=(str,))
+FACT_FIELDS = ('n_peaks','n_barcodes','n_observed_barcodes','n_fragment_records','total_source_support','population',
+    'species','assembly','contigs','parameters','native_statistics','source_identity','limitations')
+RESULT_FIELDS = dict(status=(str,),contract_version=(str,),manifest_path=(str,),manifest_sha256=(str,),
+    peaks_path=(str,),peaks_sha256=(str,),cells_path=(str,),cells_sha256=(str,),
+    n_peaks=(int,),n_barcodes=(int,),n_observed_barcodes=(int,),n_fragment_records=(int,),
+    total_source_support=(type(None),),population=(str,),species=(str,dict,type(None)),assembly=(str,type(None)),
+    contigs=(list,),parameters=(dict,),native_statistics=(dict,),source_identity=(dict,),limitations=(str,))
 
 
 def parameter_prerequisites(inputs):
-    missing=[k for k in ('effective_genome_size', 'genome_size_basis') if inputs.get(k) is None]
-    path,sha=inputs.get('fragments_manifest_path'),inputs.get('fragments_manifest_sha256')
-    if isinstance(path,(str,Path)) and isinstance(sha,str) and inputs.get('library_namespace') is None:
-        from agent.tools.data.scatac_fragments_v2 import load_fragments_manifest_v2
-        value=load_fragments_manifest_v2(path,expected_sha256=sha)
-        if len(value['libraries'])>1:missing.append('library_namespace')
-    return tuple(missing)
+    return tuple(k for k in ('effective_genome_size','genome_size_basis') if inputs.get(k) is None)
 
 
 def settings(args, contigs):
@@ -62,120 +59,39 @@ def settings(args, contigs):
     excluded = args.get('exclude_contigs',[])
     if not isinstance(excluded,list) or len(set(excluded)) != len(excluded) or any(c not in contigs for c in excluded):
         raise ValueError('Excluded contigs must be distinct exact names in the source genome')
-    return dict(format='FRAG',max_count=1,count_policy='one canonical record',effective_genome_size=size,
+    return dict(format='FRAG',max_count=1,count_policy='one native exported fragment record',effective_genome_size=size,
         genome_size_basis=basis,qvalue=q,exclude_contigs=excluded,shift=0,paired_fragment_mode=True,
         local_background=True,control='none',version='3.1.0',threads=2,process_backend='auto')
 
 
-def grouped_population(args, fragments):
-    """Reuse accepted clustering/source-axis binding; no equal-size inference."""
-    import h5py
-    from anndata.io import read_elem
-    from agent.tools.data.cell_by_ccre_verifier import verify_cell_by_ccre
-    from agent.tools.data.matrix_publication import _load
-    from .cell_result import source_bound_cluster_rows
-    keys=('matrix_manifest_path','matrix_manifest_sha256','group_analysis_path','group_analysis_sha256','group_label')
-    if not all(k in args for k in keys):raise ValueError('A selected group needs its exact count-matrix publication, clustering and group label')
-    path=args['matrix_manifest_path'];sha=args['matrix_manifest_sha256']
-    verify_cell_by_ccre(path,expected_sha256=sha)
-    value=_load(Path(path),sha);fp=value['upstream']['fragments']
-    if any(fp[k]!=args['fragments_'+k] for k in ('manifest_path','manifest_sha256')):
-        raise AuthorityError('Grouping matrix belongs to different source fragments')
-    matrix=Path(path).parent/value['matrix']['path'];pin=file_closure([matrix])[0]
-    if pin['sha256']!=value['matrix']['sha256']:raise AuthorityError('Grouping count matrix changed')
-    with h5py.File(matrix,'r') as f:obs=read_elem(f['obs'])
-    if not {'namespace','barcode_identifier'}<=set(obs):raise ValueError('Grouping matrix lacks exact namespace/barcode identities')
-    rows=source_bound_cluster_rows(obs.index,args['group_analysis_path'],args['group_analysis_sha256'],pin['sha256'])
-    selected=[i for i,(_,label) in enumerate(rows) if label==args['group_label']]
-    if not selected:raise ValueError('Selected accepted group is empty or absent')
-    return list(zip(obs.iloc[selected]['namespace'].astype(str),obs.iloc[selected]['barcode_identifier'].astype(str))),file_closure([path,matrix,args['group_analysis_path']])
-
-
-def selected_population(args, fragments):
-    """Read the existing cell contracts or an ordinary one-barcode-per-line list."""
-    from agent.tools.data.cell_selection_verifier import verify_cell_selection
-    candidates = [k for k in ('selected_cells_manifest_path','explicit_cells_manifest_path','barcodes_path','group_analysis_path') if args.get(k)]
-    if len(candidates)>1: raise ValueError('Choose one population: QC-selected cells, explicit cells or supplied barcodes')
-    ns = args.get('library_namespace')
-    available = {l.namespace for l in fragments.libraries}
-    if ns is None and len(available)==1: ns=next(iter(available))
-    if ns not in available: raise ValueError('Select exactly one existing library namespace; barcodes alone cannot pool libraries')
-    pairs=None; sources=[]; label='complete eligible library; observed barcodes, no QC claim'
-    if candidates:
-        key=candidates[0]; path=Path(args[key]);sha=args.get(key.replace('_path','_sha256'))
-        if not sha: raise ValueError('Population source requires its captured checksum')
-        sources=file_closure([path])
-        if sources[0]['sha256']!=sha: raise AuthorityError('Population source changed')
-        if key=='group_analysis_path':
-            pairs,group_sources=grouped_population(args,fragments);sources+=group_sources
-            label='exact source-bound accepted cell group '+args['group_label']
-        elif key=='barcodes_path':
-            if path.stat().st_size>64*1024**2: raise ValueError('Barcode list exceeds the 64 MiB preparation bound')
-            rows=path.read_text().splitlines()
-            if any(not b or '\t' in b or ' ' in b for b in rows):raise ValueError('Supply one exact barcode per line for the selected namespace')
-            pairs=[(ns,b) for b in rows];label='explicit supplied barcode population; no QC claim'
-        else:
-            from agent.tools.data import _cell_selection_contract as selection
-            with path.open('rb') as stream: raw=stream.read(selection.qc.MAX_MANIFEST+1)
-            if len(raw)>selection.qc.MAX_MANIFEST: raise ValueError('Population manifest exceeds its bound')
-            contract=json.loads(raw)['contract_version']
-            if contract==explicit_cells.CONTRACT:
-                explicit_cells.verify_explicit_cells(path,expected_sha256=sha);table=path.parent/'cells.tsv.gz'
-                label='explicit supplied ordered cells; no QC claim'
-            elif contract==selection.CONTRACT:
-                declared=verify_cell_selection(path,expected_sha256=sha).to_dict();table=path.parent/'selected.tsv.gz'
-                bound=declared['qc_lineage']['arguments']
-                if any(bound[k]!=args[k] for k in ('fragments_manifest_path','fragments_manifest_sha256')):
-                    raise AuthorityError('QC-selected population belongs to different fragments')
-                label='accepted source-bound QC-selected cells'
-            else:
-                raise ValueError('Unsupported exact population contract')
-            sources+=file_closure([table]);pairs=[(n,b) for _,n,b,_ in explicit_cells.iter_rows(table)]
-        if not pairs or len(pairs)!=len(set(pairs)) or any(n!=ns for n,b in pairs):
-            raise ValueError('Population must be nonempty, unique and confined to one exact namespace')
-    return ns,pairs,label,sources
-
-
-def prepare_fragments(args, stage, root):
-    from agent.tools.data.scatac_fragment_reader import qualified_fragments
-    from agent.tools.data._fragment_reference import load as load_reference
-    from agent.tools.data.scatac_reference import species_identity
-    fragments,qualification=qualified_fragments(args['fragments_manifest_path'],args['fragments_manifest_sha256'])
-    reference=fragments.manifest['reference'];ref=load_reference(reference['manifest_path'],reference['manifest_sha256'])
-    contigs=dict(fragments.contigs)
+def prepare_fragments(args,stage):
+    """Use native fragment storage directly; no retired canonical import contract."""
+    from . import peak_h5ad
+    from .native_callable import executable
+    from agent.tools._native_process import run
+    source=file_closure([args['input_path']])[0]
+    if args.get('input_sha256') is not None and source['sha256']!=args['input_sha256']:
+        raise AuthorityError('Selected fragment-backed H5AD changed')
+    peak_h5ad.inspect(args['input_path'],require_matrix=False,max_logical_bytes=None)
+    worker=Path(__file__).with_name('macs3_fragments_worker.py')
+    python=executable('snapatac2')
+    implementation=file_closure([worker,python.resolve()])
+    request=dict(input_path=args['input_path'],stage=str(stage),exclude_contigs=args.get('exclude_contigs',[]))
+    write(stage/'export-request.json',request)
+    code=run([str(python),'-I',str(worker),str(stage/'export-request.json')],stage/'export.log',environment=dict(os.environ))
+    if code:
+        shutil.copyfile(stage/'export.log',stage.parent/'native-export-failure.log')
+        raise RuntimeError('Native SnapATAC2 fragment export failed; diagnostics retained')
+    exported=read(stage/'export-receipt.json');contigs=exported['contigs']
     parameters=settings(args,contigs)
-    ns,pairs,label,sources=selected_population(args,fragments)
-    selected=None if pairs is None else {b for _,b in pairs};observed=set();n=0;support=0;analyzed=set()
-    path=stage/'input.frag'
-    with path.open('w') as stream:
-        for i,row in enumerate(fragments.iter_fragments(ns)):
-            if i%4096==0:cancellation_checkpoint()
-            if selected is not None and row.barcode_identifier not in selected:continue
-            observed.add(row.barcode_identifier)
-            if len(observed)>2_000_000:raise ValueError('Population exceeds the 2 million barcode preparation bound')
-            if row.contig in parameters['exclude_contigs']:continue
-            # MACS3's parser uses bounded native counts. Unit projection avoids
-            # overflow for legitimate uint64 support, without biological reweighting.
-            stream.write(f'{row.contig}\t{row.start}\t{row.end}\t{row.barcode_identifier}\t1\n')
-            n+=1;support+=row.support;analyzed.add(row.contig)
-    if not n or selected is not None and selected != observed:raise ValueError('Empty eligible population or requested barcodes absent from exact source')
-    pairs=pairs if pairs is not None else [(ns,b) for b in sorted(observed)]
-    cells=explicit_cells.publish_explicit_cells(cells=pairs,declaration=label,output_dir=root/'population')
-    fpath=Path(args['fragments_manifest_path'])
-    paths=[fpath,reference['manifest_path'],ref.genome.fasta.path,ref.genome.fai.path]
-    for item in fragments.manifest['libraries']:
-        paths.extend(fpath.parent/item[k]['path'] for k in ('bgzf','tabix'))
-        paths.append(item['provenance']['producer_record']['path'])
-    sources+=file_closure(paths)
-    fragments.verification.check_unchanged()
-    species=reference['species'] if isinstance(reference['species'],dict) else species_identity(reference['species'])
-    summary=dict(n_barcodes=len(pairs),n_fragment_records=n,total_source_support=support,namespace=ns,
-        population=label,species=species,assembly=reference['assembly'],contigs=[c for c in contigs if c in analyzed],parameters=parameters)
-    lineage=dict(fragments_manifest_sha256=args['fragments_manifest_sha256'],
-        fragments_identity=fragments.manifest['fragments_identity_sha256'],producer=qualification,
-        library=next(l for l in fragments.manifest['libraries'] if l['namespace']==ns),cells=cells,
-        native_input=file_closure([path])[0],preparation='exact selected records; fifth column unit projection; no shift or contig alias')
-    return ref,contigs,summary,lineage,sources,cells
+    summary=dict(n_barcodes=exported['n_cells'],n_observed_barcodes=exported['n_observed_barcodes'],
+        n_fragment_records=exported['n_fragment_records'],total_source_support=None,
+        population='pooled exact selected native H5AD cells',source_identity=source,
+        species=exported['declarations'].get('species'),assembly=exported['declarations'].get('assembly'),
+        contigs=exported['analyzed_contigs'],parameters=parameters)
+    lineage=dict(source=source,export=exported,native_input=file_closure([stage/'input.frag'])[0],
+        preparation='native export; original coordinates and barcode IDs; explicit contig exclusions only; no second shift')
+    return contigs,summary,lineage,[source,*implementation]
 
 
 def native(parameters,stage):
@@ -234,25 +150,16 @@ def inspect_peaks(stage,contigs):
 
 
 def execute(values,execution_identity=None):
-    from agent.tools.data.regulatory_feature_reference import build_regulatory_feature_reference,publish_regulatory_feature_reference
-    from agent.tools.data.scatac_reference import SourceProvenance
     args=arguments(values);root=Path(args['output_dir']);root.mkdir(parents=True,exist_ok=True)
     if any(root.iterdir()):raise ValueError('Output directory is not empty; recovery does not rerun science')
     with tempfile.TemporaryDirectory(prefix='.macs3-',dir=root) as temp:
-        stage=Path(temp);ref,contigs,summary,lineage,sources,cells=prepare_fragments(args,stage,root)
+        stage=Path(temp);contigs,summary,lineage,sources=prepare_fragments(args,stage)
         receipt=native(summary['parameters'],stage);rows=inspect_peaks(stage,contigs)
         for name in FILES[:3]:shutil.copyfile(stage/name,root/name)
+        shutil.copyfile(stage/'cells.tsv',root/'cells.tsv')
         if (stage/'native.log').exists():shutil.copyfile(stage/'native.log',root/'native.log')
         with (root/'features.bed').open('w') as stream:
             for chrom,start,end,*_ in rows:stream.write(f'{chrom}\t{start}\t{end}\t{chrom}:{start}-{end}\n')
-        reference=dict(manifest_path="",manifest_sha256="")
-        if rows:
-            bundle=build_regulatory_feature_reference(species=summary['species'],target_assembly=summary['assembly'],
-                fasta_path=ref.genome.fasta.path,fai_path=ref.genome.fai.path,feature_bed_path=root/'features.bed',
-                feature_category='peak_set',genome_provenance=ref.genome.fasta.provenance,
-                feature_provenance=SourceProvenance(basis='caller_supplied',source='Native MACS3 experiment-specific peaks; generation lineage in sibling manifest.json'))
-            published=publish_regulatory_feature_reference(bundle,root/'reference.json')
-            reference=dict(manifest_path=str(root/'reference.json'),manifest_sha256=file_closure([root/'reference.json'])[0]['sha256'])
         import matplotlib
         matplotlib.use('Agg')
         from matplotlib import pyplot as plt
@@ -266,14 +173,13 @@ def execute(values,execution_identity=None):
                 probability_fields='-log10(p) and -log10(q)',score='native display score; not counts',
                 empty=not bool(rows),feature_order='original native narrowPeak order; coordinate IDs'))
         write(root/'native-receipt.json',receipt)
-        write(root/'metadata.json',dict(summary=summary,lineage=lineage,reference=reference,cells=cells))
+        write(root/'metadata.json',dict(summary=summary,lineage=lineage))
         pins={p['path']:p for p in sources}
         if file_closure(pins)!=sorted(pins.values(),key=lambda p:p['path']):raise AuthorityError('Sources changed during native execution')
-    files=[root/name for name in FILES]+[Path(cells['manifest_path']),root/'population/cells.tsv.gz']
-    if rows:files.append(root/'reference.json')
+    files=[root/name for name in (*FILES,'cells.tsv')]
     if (root/'native.log').exists():files.append(root/'native.log')
     value=dict(contract=CONTRACT,profile=PROFILE,arguments=args,execution_identity=execution_identity,result=summary,
-        reference=reference,cells=cells,lineage=lineage,files=file_closure(files),sources=sorted(pins.values(),key=lambda p:p['path']),native_completion='succeeded')
+        lineage=lineage,files=file_closure(files),sources=sorted(pins.values(),key=lambda p:p['path']),native_completion='succeeded')
     for output in files:
         with output.open('rb') as stream:os.fsync(stream.fileno())
     path=root/'manifest.json';sha=write(path,value)
@@ -283,19 +189,19 @@ def execute(values,execution_identity=None):
     return verify_publication(path,expected_sha256=sha)
 
 
-def call_scATAC_peaks(*,fragments_manifest_path,fragments_manifest_sha256,effective_genome_size,genome_size_basis,output_dir,
-    library_namespace=None,qvalue=None,exclude_contigs=None,selected_cells_manifest_path=None,selected_cells_manifest_sha256=None,
-    explicit_cells_manifest_path=None,explicit_cells_manifest_sha256=None,barcodes_path=None,barcodes_sha256=None,
-    matrix_manifest_path=None,matrix_manifest_sha256=None,group_analysis_path=None,group_analysis_sha256=None,group_label=None):
+def call_scATAC_peaks(*,input_path,effective_genome_size,genome_size_basis,output_dir,
+    input_sha256=None,qvalue=None,exclude_contigs=None):
     return execute({k:v for k,v in locals().items() if v is not None})
 
 
 def load(path,sha=None):
     value=read(path,sha);root=Path(path).parent
-    expected={str(root/name) for name in FILES}|{str(root/'population/manifest.json'),str(root/'population/cells.tsv.gz')}
-    if value['result']['n_peaks']:expected.add(str(root/'reference.json'))
+    # Historical v1 publications retain their exact files and profile; no old execution path.
+    legacy=value['contract']==LEGACY_CONTRACT
+    expected={str(root/name) for name in FILES}|({str(root/'population/manifest.json'),str(root/'population/cells.tsv.gz')} if legacy else {str(root/'cells.tsv')})
+    if legacy and value['result']['n_peaks']:expected.add(str(root/'reference.json'))
     if any(r['path']==str(root/'native.log') for r in value['files']):expected.add(str(root/'native.log'))
-    if (value['contract']!=CONTRACT or value['profile']!=PROFILE or root!=Path(value['arguments']['output_dir'])
+    if (value['contract'] not in (CONTRACT,LEGACY_CONTRACT) or value['profile']!=(LEGACY_PROFILE if legacy else PROFILE) or root!=Path(value['arguments']['output_dir'])
             or Path(path).name!='manifest.json' or value['native_completion']!='succeeded'
             or {r['path'] for r in value['files']}!=expected or len(value['files'])!=len(expected)):
         raise AuthorityError('Invalid peak publication identity or membership')
@@ -303,9 +209,15 @@ def load(path,sha=None):
 
 
 def result(value,path,sha):
+    if value['contract']==LEGACY_CONTRACT:
+        return dict(value['result'],manifest_path=str(path),manifest_sha256=sha,
+            reference_manifest_path=value['reference']['manifest_path'],reference_manifest_sha256=value['reference']['manifest_sha256'],
+            cells_manifest_path=value['cells']['manifest_path'],cells_manifest_sha256=value['cells']['manifest_sha256'])
+    root=Path(path).parent
+    pins={r['path']:r['sha256'] for r in value['files']}
     return dict(value['result'],manifest_path=str(path),manifest_sha256=sha,
-        reference_manifest_path=value['reference']['manifest_path'],reference_manifest_sha256=value['reference']['manifest_sha256'],
-        cells_manifest_path=value['cells']['manifest_path'],cells_manifest_sha256=value['cells']['manifest_sha256'])
+        peaks_path=str(root/'features.bed'),peaks_sha256=pins[str(root/'features.bed')],
+        cells_path=str(root/'cells.tsv'),cells_sha256=pins[str(root/'cells.tsv')])
 
 
 @owned_verification(KIND)
@@ -332,9 +244,9 @@ def describe(path,sha,context):
     value,actual=load(path,sha);files=context.files([path,*(r['path'] for r in value['files'])])
     if [r for r in files if r['path']!=str(path)]!=value['files']:raise AuthorityError('Peak artifact integrity changed')
     identity=dict(kind=KIND,manifest=value,files=files,historical_sources=value['sources'],upstream={},
-        execution_identity=context.execution_for(KIND,path),profile=PROFILE,verifier=VERIFIER,qualification={})
+        execution_identity=context.execution_for(KIND,path),profile=value['profile'],verifier=VERIFIER,qualification={})
     return dict(kind=KIND,manifest_path=str(path),manifest_sha256=actual,manifest=value,proof_identity=identity,
-        files=files,historical_sources=value['sources'],upstream={},profile=PROFILE,verifier=VERIFIER,qualification={})
+        files=files,historical_sources=value['sources'],upstream={},profile=value['profile'],verifier=VERIFIER,qualification={})
 
 
 def reuse_result(kind,description,proof,kwargs):return result(description['manifest'],description['manifest_path'],description['manifest_sha256'])
@@ -347,10 +259,10 @@ def publication_record(context,tool_name,args,output,execution_identity,result_m
             or _serialize(result_metadata)!=_serialize(output) or result(value,output['manifest_path'],sha)!=_serialize(output)):
         raise AuthorityError('Peak publication lacks its exact producing execution')
     description,key=context.describe(KIND,Path(output['manifest_path']),sha)
-    return VerifiedArtifactAuthority(dict(schema_version=2,artifact_type='agent.'+KIND,artifact_contract=CONTRACT,
+    return VerifiedArtifactAuthority(dict(schema_version=2,artifact_type='agent.'+KIND,artifact_contract=value['contract'],
         publication_path=output['manifest_path'],manifest_sha256=sha,files=description['files'],execution_identity=execution_identity,
         arguments_sha256=digest(arguments(args)),receipt_sha256=sha,upstream={'producer_inputs':digest(description['proof_identity'])},
-        resources=dict(scientific_proof_sha256=key,manifest_identity=value,result_metadata=_serialize(output)),science_profile=PROFILE,
+        resources=dict(scientific_proof_sha256=key,manifest_identity=value,result_metadata=_serialize(output)),science_profile=value['profile'],
         producer_qualification={},verifier=VERIFIER,scope='scientific_correctness.v1',completion='succeeded',
         integrity_scope='artifact_integrity_lineage_historical_sources.v1',source_policy='historical_verified_sources.v1',historical_sources=description['historical_sources']))
 
@@ -360,6 +272,7 @@ DELIVERY_FILES = {
     'peaks_summits.bed': ('Native peak summits', 'text/plain; charset=utf-8'),
     'peaks_peaks.xls': ('Native peak statistics (private command paths omitted)', 'text/tab-separated-values; charset=utf-8'),
     'features.bed': ('Exact ordered experimental peak features', 'text/plain; charset=utf-8'),
+    'cells.tsv': ('Exact ordered native peak-calling population', 'text/tab-separated-values; charset=utf-8'),
     'distributions.png': ('Peak length and enrichment distributions', 'image/png'),
     'metadata.json': ('Peak parameters, population and provenance', 'application/json'),
     'native-receipt.json': ('Native MACS3 completion and runtime identity', 'application/json'),

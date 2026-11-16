@@ -96,7 +96,7 @@ def controlled(tmp_path,monkeypatch):
 
 def test_deterministic_independent_branches_partial_residual_and_default_budget(controlled):
     f=controlled; h=c.coordinate(f.args,'execution')
-    assert h['maximum_levels']==5
+    assert h['maximum_levels']==3
     rows=h['branches']; roots=[r for r in rows if r['parent'] is None]
     a=roots[0]
     assert a['stopping_reason']=='partial_supported_subdivision' and a['residual_positions']==[4,5]
@@ -122,13 +122,22 @@ def test_deterministic_independent_branches_partial_residual_and_default_budget(
     assert [(r['branch_id'],r['operation_id']) for r in f.calls]==before
 
 
-@pytest.mark.parametrize('maximum',[1,2,3])
+@pytest.mark.parametrize('maximum',[1,2,3,5,8])
 def test_controller_enforces_actual_depth_budget(controlled,maximum):
     f=controlled; h=c.coordinate(dict(f.args,maximum_levels=maximum),'execution')
-    assert max(r['level'] for r in h['branches'])==maximum
+    assert h['maximum_levels']==maximum
+    assert max(r['level'] for r in h['branches'])==min(maximum,3)
     assert all(r['level']<=maximum for r in h['branches'])
-    assert any(r['stopping_reason']=='maximum_levels' for r in h['branches'])
+    if maximum<=3:
+        assert any(r['stopping_reason']=='maximum_levels' for r in h['branches'])
+    assert p.portable_hierarchy(h)['maximum_levels']==maximum
     p.observation_columns(f.obs,h)
+
+
+@pytest.mark.parametrize('maximum', [0, -1, True, 3.5, None])
+def test_depth_budget_retains_its_positive_integer_requirement(controlled, maximum):
+    with pytest.raises(ValueError, match='positive analysis budget'):
+        c.coordinate(dict(controlled.args, maximum_levels=maximum), 'execution')
 
 
 def test_native_failure_never_publishes_biological_stop(controlled):
@@ -212,6 +221,7 @@ def test_structured_portable_hierarchy_roundtrip_and_integrity(controlled, tmp_p
     original=ad.read_h5ad(h['source']['path']); value=original.copy()
     value.obs=pd.concat([original.obs,p.observation_columns(original.obs,h)],axis=1)
     metadata=p.portable_hierarchy(h)
+    assert metadata['maximum_levels']==3
     assert 'execution_evidence' not in metadata
     assert metadata['branches'].index.tolist()==[r['branch_id'] for r in h['branches']]
     for row,(_,branch) in zip(h['branches'],metadata['branches'].iterrows()):

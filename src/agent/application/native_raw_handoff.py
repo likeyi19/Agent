@@ -501,6 +501,7 @@ def bind_plan(plan, receipt, *, bindings=None):
     alone. A full bundle is merely one source of components. No files are opened.
     """
     from agent.tools.analysis.snapatac_raw import APPLIES, PORTS
+    from agent.schemas import StepOutputRef, PriorOutputRef
     steps = []
     for step in plan.steps:
         args = dict(step.arguments)
@@ -511,6 +512,10 @@ def bind_plan(plan, receipt, *, bindings=None):
         for port in applies.get(function, ()):
             if port == 'whitelist': continue  # Optional native input; never auto cell calling.
             path_key,sha_key,_ = PORTS[port]
+            # The compiler/accepted-result binder already owns these exact
+            # scientific inputs. Resource discovery fills unresolved ports only.
+            if isinstance(args.get(path_key), (StepOutputRef, PriorOutputRef)):
+                continue
             # An explicit native dictionary is already the function's input.
             if port in args.get('kwargs',{}):
                 requested = receipt['selected']

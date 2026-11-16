@@ -52,9 +52,12 @@ with the ordinary operator configuration. It introduces no separate admission or
 execution route. The fresh workspace is prepared without starting a persistent
 Web server or running comprehensive scientific UAT.
 
-The unchanged default upload limit is 256 MiB. The retained canonical PBMC H5AD
-fits; larger FASTQs require an explicit `upload_max_bytes` configuration decision
-within the existing supported bounds before raw FASTQ UAT.
+The default upload limit is 256 MiB. Larger BAMs or FASTQs require an explicit
+operator `upload_max_bytes` decision. The upload owner validates that positive
+integer once for configuration and transfer; the browser must represent it exactly.
+There is no separate eight-GiB file ceiling. The configured limit, one-MiB streaming
+writes, upload concurrency, file-count bound and controlled storage checks remain
+independent of native scientific memory reservations and download limits.
 
 ## Optional scientific dependencies
 

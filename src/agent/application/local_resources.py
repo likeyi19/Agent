@@ -63,7 +63,7 @@ _GROUP_PORTS = (
     ('run_chromvar', 'dataset'),
     ('run_motifmatchr', 'dataset'),
     ('run_motifmatchr', 'genome'),
-    ('call_scATAC_peaks', 'barcodes'),
+    ('call_scATAC_peaks', 'dataset'),
     ('compute_motif_accessibility', 'dataset'),
     ('compute_motif_accessibility', 'genome'),
     ('prepare_scatac_regulatory_sequences', 'dataset'),
@@ -1560,20 +1560,24 @@ class LocalResourceAdmission:
         if set(values).intersection(source):
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
         allowed = {}
-        for name in (tool_name, *(('run_snapatac2',) if tool_name == 'run_chromap' else ())):
+        # Retain registered downstream scientific values without granting any
+        # derived dataset/source role. The selected compiled plan owns execution.
+        for name in registry.names():
             spec = registry.get(name)
-            for key, argument in (dict(spec.required_arguments) | dict(spec.optional_arguments)).items():
-                if key not in source and key != 'output_dir' and (name == tool_name or argument.planning.scientific_parameter):
-                    allowed.setdefault(key, []).append(argument)
-            for port in spec.semantic_planning.consumer_ports:
+            arguments = {key:argument for key,argument in
+                (dict(spec.required_arguments) | dict(spec.optional_arguments)).items()
+                if key not in source and key != 'output_dir' and (name == tool_name or
+                    argument.planning is not None and argument.planning.scientific_parameter)}
+            for key, argument in arguments.items():
+                allowed.setdefault(key, []).append(argument)
+            for port in (() if spec.semantic_planning is None else spec.semantic_planning.consumer_ports):
                 for request in port.request_sources:
                     for member in request.members:
                         if member.input_name in allowed:
                             continue
                         field = next(m.field_name for m in port.members if m.name == member.name)
-                        argument = (dict(spec.required_arguments) | dict(spec.optional_arguments))[field]
-                        if (argument.planning.scientific_parameter
-                                or name == tool_name and field not in source and field != 'output_dir'):
+                        if field in arguments:
+                            argument = arguments[field]
                             allowed.setdefault(member.input_name, []).append(argument)
         if set(values) - set(allowed):
             raise _fail('LOCAL_RESOURCE_BINDING_INVALID')

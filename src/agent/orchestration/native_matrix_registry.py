@@ -131,6 +131,7 @@ def tool_spec(owner):
         from .native_parameters import input_name
         for port, (path, sha, _) in raw.PORTS.items():
             ports.append(Consumer(port, (member('path', path), member('sha256', sha)), False,
+                accepted_upstream_types=('scatac_peaks.v2',) if port == 'peaks' else (),
                 request_sources=(request(path, rm('path', path), rm('sha256', sha)),) + tuple(
                     request(input_name(owner.TOOL, fn, path),
                         rm('path', input_name(owner.TOOL, fn, path)), rm('sha256', input_name(owner.TOOL, fn, sha)))
@@ -158,6 +159,10 @@ def tool_spec(owner):
         'TBI is unused. No canonical fragment import or internal source profile is required. '
         'metrics.tsse consumes native fragment H5AD and GTF/GFF gene_anno. pp.filter_cells is a separate native selection '
         'with its own method. pp.make_peak_matrix consumes imported native H5AD and optional peaks BED. '
+        'Its peaks port accepts installed reference regions, researcher-supplied BED or the accepted '
+        'call_scATAC_peaks peaks port. Existing regions require no peak caller. For de novo MACS3 peaks, '
+        'call_scATAC_peaks consumes the selected native fragment H5AD, and pp.make_peak_matrix consumes '
+        'that same dataset plus the accepted peak BED. '
         'Its native default is paired-insertion. Research tasks may select the registered counting_strategy '
         'choice for a scientifically justified downstream method, without inventing a user declaration. '
         'Choose methods and compatible regions from the objective and available references, not integration order; '
@@ -195,6 +200,9 @@ def tool_spec(owner):
         'Explicit use_x=true aggregates the existing region values, not reconstructed fragments. '
     ) if owner.package == 'snapatac2' else (
         'tl.geneactivity requires compatible GTF gene_anno and genomic peak coordinate var_names. '
+        'Installed epiScanpy 0.4.0 parses underscore-delimited coordinates first, so chromosome names '
+        'containing underscores can be rejected by its native coordinate parser. Select a compatible '
+        'Gene Activity construction with its actual source; native failures remain visible. '
         'It sums supplied peak values into a new gene/transcript X with native dense intermediates/output; '
         'binary accessibility and peak counts remain different measurements. '
         'Native default annotation=HAVANA selects that GTF source; explicit annotation=null accepts all sources. '

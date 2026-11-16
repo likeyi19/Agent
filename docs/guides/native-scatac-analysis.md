@@ -9,6 +9,11 @@ statements that production remains MAESTRO-backed or orchestration is future wor
 are historical and superseded by ICTA-4B. Native science and its thresholds remain
 unchanged. No ICTA-4C browser or large biological evaluation is authorized here.
 
+The subsequent ICTA-4C-2 engineering review changes the current production
+`maximum_levels` default to **3**. Explicit positive integer budgets and all
+scientific stopping rules remain unchanged. Historical phase budgets below
+describe their original implementations.
+
 
 For a SnapATAC2 workflow, use the existing `run_snapatac2` interface:
 prepare a native tile or region matrix when needed, `pp.select_features`,
@@ -198,7 +203,11 @@ Neither constructor normalizes, binarizes or relabels the supplied measurement.
   and attributes are preserved; absent gene IDs are not reconstructed from names.
 - `run_episcanpy(function_name='tl.geneactivity')` consumes ordinary peak H5AD and
   a compatible managed GTF on the same `gene_anno` port. Native `var_names` parsing
-  accepts `chr:start-end` and `chr_start_end`. It sums the supplied peak values
+  accepts `chr:start-end` and `chr_start_end`. Installed epiScanpy 0.4.0 tries the
+  underscore form first; chromosome names containing underscores can therefore
+  fail in its native parser. Preserve that failure and select a compatible native
+  construction with its actual source. Agent does not rename chromosomes, remove
+  features or replace the native parser. It sums the supplied peak values
   overlapping native gene domains, using upstream 5,000 bp by default. Binary
   accessibility therefore produces sums of accessible features, not fragment
   counts. The installed default `annotation='HAVANA'` filters GTF source records;
@@ -533,7 +542,9 @@ prevailing. Its genuine positive child-versus-parent-rest differential Runs feed
 native `-1` cells remain in the residual parent, without residual reclustering.
 Naming, ambiguity and the number of significant labels do not control recursion.
 
-`maximum_levels` defaults to **5**, counting the initial annotation as level 1.
+ICTA-4A originally defaulted `maximum_levels` to **5**, counting the initial
+annotation as level 1. Current production defaults to **3** through the single
+coordinator configuration; explicit positive integer values retain their range.
 This is a configurable execution budget. Branches can stop independently for no
 candidate, no support, partial/full retention, native-unassigned membership or
 budget exhaustion. There is no automatic level-one stop based on feature-space

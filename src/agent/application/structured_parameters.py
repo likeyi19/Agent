@@ -225,7 +225,18 @@ def matches(plan, row, registry, admitted):
         members = (admitted.get('registered_input') or {}).get('members', ())
         index = int(row['source'].split('.')[1])
         role = {k: row[k] for k in ('tool', 'port', 'source')}
-        if index >= len(members) or role not in admitted.get('roles', ()):
+        roles = admitted.get('roles', ())
+        # Raw declarations retain their original attachment identities outside
+        # the derived native-science registration. They select the native input
+        # port without creating H5AD group roles or granting derived-file scope.
+        if (admitted.get('registered_input') or {}).get('composition') == 'native-science.v1':
+            raw = [field for field in ('bam', 'fragments')
+                if admitted.get(field + '_context', {}).get('adapter') == 'native-inputs.v1'
+                and admitted.get(field, {}).get('source') == row['source']]
+            if len(raw) == 1 and row['tool'] == 'run_snapatac2' and row['port'] == 'dataset':
+                members = admitted.get(raw[0] + '_sources', {}).get('members', ())
+                roles = (role,)
+        if index >= len(members) or role not in roles:
             raise IntentError('invalid_reference')
         port, _, _ = _group_port(registry, row['tool'], row['port'])
         selected = [s for s in selected if plan_source_path(s.arguments.get(port.members[0].field_name), plan.steps)

@@ -111,6 +111,7 @@ def test_one_cluster_no_differential_needed_and_budget_separate(bound):
     assert result['outcome']=='no_candidate_subdivision'
     assert result['residual_parent']['positions']==[4,1,3]
     assert result['execution_budget']['supplied_reason']['maximum_levels']==3
+    assert result['execution_budget']['default_maximum_levels']==3
     assert not result['execution_budget']['enforced']
 
 

@@ -22,7 +22,10 @@ from .workspace import ApplicationWorkspaceError
 
 
 DEFAULT_UPLOAD_BYTES = 256 * 1024 * 1024
-MAX_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
+# Transport sizes must remain exact in the browser's JSON number representation.
+# Deployment capacity is the operator's configured per-file limit, not this
+# representability bound. Streaming never allocates that configured size.
+MAX_UPLOAD_BYTES = (1 << 53) - 1
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 MAX_UPLOAD_FILES = 128
 _UPLOAD_ID = re.compile(r'[A-Za-z0-9_-]{1,64}')
@@ -52,6 +55,12 @@ _MESSAGES = {
 }
 
 
+def validate_upload_limit(value):
+    if type(value) is not int or not 1 <= value <= MAX_UPLOAD_BYTES:
+        raise ValueError('The per-file upload limit must be a positive integer exactly representable by the browser.')
+    return value
+
+
 class UploadError(ValueError):
     """Safe transfer failures, separate from resource and scientific failures."""
 
@@ -60,7 +69,7 @@ class UploadError(ValueError):
         self.message, self.status_code = _MESSAGES[code]
         if code == 'UPLOAD_TOO_LARGE' and max_bytes is not None:
             self.message = (f'The configured per-file upload limit is {max_bytes} bytes. '
-                f'Ask the operator to review upload_max_bytes (supported maximum {MAX_UPLOAD_BYTES} bytes).')
+                'Ask the operator to review upload_max_bytes for this input.')
         super().__init__(self.message)
 
 
@@ -83,8 +92,7 @@ class H5ADUploadAdmission:
     def __init__(self, resources, root, *, max_bytes=DEFAULT_UPLOAD_BYTES, max_concurrent=2):
         if not isinstance(resources, LocalResourceAdmission):
             raise TypeError('The existing LocalResourceAdmission owner is required.')
-        if type(max_bytes) is not int or not 1 <= max_bytes <= MAX_UPLOAD_BYTES:
-            raise ValueError('max_bytes must be between one byte and eight GiB.')
+        max_bytes = validate_upload_limit(max_bytes)
         if type(max_concurrent) is not int or not 1 <= max_concurrent <= 4:
             raise ValueError('max_concurrent must be between one and four.')
         self.resources = resources

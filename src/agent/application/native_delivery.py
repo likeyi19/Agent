@@ -19,7 +19,12 @@ def definitions(registry=None):
 
 
 def for_artifact(artifact):
-    matches = [spec for name, spec in definitions() if spec.contract == artifact.contract
+    from agent.tools.analysis import macs3
+    # Current contracts may use compact private metadata. The sole historical
+    # exception is MACS3 v1, already admitted by its publication owner.
+    matches = [spec for name, spec in definitions() if (spec.contract == artifact.contract
+               or name == macs3.TOOL and artifact.contract == macs3.LEGACY_CONTRACT
+               and artifact.manifest.get('contract') == macs3.LEGACY_CONTRACT)
                and name == artifact.manifest.get('tool_name') and artifact.role in spec.file_definitions(artifact.manifest)]
     return matches[0] if len(matches) == 1 else None
 
@@ -39,7 +44,7 @@ def _publication(app, revision, origin, output, step_id=None):
     root = workspace.runs / workspace.run_digest(run_id) / 'scientific'; path.relative_to(root)
     manifest, sha = spec.publication(step.resolved_arguments, result, record)
     if (output is not None and accepted_step_digest(step) != output.accepted_step_sha256
-            or record['artifact_contract'] != spec.contract or manifest['execution_identity'] != execution
+            or record['artifact_contract'] != manifest['contract'] or manifest['execution_identity'] != execution
             or record['resources']['manifest_identity'] != manifest
             or record['resources']['result_metadata'] != result):
         raise ValueError('Scientific artifacts differ from accepted publication')
@@ -70,7 +75,7 @@ def accepted_artifacts(app, session_id, revision, origin, output, *, step_id=Non
         ref = ScientificArtifactHandle(digest(identity), spec.artifact_type, pin['sha256'], revision.revision_id,
             origin.turn_id, pin['size_bytes'], name, _label(step, name, definitions[name][0]))
         delivery = dict(manifest, tool_name=step.tool_name, accepted_step_sha256=accepted_step_digest(step))
-        items.append(_ScientificMatrixArtifact(ref, path, root, pin['sha256'], pin['size_bytes'], spec.contract, delivery, name, sha))
+        items.append(_ScientificMatrixArtifact(ref, path, root, pin['sha256'], pin['size_bytes'], manifest['contract'], delivery, name, sha))
     if _accepted(store, run_id, step_id)[3] != anchor:
         raise ValueError('Scientific accepted anchor changed')
     return items

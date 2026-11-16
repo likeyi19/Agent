@@ -48,6 +48,36 @@ class SimulatedProcessExit(BaseException):
     pass
 
 
+@pytest.mark.parametrize('request_scope', [None, 'child', 'parent'])
+def test_cooperative_cancellation_before_executor_tool_scope(tmp_path, request_scope):
+    from agent.tools._cancellation import ToolWorkCancelled
+    from agent.orchestration.annotation_runs import _CHILD
+    store = FileRunStore(tmp_path)
+    requested = request_scope is not None
+    if request_scope == 'parent':
+        store.create(PersistedRunState(schema_version=RUN_STATE_SCHEMA_VERSION,
+            revision=0, run_id='parent:run', request=AgentRequest('parent', 'Parent task', {}),
+            lifecycle_status=RunLifecycleStatus.PLANNING, created_at=_now(), updated_at=_now()))
+    registry = ToolRegistry((_spec('first', lambda: pytest.fail('Cancelled preparation executed science')),))
+    executor = PlanExecutor(registry)
+    def interrupted(*args, **kwargs):
+        if requested:
+            store.request_cancellation('parent:run' if request_scope == 'parent' else 'request-1:run')
+        raise ToolWorkCancelled()
+    executor.execute = interrupted
+    runtime = AgentRuntime(registry=registry, executor=executor, run_store=store)
+    token = _CHILD.set(('parent:run', None, None) if request_scope == 'parent' else None)
+    try:
+        result = runtime.run_prepared(_request(), _one_step_plan())
+    finally:
+        _CHILD.reset(token)
+    state = store.load(result.run_id)
+    assert result.status is (RunStatus.CANCELLED if requested else RunStatus.FAILED)
+    assert state.lifecycle_status is (RunLifecycleStatus.CANCELLED if requested else RunLifecycleStatus.FAILED)
+    assert result.errors[0].code == ('RUN_CANCELLED' if requested else 'EXECUTOR_UNEXPECTED_ERROR')
+    assert (store.load_cancellation(result.run_id) is not None) is requested
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -714,6 +744,29 @@ def test_resume_with_cancellation_preserves_success_and_skips_pending(
     assert resume_planner.calls == 0
     assert first.call_count == 1
     second.assert_not_called()
+
+
+def test_cancellation_in_resumed_authority_preparation_keeps_full_step_set(tmp_path):
+    from agent.tools._cancellation import ToolWorkCancelled
+    first = Mock(return_value={'value':'done'})
+    second = Mock(return_value={'value':'must-not-run'})
+    store = InterruptingStore(tmp_path, lambda state: len(state.steps) == 2
+        and state.steps[0].status is StepStatus.SUCCEEDED
+        and state.steps[1].status is StepStatus.PENDING)
+    runtime, _, registry = _runtime(store, first, second)
+    with pytest.raises(SimulatedProcessExit):
+        runtime.run(_request())
+    durable = FileRunStore(tmp_path)
+    executor = PlanExecutor(registry)
+    def preparation(*args, **kwargs):
+        durable.request_cancellation('request-1:run')
+        raise ToolWorkCancelled()
+    executor.execute = preparation
+    result = AgentRuntime(registry=registry, executor=executor, run_store=durable).resume('request-1:run')
+    assert result.status is RunStatus.CANCELLED
+    assert [s.status for s in result.steps] == [StepStatus.SUCCEEDED, StepStatus.SKIPPED]
+    assert first.call_count == 1 and second.call_count == 0
+    assert durable.load(result.run_id).steps[0].result == {'value':'done'}
 
 
 def test_sidecar_survives_owner_crash_and_resume_uses_persisted_plan(

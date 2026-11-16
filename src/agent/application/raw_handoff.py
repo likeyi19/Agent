@@ -222,12 +222,15 @@ def validate_downstream_annotation(value):
 
 
 def validate_arguments(arguments, field='fastq'):
+    # Raw intake captures one objective, including explicit downstream values.
+    # The shared typed parameter binder and compiled plan own its consumers;
+    # an intake-specific tool list must not redefine the Registry inventory.
+    if field in ('fastq', 'bam', 'fragments'):
+        return
     from .epizoo_handoff import TOOLS
-    allowed = {'epizoo':TOOLS, 'annotation':('annotate_scATAC_cell_types',),
-        'fragments':('run_snapatac2',), 'bam':('run_snapatac2',),
-        'fastq':('run_chromap','run_snapatac2')}[field]
+    allowed = {'epizoo':TOOLS, 'annotation':('annotate_scATAC_cell_types',)}[field]
     if any(a.tool not in allowed for a in arguments):
-        raise ValueError('FASTQ task arguments must belong to its registered scientific consumers.')
+        raise ValueError('Task arguments must belong to its registered scientific consumers.')
 
 
 def declaration(value, field='fastq'):

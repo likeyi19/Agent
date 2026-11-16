@@ -22,6 +22,7 @@ from .native_gene_activity import corresponding_positions
 from .sequence_prediction import library
 
 CHILDREN = frozenset({'run_snapatac2', 'run_scanpy', 'run_episcanpy'})
+DEFAULT_MAXIMUM_LEVELS = 3
 
 
 def branch_id(parent, group):
@@ -50,7 +51,7 @@ def coordinate(arguments, execution_identity):
     args = publication.arguments(arguments)
     inv = annotation_invocation()
     readers = inv.evidence_context()
-    maximum = args.get('maximum_levels', 5)
+    maximum = args.get('maximum_levels', DEFAULT_MAXIMUM_LEVELS)
     if type(maximum) is not int or maximum < 1:
         raise ValueError('maximum_levels is a positive analysis budget, including initial level 1')
     local_kwargs = args.get('local_kwargs', {})
@@ -297,7 +298,7 @@ def coordinate(arguments, execution_identity):
 def annotate_scATAC_cell_types(input_path, cellmarker_id, output_dir, *,
         grouping_path=None, group_column=None, input_sha256=None, activity_path=None, activity_source_path=None,
         gene_anno_path=None, gene_anno_sha256=None, cellmarker_identity=None,
-        activity_method=None, activity_kwargs=None, activity_count_slot=None, maximum_levels=5,
+        activity_method=None, activity_kwargs=None, activity_count_slot=None, maximum_levels=DEFAULT_MAXIMUM_LEVELS,
         local_kwargs=None, differential_kwargs=None, parameter_selection='asw', species=None,
         marker_alpha=.05, ora_alpha=.05, adjusted_p_threshold=.01, minimum_peak_features=5,
         marker_context=None, identity_kind='name', identity_column=None, operation_overrides=None, previous_annotation_path=None):

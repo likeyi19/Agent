@@ -330,7 +330,7 @@ def test_upload_configuration_is_opt_in_and_approves_only_controlled_workspace_r
 @pytest.mark.parametrize('changes', [
     {'upload_root': '../outside'}, {'upload_root': '.'}, {'upload_root': ''},
     {'upload_root': 1}, {'upload_root': []},
-    {'upload_max_bytes': True}, {'upload_max_bytes': 0}, {'upload_max_bytes': 8 * 1024 ** 3 + 1},
+    {'upload_max_bytes': True}, {'upload_max_bytes': 0}, {'upload_max_bytes': 1 << 53},
     {'upload_max_concurrent': True}, {'upload_max_concurrent': 0}, {'upload_max_concurrent': 5},
 ])
 def test_upload_configuration_rejects_unsafe_roots_and_unbounded_limits(tmp_path, changes):
@@ -391,3 +391,17 @@ def test_inline_common_reference_catalog_is_retired(tmp_path):
     value['epizoo_resources'] = [qualified_resource()]
     with pytest.raises(WebConfigurationError):
         load_web_configuration(write_configuration(tmp_path, value))
+
+
+def test_large_bam_upload_uses_the_same_operator_limit_and_streaming_owner(tmp_path):
+    from agent.application.uploads import H5ADUploadAdmission
+    value=configuration_json()
+    value.update(upload_root='inputs/uploads',upload_max_bytes=16*1024**3,upload_max_concurrent=1)
+    configured=load_web_configuration(write_configuration(tmp_path,value))
+    application=build_interactive_application(configured,
+        planning_model_factory_registry=PlanningModelFactoryRegistry(
+            {'scripted':lambda _:pytest.fail('Upload configuration contacted a provider')}))
+    uploads=H5ADUploadAdmission(application.resources,configured.upload_root,
+        max_bytes=configured.upload_max_bytes,max_concurrent=configured.upload_max_concurrent)
+    assert uploads.max_bytes==16*1024**3 and uploads.max_concurrent==1
+    assert list(uploads.staging.iterdir())==[]

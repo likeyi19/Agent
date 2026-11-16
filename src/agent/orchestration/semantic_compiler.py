@@ -1128,6 +1128,8 @@ def compile_semantic_plan(
                     (
                         *states[step.step_id].dependencies,
                         *step.control_dependencies,
+                        *(value.step_id for value in states[step.step_id].arguments.values()
+                          if isinstance(value, StepOutputRef)),
                     )
                 )
             ),

@@ -73,6 +73,21 @@ raw prerequisite does not turn an annotation choice into a reference-resource
 selection. Exact offered membership and the pending question identity still bind
 the click; the ordinary continuation preserves the original raw sources.
 
+When annotation input preparation asks a question after parsing a native semantic
+candidate, the Interaction retains those exact proposed selections. An exact UI
+answer with unchanged captured inputs, source binding and resource catalog
+recompiles that proposal through the ordinary parser, compiler, preparation and
+preflight, without another model planning call. A saved proposal grants no
+execution authority and cannot resolve an ambiguous source port. Historical
+questions without a saved candidate still require ordinary planning.
+
+The wire-v4 response schema projects the compiler's registered source channels
+within the visible planning scope. It retains portless upstream references when
+each compatible producer has one valid port. If any compatible producer has
+multiple ports, that consumer requires an explicit port, including mixed scopes.
+No compatible producer means no upstream source variant. The compiler still
+validates every selected producer, port and scientific dependency.
+
 Files retain captured resource IDs, hashes and source order. Role selection binds
 actual offered files to Registry ports. Resource component selection and accepted
 Revision/prior-output validation retain their existing owners. Names, extensions,

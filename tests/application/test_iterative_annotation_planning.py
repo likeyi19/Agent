@@ -443,6 +443,7 @@ def test_uploaded_original_column_binding_and_deterministic_choice(tmp_path, mon
         assert not executor.plans
         assert app._application.sessions.load('session').interactions[0].admitted['annotation']['species']=='Homo sapiens'
         choice=next(c for c in first.clarification_choices if c['label']=='Human')
+        planning_calls = sum('semantic_prompt_version' in c for c in calls)
         first=app.submit_turn('session','species-choice','',expected_generation=0,
             clarification_choice=dict(question_turn_id='task',handle=choice['handle']),input_sets=inputs)
         state=app._application.sessions.load('session')
@@ -452,6 +453,7 @@ def test_uploaded_original_column_binding_and_deterministic_choice(tmp_path, mon
         # The next real prerequisite must remain distinct from species binding.
         assert 'gene annotation resource' in state.interactions[-1].admitted['choices'][0]
         assert sum('turn_schema_version' in c for c in calls)==1
+        assert sum('semantic_prompt_version' in c for c in calls)==planning_calls
         assert not executor.plans
         return
     if selection=='click':

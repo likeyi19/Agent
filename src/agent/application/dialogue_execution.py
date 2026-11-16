@@ -2088,6 +2088,11 @@ def prepare_native_task(sessions, interaction, admitted):
     request = AgentRequest(admitted['request_id'], intent, admitted['inputs'])
     prepared,_ = app._prepare_request(request)
     question = None
+    captured_candidate = None
+    question_candidate = None
+    def capture_candidate(payload):
+        nonlocal captured_candidate
+        captured_candidate = _serialize(payload)
     bindings = []
     from .structured_parameters import bound_records, bind_plan as bind_parameters, ScopeRequired
     explicit = bound_records(admitted, state.interactions, app.registry, current_utterance=interaction.utterance)
@@ -2122,11 +2127,12 @@ def prepare_native_task(sessions, interaction, admitted):
     from agent.orchestration.prior_outputs import prior_output_store
     prepare_annotation = preparer(sessions, current, admitted)
     def prepare_inputs(tool, arguments, selected):
-        nonlocal question
+        nonlocal question, question_candidate
         try:
             return prepare_annotation(tool, arguments, selected)
         except AnnotationPrerequisite as exc:
             question = (None, exc.questions,exc.options)
+            question_candidate = captured_candidate
             raise PlannerError('ANNOTATION_INPUT_REQUIRED', str(exc), category=ErrorCategory.USER_INPUT_ERROR) from exc
     delegate = app.runtime.planner
     if 'native_plan' in admitted:
@@ -2135,7 +2141,27 @@ def prepare_native_task(sessions, interaction, admitted):
             def plan(self, request, registry):
                 return _decode_plan(admitted['native_plan'])
         delegate = PreparedPlanner()
-    with scientific_resource_scope(None if reference_owner is None else reference_owner.library), planning_context(context), input_preparation(prepare_inputs), prior_output_store(app.run_store):
+    elif (interaction.submission or {}).get('clarification_choice') and admitted.get('continuation'):
+        previous = next(i for i in state.interactions
+            if i.turn_id == admitted['continuation']['binding_turn_id'])
+        saved = (previous.admitted or {}).get('native_semantic_candidate')
+        # An exact pending choice changes declarations, not captured source
+        # operands. Recompile the saved proposal; it has no execution authority.
+        if (saved is not None and previous.status == 'clarification'
+                and previous.base_generation == interaction.base_generation
+                and previous.base_revision_id == interaction.base_revision_id
+                and all(_serialize(admitted.get(key)) == _serialize(previous.admitted.get(key))
+                    for key in ('inputs', 'registered_input', 'resource_catalog'))):
+            saved = _serialize(saved)
+            captured_candidate = saved
+            class CapturedPlanner:
+                def plan(self, request, registry):
+                    from agent.orchestration.llm_planner import _semantic_v4_plan
+                    from agent.orchestration.semantic_compiler import build_semantic_compiler_contract
+                    return _semantic_v4_plan(json.dumps(saved), request, registry,
+                        build_semantic_compiler_contract(registry), planner_name='captured-native-semantic-candidate')
+            delegate = CapturedPlanner()
+    with scientific_resource_scope(None if reference_owner is None else reference_owner.library), planning_context(context), input_preparation(prepare_inputs, capture_candidate=capture_candidate), prior_output_store(app.run_store):
         planning = AgentRuntime(planner=_AdmittedPlanner(delegate,lambda *a:None,bind_native),
             registry=app.registry,executor=app.runtime.executor).run(replace(prepared,mode=RunMode.PLAN_ONLY))
     admitted = dict(admitted,native_planning_trace=[row.to_dict() for row in planning.trace])
@@ -2148,6 +2174,8 @@ def prepare_native_task(sessions, interaction, admitted):
             admitted['resource_options'] = list(options)
         if plan is not None:
             admitted['native_resource_plan'] = plan.to_dict()
+        elif question_candidate is not None:
+            admitted['native_semantic_candidate'] = question_candidate
         pending = dict(origin_turn_id=admitted.get('continuation',{}).get('origin_turn_id',interaction.turn_id),
             binding_turn_id=interaction.turn_id,field=field,tool=admitted['tool'],
             resource_context_sha256=digest(admitted['resource_catalog']))

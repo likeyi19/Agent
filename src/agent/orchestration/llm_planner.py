@@ -1204,6 +1204,8 @@ def _semantic_v4_plan(
             diagnostic_stage=PlanningDiagnosticStage.UNSUPPORTED,
             diagnostic_reason_code="explicit_unsupported_response",
         ) from exc
+    from .active_context import capture_semantic_candidate
+    capture_semantic_candidate(_parse_json_response(response))
     try:
         return compile_semantic_plan(
             request,
@@ -1510,7 +1512,8 @@ class LLMPlanner:
                         else None
                     ),
                 )
-                response_schema = build_semantic_wire_v4_schema(registry, request, visible_tool_names=scope.visible_tool_names)
+                response_schema = build_semantic_wire_v4_schema(registry, request,
+                    visible_tool_names=scope.visible_tool_names, compiler_contract=semantic_contract)
         except PlannerError as exc:
             if scope is None:
                 raise

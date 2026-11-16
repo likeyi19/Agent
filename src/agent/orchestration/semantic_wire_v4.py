@@ -6,7 +6,7 @@ The registry-driven semantic compiler remains authoritative for source legality.
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
 import json
 from typing import Mapping
 
@@ -24,6 +24,7 @@ from .planner import PlannerError
 from .planning_diagnostics import PlanningDiagnosticStage
 from .registry import ToolRegistry
 from .semantic_compiler import (
+    PlanningCompilerContract,
     SemanticContextSource,
     SemanticRegisteredChoiceSource,
     SemanticPlanCandidate,
@@ -174,13 +175,19 @@ def build_semantic_wire_v4_schema(
     registry: ToolRegistry,
     request: AgentRequest,
     *, visible_tool_names: tuple[str, ...] | None = None,
+    compiler_contract: PlanningCompilerContract | None = None,
 ) -> Mapping[str, JsonValue]:
     """Build one deterministic provider-compatible schema without input values."""
 
     if not isinstance(request, AgentRequest):
         raise TypeError("`request` must be an AgentRequest.")
     tool_names = _visible_tool_names(registry, visible_tool_names)
-    input_names = tuple(sorted(request.inputs))
+    from .semantic_compiler import build_semantic_compiler_contract
+    contract = compiler_contract if compiler_contract is not None else build_semantic_compiler_contract(registry)
+    channels = defaultdict(lambda: defaultdict(set))
+    for channel in contract.step_output_channels:
+        if channel.producer_tool_name in tool_names and channel.consumer_tool_name in tool_names:
+            channels[channel.consumer_tool_name, channel.target_port][channel.producer_tool_name].add(channel.source_port)
 
     definitions: dict[str, JsonValue] = {
         "step_source": _closed_object_schema(
@@ -207,15 +214,17 @@ def build_semantic_wire_v4_schema(
                 variants.append(_closed_object_schema({
                     'kind': {'type':'string','enum':('input',)},
                     'input': {'type':'string','enum':inputs}}))
-            if port.accepted_upstream_types:
-                producer_ports = tuple(sorted({p.name for name in tool_names
-                    for p in registry.get(name).semantic_planning.producer_ports
-                    if p.semantic_type in port.accepted_upstream_types}))
-                if producer_ports:
-                    variants.extend(({'$ref':'#/$defs/step_source'}, _closed_object_schema({
-                        'kind': {'type':'string','enum':('step_port',)},
-                        'step': {'type':'string'},
-                        'source_port': {'type':'string','enum':producer_ports}})))
+            producers = channels.get((tool_name, port.name), {})
+            if producers:
+                # Step identities are not yet known. A multi-port producer
+                # requires explicit ports for this consumer, including mixed scopes.
+                if all(len(ports) == 1 for ports in producers.values()):
+                    variants.append({'$ref':'#/$defs/step_source'})
+                producer_ports = tuple(sorted(set().union(*producers.values())))
+                variants.append(_closed_object_schema({
+                    'kind': {'type':'string','enum':('step_port',)},
+                    'step': {'type':'string'},
+                    'source_port': {'type':'string','enum':producer_ports}}))
             if active is not None:
                 handles = tuple(item.handle for item in active.items
                     if item.binding.semantic_type in port.accepted_upstream_types)

@@ -57,6 +57,73 @@ LIMITATIONS = ('Native SnapATAC2 preprocessing, not biological validation. Barco
     'Old Agent TSS enrichment and selection thresholds are different methods. Native fragment-size distribution is library-level, not per-cell nucleosome signal. '
     'Supplied species/assembly and barcode/coordinate history are declarations; no inferred reference correspondence or relabelling.')
 
+# Shared by the selected-operation owner and its Registry projection. A native
+# signature cannot express this condition because both parameters default to None.
+BARCODE_EXTRACTION = dict(argument='kwargs', rule='exactly_one',
+    members=('barcode_tag', 'barcode_regex'), effective='nonempty_string')
+BARCODE_CHOICES = (
+    dict(handle='native-parameter.barcode_tag', label='BAM tag extraction', member='barcode_tag'),
+    dict(handle='native-parameter.barcode_regex', label='Read-name regex extraction', member='barcode_regex'),
+)
+
+
+def parameter_metadata(function, metadata):
+    """Keep the selected-member editor typed even without runtime discovery."""
+    result=dict(metadata)
+    for condition in scientific_contract({'function_name':function}).get('conditional_parameters',()):
+        for member in condition['members']:
+            result[member]=dict(result.get(member,{}),types=['str','NoneType'],
+                required=False,default_when_omitted=None,conditional=condition)
+    return result
+
+
+def scientific_contract(arguments):
+    name=arguments.get('function_name'); kwargs=arguments.get('kwargs', {})
+    if name=='pp.make_fragment_file':
+        return dict(conditional_parameters=(BARCODE_EXTRACTION,), produces={'fragments':dict(format='fragments')})
+    if name=='pp.import_fragments':
+        return dict(produces={'dataset':dict(x=False, fragment_storage=True,
+            paired_fragments=kwargs.get('is_paired', True), native_values=True,
+            storage_kind='paired_fragments' if kwargs.get('is_paired',True) else 'single_end_insertions',
+            measurement='native_fragment_positions_and_lengths' if kwargs.get('is_paired',True) else 'native_single_end_insertions')})
+    if name in ('pp.add_tile_matrix', 'pp.make_peak_matrix', 'pp.make_gene_matrix'):
+        requires=('x',) if kwargs.get('use_x') else ('native_values',)
+        output=dict(x=True, counting_strategy=kwargs.get('counting_strategy',arguments.get('counting_strategy','paired-insertion')))
+        if not kwargs.get('inplace', name=='pp.add_tile_matrix'):
+            output.update(fragment_storage=False, paired_fragments=False, native_values=False,
+                representations=(),graphs=(),root=False)
+        return dict(requires={'dataset':requires}, produces={'dataset':output})
+    if name in ('metrics.tsse', 'metrics.frag_size_distr'):
+        return dict(requires={'dataset':('fragment_storage',)})
+    return {}
+
+
+def prepare_operation(arguments, context):
+    from agent.orchestration.scientific_inputs import ScientificDiagnostic, ScientificInputRequired, ScientificInputRequirement
+    contract=scientific_contract(arguments)
+    for condition in contract.get('conditional_parameters', ()):
+        kwargs=arguments.get(condition['argument'], {})
+        effective=[name for name in condition['members'] if kwargs.get(name) is not None]
+        if len(effective)>1 or any(not isinstance(kwargs[name], str) or not kwargs[name].strip() for name in effective):
+            raise ScientificDiagnostic('NATIVE_BARCODE_EXTRACTION_INVALID',
+                'Supply exactly one nonempty barcode_tag or barcode_regex for pp.make_fragment_file.')
+        if effective:
+            continue
+        # Only an exact Answer to this Candidate/step/source can select the next
+        # member. No filename, assay, reference bundle or historical default is
+        # evidence for a BAM barcode mechanism.
+        answer=context.answers.get(condition['argument'], {})
+        choice=next((row for row in BARCODE_CHOICES if row==answer), None)
+        if choice is None:
+            raise ScientificInputRequired(ScientificInputRequirement('kwargs', 'kwargs', 'resource',
+                offers=BARCODE_CHOICES, dependencies=('source:bytes',), applicability=condition,
+                messages=('Choose one barcode-extraction mechanism for the selected BAM.',)))
+        raise ScientificInputRequired(ScientificInputRequirement('kwargs', 'kwargs', 'scalar',
+            member=choice['member'], dependencies=('source:bytes',),
+            applicability=dict(expected_types=('str',), conditional=condition),
+            messages=('Supply the exact '+choice['member']+' for the selected BAM.',)))
+    return arguments
+
 
 def fragment_name(args):
     compression = args.get('kwargs', {}).get('compression')

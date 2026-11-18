@@ -179,6 +179,44 @@ def inspect(source, *, private_paths=(), privacy=False, observation_fields=None,
         return size
 
 
+def scientific_properties(path, names):
+    """Read storage capabilities without loading matrices or recomputing science."""
+    inspect(path,require_matrix=False,max_logical_bytes=None)
+    properties={}
+    with h5py.File(path,'r') as handle:
+        paired=metadata_item(handle,'obsm/fragment_paired') is not None
+        single=metadata_item(handle,'obsm/fragment_single') is not None
+        values=metadata_item(handle,'obsm/base_values') is not None
+        properties.update(fragment_storage=paired or single,paired_fragments=paired,
+                          native_values=paired or single or values)
+        if paired or single or values:
+            properties['storage_kind']='paired_fragments' if paired else 'single_end_insertions' if single else 'native_base_values'
+        if 'x' in names:
+            # Opening a backed AnnData still materializes obsm. Native fragment
+            # storage can be genome-sized, so validate only the selected X object.
+            from anndata.io import sparse_dataset
+            matrix=metadata_item(handle,'X')
+            encoding=matrix.attrs.get('encoding-type') if matrix is not None else None
+            if isinstance(encoding,bytes):encoding=encoding.decode('utf-8')
+            if isinstance(matrix,h5py.Dataset):
+                properties['x']=matrix.ndim==2 and matrix.dtype.kind in 'biufc'
+            elif isinstance(matrix,h5py.Group) and encoding in ('csr_matrix','csc_matrix'):
+                backed=sparse_dataset(matrix)
+                properties['x']=len(backed.shape)==2 and backed.dtype.kind in 'biufc'
+            else:properties['x']=False
+            if properties['x']:
+                axes=[]
+                for axis in ('obs','var'):
+                    frame=metadata_item(handle,axis)
+                    index=frame.attrs.get('_index') if isinstance(frame,h5py.Group) else None
+                    if isinstance(index,bytes):index=index.decode('utf-8')
+                    values=metadata_item(handle,axis+'/'+index) if isinstance(index,str) else None
+                    axes.append(len(values) if isinstance(values,h5py.Dataset) and values.ndim==1 else None)
+                shape=matrix.shape if isinstance(matrix,h5py.Dataset) else backed.shape
+                properties['x']=tuple(axes)==tuple(shape)
+    return {name:properties[name] for name in names if name in properties}
+
+
 def read_native_counts(matrix, semantics):
     """Bounded dense/CSR/CSC exchange; never densify a complete sparse matrix."""
     from scipy import sparse

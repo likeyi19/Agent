@@ -1,3 +1,16 @@
+# Native parameter and scientific I/O contract consolidation (2026-11-18)
+
+Selected SnapATAC2 BAM extraction prepares one effective barcode tag or regex
+through the existing Candidate/Requirement/Answer owners. The raw owner shares
+its condition with Registry native metadata and the member editor. Registry
+semantic ports and selected native owners expose storage/matrix guarantees;
+Compiler and canonical Preparation reject known incompatible contents before
+execution. Fragment H5ADs do not imply X, and compact representations and selected
+layers retain their actual native consumers. No workflow recipe is imposed.
+The [engineering report](../agent-data/acceptance/iterative-cell-type-annotation/icta-fresh-e2e-2026-11-18/contract-remediation/REPORT.md)
+owns bounded verification and independent review. Prior failed G1 evidence remains
+exact.
+
 # Raw inspection retirement and specialized declaration contract cleanup (2026-11-18)
 
 The standalone `inspect_raw_scATAC` capability, dedicated Raw Intake Manifest,

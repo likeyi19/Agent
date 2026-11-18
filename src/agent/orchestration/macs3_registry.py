@@ -28,7 +28,7 @@ def tool_spec():
         exclude_contigs=arg((list,),'Explicit exact reference contig names to exclude; default none. No automatic aliases or mitochondrial filtering.',scientific_parameter=True))
     ports=[Consumer('dataset',(member('dataset','input_path'),),True,
         request_sources=(request('input_path',rm('dataset','input_path')),),
-        accepted_upstream_types=('native_matrix_h5ad.v1',))]
+        accepted_upstream_types=('native_matrix_h5ad.v1',),required_properties=('paired_fragments',))]
     ports.extend(scalar(k,required=k in required) for k in ('output_dir','effective_genome_size','genome_size_basis','qvalue','exclude_contigs'))
     from .native_delivery import delivery_spec
     return ToolSpec(source_encodings={'dataset':('h5ad',)}, source_input_types={'dataset':('h5ad','external_fragments')}, scientific_delivery=delivery_spec(owner,'scientific_peaks',figure=('distributions.png','peak_distributions')),

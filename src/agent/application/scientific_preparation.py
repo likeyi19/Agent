@@ -405,6 +405,9 @@ def prepare(sessions, interaction, admitted, *, record=None, intake_needs=None, 
                             selected_resources, bindings_receipt, sessions, current, record,
                             _model_catalogs(sessions.load(sessions._interaction_session_id).interactions, record))
                         arguments = tool.preparation_owner(arguments, owner_context)
+                    from agent.orchestration.scientific_inputs import OperationPreparationContext, validate_input_properties
+                    validate_input_properties(arguments,OperationPreparationContext(tool,step_id,app.registry,selected,
+                        scoped,selected_resources,bindings_receipt,sessions,current,record))
                 except ScientificInputRequired as exc:
                     owner_requirements.extend(_owner_requirements(analysis.candidate_id, step_id, tool, original, exc, operations=analysis.operations, registry=app.registry))
                     return original if exc.bindings is None else exc.bindings

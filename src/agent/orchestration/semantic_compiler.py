@@ -1187,6 +1187,17 @@ def _analyze_candidate(
                     raise SemanticPlanCompileError('WRONG_SOURCE_PORT', 'The selected native function cannot publish this source.',
                         diagnostic_fields=dict(step_id=step.step_id, tool_name=step.tool_name,
                             producer_step_id=producer_id, source_port=channel.source_port, target_port=channel.target_port))
+    # Semantic types identify objects; scientific owners describe their contents.
+    # This pass is pure even for future outputs and precedes all materialization.
+    from .scientific_inputs import OperationPreparationContext, ScientificDiagnostic, validate_input_properties
+    selected={step.step_id:(step.tool_name,dict(states[step.step_id].arguments)) for step in candidate.steps}
+    for step in candidate.steps:
+        tool=registry.get(step.tool_name)
+        scientific_context=OperationPreparationContext(tool,step.step_id,registry,selected,{}, {},[],None,None,{},observe_existing=False)
+        try:
+            validate_input_properties(states[step.step_id].arguments,scientific_context)
+        except ScientificDiagnostic as exc:
+            raise SemanticPlanCompileError(exc.code,str(exc),diagnostic_fields=dict(step_id=step.step_id,tool_name=tool.name)) from exc
     for step in candidate.steps:
         tool = registry.get(step.tool_name)
         state = states[step.step_id]

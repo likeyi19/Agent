@@ -58,7 +58,12 @@ def test_downstream_required_parameters_resume_same_candidate(tmp_path, generati
     import anndata as ad
     import numpy as np
     path=tmp_path/'native.h5ad'
-    ad.AnnData(np.ones((3, 4))).write_h5ad(path)
+    data=ad.AnnData(np.ones((3, 4)))
+    # A storage-schema fixture for parameter/CAS continuation, never exported or
+    # treated as a qualified peak-calling population by native science.
+    from scipy.sparse import csr_matrix
+    data.obsm['fragment_paired']=csr_matrix(np.asarray([[2],[3],[4]],dtype=np.uint32))
+    data.write_h5ad(path)
     first=app.submit_turn('session','ask','请进行峰调用',expected_generation=0,
                           execution_inputs={'input_path':str(path)})
     assert first.status=='clarification',first.to_dict()

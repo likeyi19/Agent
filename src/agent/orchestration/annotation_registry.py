@@ -63,7 +63,7 @@ def annotation_tool_spec():
     optional['previous_annotation_path'] = arg((str, Path), 'Exact selected accepted annotation for dependency-checked result editing.', source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT)
     ports = [Consumer('source', (member('dataset','input_path'),), True,
         request_sources=(request('input_path', rm('dataset','input_path')),),
-        accepted_upstream_types=('raw_scatac_dataset.v1','scatac_matrix_h5ad.v1','hierarchical_annotation_h5ad.v1','native_matrix_h5ad.v1'))]
+        accepted_upstream_types=('raw_scatac_dataset.v1','scatac_matrix_h5ad.v1','hierarchical_annotation_h5ad.v1','native_matrix_h5ad.v1'),required_properties=('x',))]
     for name in ('grouping', 'activity', 'activity_source'):
         ports.append(Consumer('groups' if name=='grouping' else name, (member('dataset',name+'_path'),), False,
             request_sources=(request(name+'_path',rm('dataset',name+'_path')),),

@@ -25,6 +25,7 @@ from agent.tools import (
 )
 from agent.tools.analysis.replicate_pseudobulk import M81ScientificError
 from agent.tools.analysis.epizoo_embedding import (
+    DATASET_PROPERTIES as EPIZOO_DATASET_PROPERTIES,
     EpiZooResourceIdentityError,
     validate_expected_resource_identity,
     validate_resource_provenance,
@@ -363,9 +364,14 @@ class SemanticConsumerPortSpec:
     accepted_upstream_types: tuple[str, ...] = ()
     required_lineage: SemanticLineage | None = None
     upstream_member_names: tuple[tuple[str, str, str], ...] = ()
+    required_properties: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _planning_text(self.name, "consumer port name", 128)
+        if not isinstance(self.required_properties, tuple):
+            raise TypeError('Scientific input properties must be a tuple.')
+        for name in self.required_properties:
+            _planning_text(name, 'required scientific property', 128)
         if not isinstance(self.members, tuple) or not self.members or not all(
             isinstance(member, SemanticPortMember) for member in self.members
         ):
@@ -413,9 +419,11 @@ class SemanticProducerPortSpec:
     accepted_file_sha256_field: str | None = None
     identity_from_port: str | None = None
     observation_sha256_field: str | None = None
+    guaranteed_properties: tuple[tuple[str, object], ...] = ()
 
     def __post_init__(self) -> None:
         _planning_text(self.name, "producer port name", 128)
+        object.__setattr__(self, 'guaranteed_properties', tuple(dict(self.guaranteed_properties).items()))
         _planning_text(self.semantic_type, "producer semantic_type", 128)
         if not isinstance(self.members, tuple) or not self.members or not all(
             isinstance(member, SemanticPortMember) for member in self.members
@@ -726,9 +734,12 @@ class NativeFunctionCatalog:
     functions: tuple[tuple[str, tuple[str, ...]], ...]
     parameter_metadata: Callable | None = field(default=None, compare=False, repr=False)
     output_available: Callable | None = field(default=None, compare=False, repr=False)
+    scientific_contract: Callable | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self):
         _planning_text(self.package, 'native package', 128)
+        if self.scientific_contract is not None and not callable(self.scientific_contract):
+            raise TypeError('Native scientific contract owner must be callable.')
         if (not isinstance(self.functions, tuple) or not self.functions
                 or len(dict(self.functions)) != len(self.functions)):
             raise ValueError('Native functions must have unique registered names.')
@@ -1867,6 +1878,7 @@ def build_default_tool_registry() -> ToolRegistry:
                     "dataset",
                     (_semantic_member("dataset", "path"),),
                     True,
+                    required_properties=('x',),
                     accepted_upstream_types=(
                         "raw_scatac_dataset.v1", "scatac_matrix_h5ad.v1", "hierarchical_annotation_h5ad.v1", "native_matrix_h5ad.v1"
                     ),
@@ -2062,6 +2074,7 @@ def build_default_tool_registry() -> ToolRegistry:
                         ),
                     ),
                     accepted_upstream_types=("raw_scatac_dataset.v1", "scatac_matrix_h5ad.v1", "hierarchical_annotation_h5ad.v1", "native_matrix_h5ad.v1"),
+                    required_properties=('x',),
                 ),
                 _semantic_argument_port("output_dir", required=True),
                 _semantic_argument_port("species", required=True),
@@ -2096,7 +2109,8 @@ def build_default_tool_registry() -> ToolRegistry:
             producer_ports=(
                 SemanticProducerPortSpec('dataset', 'cell_embedding_h5ad.v1',
                     (_semantic_member('dataset', 'analysis_path'),), lineage_from_port='dataset',
-                    accepted_file_sha256_field='analysis_sha256'),
+                    accepted_file_sha256_field='analysis_sha256',
+                    guaranteed_properties=tuple(EPIZOO_DATASET_PROPERTIES.items())),
                 SemanticProducerPortSpec(
                     "embedding",
                     "epizoo_embedding_bundle.v1",

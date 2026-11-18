@@ -286,12 +286,24 @@ def build_semantic_planning_catalog(
                 "constraint",
             ),
             "output_port": ("semantic_type", "lineage_from"),
+            "function_io": "Function requires/produces describe omitted kwargs; the native owner specializes explicit kwargs and source storage. conditional_parameters apply to effective values.",
         },
         "tools": {
             name: _tool_catalog(
                 registry.get(name), request, deterministic_scoped_selectors
             )
             for name in visible_names
+        },
+        "scientific_contracts": {
+            name: {
+                'requires': {p.name:p.required_properties for p in registry.get(name).semantic_planning.consumer_ports if p.required_properties},
+                'produces': {p.name:dict(p.guaranteed_properties) for p in registry.get(name).semantic_planning.producer_ports if p.guaranteed_properties},
+                'functions': {function: {
+                    'outputs':tuple(p.name for p in registry.get(name).semantic_planning.producer_ports
+                        if not native.output_available or all(native.output_available({'function_name':function},m.field_name) for m in p.members)),
+                    **(native.scientific_contract({'function_name':function}) if native.scientific_contract else {}),
+                } for function,members in native.functions} if (native:=registry.get(name).native_functions) else {},
+            } for name in visible_names
         },
     }
 
@@ -347,6 +359,7 @@ def build_semantic_planning_prompt(
         'registered_choices': {k:v for k,v in registered_choices.items() if v},
         "semantic_prompt_version": SEMANTIC_PLANNING_PROMPT_VERSION,
         "instructions": (
+            'catalog.scientific_contracts contains Registry owner contracts: requires names mandatory input properties; produces gives guaranteed output properties, including false for absent storage. Native functions further specialize ports and conditional_parameters. Conditions and kwargs affect actual guarantees; false properties cannot satisfy a consumer requirement. An H5AD is not by itself a feature matrix. Resolve genuinely unknown conditional parameters through canonical Preparation; never invent source facts.',
             'Plan the complete scientific objective directly from Registry tools. A package request may require multiple calls. Function-qualified sources fix each native function and its own kwargs; never substitute them. Chain dataset outputs to preserve dependencies and slots.',
             'Consider stated downstream research goals when selecting compatible methods and registered representation choices for the current task. A future goal does not authorize executing it now. Preserve explicit scientific preferences and omitted defaults of explicit native-function calls; never fabricate user parameters. Reuse compatible accepted upstream data for a later representation, with a distinct recorded native operation rather than relabelling measurements. Genuine unresolved scientific alternatives require clarification, not a fixed workflow or preference by integration order.',
             'Compose missing scientifically legitimate prerequisites for the goal. Reuse compatible existing results and qualified supplied groups. Do not ask the researcher to compute available prerequisites manually. registered_choices lists eligible tool/port names; their exact domains are in catalog input-port guidance.choices. Bind source={kind:registered_choice,choice:<offered value>} only there and only without a supplied user value. Select using the scientific source declarations and Registry method requirements; this is a recorded Planner choice, never a user instruction. Other absent optional values keep native defaults.',

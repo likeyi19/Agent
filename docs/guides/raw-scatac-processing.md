@@ -27,6 +27,24 @@ remains available. Specialized source declarations bind their entry target throu
 identifies the declaration owner; the Planner still composes the full researcher
 objective, including preparation and subsequent exploration.
 
+Selected BAM extraction resolves one effective `barcode_tag` or `barcode_regex`
+before execution. If neither is explicitly grounded, canonical Preparation offers
+one mechanism choice, then the existing editor for that exact kwargs member.
+The choice and value retain the Candidate, step, function and source identity;
+each Answer rechecks the Candidate. No tag or regex is inferred from an assay,
+filename or reference. Conflicting mechanisms are scientific input diagnostics.
+
+Native output content is distinct from its H5AD encoding. Fragment import promises
+fragment storage with no X matrix. Tile/peak/gene matrix production promises X;
+new peak/gene matrices do not retain fragment storage. Processed inspection needs
+a readable X matrix, while MACS3 needs paired fragments. Registry owner contracts
+expose these facts to planning, and shared Compiler/Preparation checks reject
+known incompatible connections before execution. Compatible fragment consumers
+and explicit representation/layer consumers retain their native behavior. No
+matrix construction recipe is imposed. The
+[engineering report](../../../agent-data/acceptance/iterative-cell-type-annotation/icta-fresh-e2e-2026-11-18/contract-remediation/REPORT.md)
+records verification; the earlier failed G1 acceptance remains unchanged.
+
 ## Current ordinary workflow
 
 [Stage 1 native scATAC analysis](native-scatac-analysis.md) owns the current

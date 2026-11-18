@@ -69,11 +69,33 @@ class OperationPreparationContext:
             return {}
         name, arguments = self.selected[value.step_id]
         tool = self.registry.get(name)
+        if tool.semantic_planning is None:
+            return {}
         ports = [p for p in tool.semantic_planning.producer_ports if any(m.field_name==value.output_key for m in p.members)]
-        if len(ports)!=1 or tool.planned_output_properties is None:
+        if len(ports)!=1:
             return {}
         context = replace(self, tool=tool, step_id=value.step_id)
-        return tool.planned_output_properties(arguments, ports[0].name, context, seen=(*seen,value.step_id))
+        port=ports[0]
+        properties={}
+        if port.identity_from_port is not None:
+            source=next(p for p in tool.semantic_planning.consumer_ports if p.name==port.identity_from_port)
+            properties.update(context.planned(arguments.get(source.members[0].field_name),seen=(*seen,value.step_id)))
+        properties.update(port.guaranteed_properties)
+        if tool.planned_output_properties is not None:
+            properties.update(tool.planned_output_properties(arguments, port.name, context, seen=(*seen,value.step_id)))
+        return properties
+
+    def properties(self, value, names):
+        """Future guarantees or checked existing storage, never inferred biology."""
+        properties=self.planned(value)
+        observed=self.existing(value)
+        if observed is not None:
+            from agent.tools.analysis.peak_h5ad import scientific_properties
+            from agent.tools._file_identity import checked_file
+            checked_file(observed.path,observed.sha256)
+            properties.update(scientific_properties(observed.path,names))
+            checked_file(observed.path,observed.sha256)
+        return properties
 
     def planned_parameter_value(self, arguments, metadata):
         """An owner's exact input-port property, with observations disabled."""
@@ -114,3 +136,31 @@ def parameter_requirements(tool, names, *, offers=None):
             offers=tuple(offers.get(name, ())), choices=tuple(value for value in spec.choices if value is not None),
             messages=('Supply ' + name + ' for this selected operation.',)))
     return tuple(rows)
+
+
+def validate_input_properties(arguments, context):
+    """Match only owner-declared properties; unknown future facts stay unknown."""
+    tool=context.tool
+    if tool.semantic_planning is None:
+        # Explicit low-level compiler contracts can describe scalar/file tools
+        # without Planner-visible semantic ports. They make no content promises.
+        return
+    required={port.name:set(port.required_properties) for port in tool.semantic_planning.consumer_ports}
+    catalog=tool.native_functions
+    if catalog is not None and catalog.scientific_contract is not None:
+        contract=catalog.scientific_contract(arguments)
+        for port,names in contract.get('requires',{}).items():
+            required.setdefault(port,set()).update(names)
+    for port in tool.semantic_planning.consumer_ports:
+        names=required.get(port.name,())
+        if not names:continue
+        # File properties belong to the actual dataset member of a semantic port.
+        source=next((arguments[m.field_name] for m in port.members
+                     if m.name=='dataset' and m.field_name in arguments),None)
+        if source is None:continue
+        properties=context.properties(source,names)
+        absent=sorted(name for name in names if properties.get(name) is False)
+        if absent:
+            raise ScientificDiagnostic('SCIENTIFIC_INPUT_PROPERTY_REQUIRED',
+                tool.name+'.'+port.name+' requires '+', '.join(absent)+
+                '; the selected source does not provide it. Select a compatible scientific producer or input.')

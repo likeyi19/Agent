@@ -505,7 +505,11 @@ __all__ = ["EpiZooEmbeddingToolResult", "EpiZooResourceIdentityError", "epizoo_e
            "validate_expected_resource_identity", "validate_resource_provenance"]
 
 
+DATASET_PROPERTIES = dict(x=False,fragment_storage=False,paired_fragments=False,native_values=False,
+    representations=('X_epizoo',),produced_representation='X_epizoo',preserves_counts=False)
+
+
 def planned_output_properties(arguments, port, context, *, seen=()):
     if port in ('embedding','dataset'):
-        return dict(representations=('X_epizoo',),produced_representation='X_epizoo',preserves_counts=False)
+        return dict(DATASET_PROPERTIES)
     return {}

@@ -84,6 +84,7 @@ def test_catalog_is_versioned_complete_and_registry_driven(
         "request_inputs",
         "catalog_format",
         "tools",
+        "scientific_contracts",
     }
 
 

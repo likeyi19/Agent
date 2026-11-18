@@ -147,6 +147,18 @@ def test_human_choice_recompiles_the_captured_graph_without_interpretation_or_pl
         return
     second = app.submit_turn("session", "human", "", expected_generation=0, input_sets=references,
         clarification_choice=dict(question_turn_id="ask", handle=choice["handle"]))
+    # The barcode mechanism is an independent native prerequisite. Answer it
+    # exactly before this test's original reservation/preflight assertions.
+    if second.status == "clarification":
+        barcode = next(c for c in second.clarification_choices
+                       if c.get("choice_identity") == "native-parameter.barcode_tag")
+        mechanism = app.submit_turn("session", "mechanism", "", expected_generation=0, input_sets=references,
+            clarification_choice=dict(question_turn_id="human", handle=barcode["handle"]))
+        editor = next(c for c in mechanism.clarification_choices if c.get("action") == "parameter" and c.get("member") == "barcode_tag")
+        second = app.submit_turn("session", "barcode", "", expected_generation=0, input_sets=references,
+            clarification_choice=dict(question_turn_id="mechanism", handle=editor["handle"]),
+            parameter_overrides=[dict(tool="run_snapatac2", native_function="pp.make_fragment_file",
+                step_id="extract", argument="kwargs", value={"barcode_tag":"RG"})])
     assert sum("turn_schema_version" in row for row in calls) == 1
     assert sum("semantic_prompt_version" in row for row in calls) == planning_calls
     assert second.status == "failed", second.to_dict()  # Science is intentionally withheld.

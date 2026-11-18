@@ -256,11 +256,33 @@ class MatrixPackage:
             valid_root=isinstance(root,h5py.Dataset) and root.shape==() and root.dtype.kind in 'iu' and 0<=int(root[()])<len(handle['obs'][handle['obs'].attrs['_index']])
             if metadata_item(handle,'obsp/distances') is not None:
                 graphs.append('snapatac2:distances')
-        checked_file(observed.path,observed.sha256)
         if arguments.get('cell_subset') is not None or arguments.get('input_orientation')=='features_by_cells':
             valid_root=False
             graphs=[]
-        return dict(representations=reps,graphs=tuple(graphs),root=valid_root,observed=True)
+        contents=peak_h5ad.scientific_properties(observed.path, ('x','fragment_storage','paired_fragments','native_values','storage_kind'))
+        checked_file(observed.path,observed.sha256)
+        return dict(contents,representations=reps,graphs=tuple(graphs),root=valid_root,observed=True)
+
+    def scientific_contract(self, arguments):
+        from . import snapatac_raw
+        function=arguments.get('function_name');kwargs=arguments.get('kwargs',{})
+        if self.package=='snapatac2' and function in snapatac_raw.FUNCTIONS:
+            return snapatac_raw.scientific_contract(arguments)
+        # Representation/graph consumers can legitimately consume compact H5AD
+        # without X (including EpiZoo). Only matrix operations require X here;
+        # explicitly selected layers are validated by the native input adapter.
+        matrix_functions={'pp.pca','tl.pca','pp.log1p','pp.scale','pp.normalize_total',
+            'pp.calculate_qc_metrics','pp.highly_variable_genes','pp.select_features',
+            'pp.filter_features','pp.binarize','pp.tfidf','tl.spectral',
+            'RunTFIDF','FindTopFeatures','RunSVD','BinarizeCounts','corSparse','Jaccard'}
+        representation=kwargs.get('use_rep',arguments.get('use_rep'))
+        matrix_input=function in matrix_functions or representation=='X'
+        requires={}
+        if matrix_input and arguments.get('count_slot','X')=='X' and not any(kwargs.get(k) for k in ('layer','obsm','use_raw')):
+            requires['dataset']=('x',)
+        if self.package=='Signac' and function in ('corSparse','Jaccard') and arguments.get('second_count_slot','X')=='X':
+            requires['second']=('x',)
+        return dict(requires=requires) if requires else {}
 
     def planned_output_properties(self, arguments, port, context, *, seen=()):
         if port not in ('dataset','fragments'):
@@ -269,8 +291,24 @@ class MatrixPackage:
         from .cell_result import grouping_key, planned_count_preservation, representation_key
         from .snapatac_raw import FUNCTIONS as RAW_FUNCTIONS
         if self.package=='snapatac2' and function in RAW_FUNCTIONS:
-            inherited=context.planned(arguments.get('input_path'),seen=seen)
-            return {'source_reference':inherited['source_reference']} if inherited.get('source_reference') else {}
+            from .snapatac_raw import scientific_contract
+            inherited=(self.input_properties(arguments,context,seen=seen)
+                if function not in ('pp.make_fragment_file','pp.import_fragments') else
+                context.planned(arguments.get('input_path'),seen=seen))
+            props=dict(inherited) if function not in ('pp.make_fragment_file','pp.import_fragments') else {}
+            if inherited.get('source_reference'):props['source_reference']=inherited['source_reference']
+            props.update(scientific_contract(arguments).get('produces',{}).get(port,{}))
+            if function in ('pp.add_tile_matrix','pp.make_peak_matrix','pp.make_gene_matrix'):
+                from .snapatac_raw_worker import peak_measurement
+                storage='X_region_aggregation' if kwargs.get('use_x') else inherited.get('storage_kind')
+                if storage is not None:
+                    measurement=peak_measurement(storage,props['counting_strategy'])
+                    if function=='pp.make_gene_matrix':
+                        measurement='snapatac2_gene_region_sum' if kwargs.get('use_x') else 'snapatac2_gene_'+measurement
+                    props['measurement']=measurement
+                if not kwargs.get('inplace',function=='pp.add_tile_matrix'):props.pop('storage_kind',None)
+            props.pop('observed',None)
+            return props
         inherited=self.input_properties(arguments,context,seen=seen)
         # Slot retention and count preservation are distinct native properties.
         # Reviewed matrix functions retain cell slots unless the input adapter
@@ -279,6 +317,9 @@ class MatrixPackage:
             and function in self.FUNCTIONS and arguments.get('cell_subset') is None
             and arguments.get('input_orientation','cells_by_features')=='cells_by_features')
         props=dict(inherited) if retains_slots else {}
+        # read_native presents an explicitly selected layer as native X. This
+        # is a source selection, not an inferred or reconstructed measurement.
+        if arguments.get('count_slot','X')!='X':props['x']=True
         props.pop('observed',None)
         props.pop('produced_representation',None)
         if inherited.get('source_reference'):
@@ -314,7 +355,8 @@ class MatrixPackage:
             return arguments
         from .snapatac_raw import FUNCTIONS as RAW_FUNCTIONS
         if self.package=='snapatac2' and function in RAW_FUNCTIONS:
-            return arguments
+            from .snapatac_raw import prepare_operation
+            return prepare_operation(arguments,context)
         props=self.input_properties(arguments,context)
         representations=props.get('representations',())
         rep=kwargs.get('use_rep',arguments.get('use_rep'))
@@ -487,10 +529,12 @@ class MatrixPackage:
         try:
             executable = Path(override) if override else library().root.parent / 'runtimes' / self.runtime / 'env/bin/python'
         except NativeExecutionError:
-            return {}
-        if not executable.is_file():
-            return {}
-        metadata=_installed_parameter_metadata(str(executable), self.package, function)
+            executable=None
+        metadata=(_installed_parameter_metadata(str(executable), self.package, function)
+                  if executable is not None and executable.is_file() else {})
+        if self.package=='snapatac2':
+            from .snapatac_raw import parameter_metadata
+            metadata=parameter_metadata(function,metadata)
         # Required grouping operands may use a registered producer's guaranteed
         # grouping key. This same rule owns preparation and final scope checks.
         return {name:({**item,'value_from_planned_input':dict(port='dataset',property='grouping_key')}

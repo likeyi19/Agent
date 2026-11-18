@@ -15,7 +15,7 @@ from agent.application.turn_decisions import (
 from agent.application.dialogue_execution import (
     scientific_parameters, scientific_capabilities, _bind_arguments, _check_parameter_plan,
 )
-from agent.application.local_resources import _GROUP_PORTS
+from agent.application.local_resources import source_ports
 from agent.orchestration import build_default_tool_registry, AgentPlan, PlanStep
 
 
@@ -28,7 +28,7 @@ def context(registry, sources=1):
     return dict(bases={}, relations=['current'], dialogue=dict(outputs=[],
         tools=list(registry.names()), scientific_parameters=scientific_parameters(registry),
         capabilities=scientific_capabilities(registry),
-        input_roles=[dict(tool=t, port=p) for t, p in _GROUP_PORTS],
+        input_roles=[dict(tool=t, port=p) for t, p in source_ports()],
         selected_sources=[dict(source=f'source.{i}', input_type='h5ad') for i in range(sources)],
         source_fields=[dict(source=f'source.{i}', fields=[f'field_{i}_{j}' for j in range(64)], complete=True)
                        for i in range(sources)]))
@@ -88,7 +88,7 @@ def interpret_value(value, utterance, public):
         calls = 0
         def complete(self, *, prompt, response_schema):
             self.calls += 1
-            assert response_schema == decision_schema()
+            assert response_schema == decision_schema(public, utterance=utterance)
             return json.dumps(dict(turn_schema_version=1, decision=value))
     model = Model()
     result = interpret(model, utterance, public)
@@ -108,15 +108,13 @@ def test_one_structurally_stable_schema_and_complete_inventory(registry):
         assert len(capabilities) == len(registry.names())
         assert sum(len(c.get('functions', {})) for c in capabilities.values()) == sum(
             len(registry.get(n).native_functions.functions) for n in registry.names() if registry.get(n).native_functions is not None)
-        assert sum(len(c['parameters']) for c in capabilities.values()) == len(scientific_parameters(registry))
-        for row in scientific_parameters(registry):
-            actual=dict(capabilities[row['tool']]['parameters'][row['argument']])
-            expected={k:v for k,v in row.items() if k not in ('tool','argument')}
-            if 'member_names' in actual:
-                assert set(actual.pop('member_names')) == set(expected['members'])
-                assert actual.pop('members') == {}
-                expected.pop('members')
-            assert actual == expected
+        # Intent discovery preserves names/purpose/roles, not every kwarg.
+        assert not any('function_parameters' in c for c in capabilities.values())
+        assert all('kwargs' not in c.get('parameters', {}) for c in capabilities.values())
+        for name, metadata in capabilities.items():
+            assert metadata['description']
+            assert metadata['inputs'] == [{k:v for k,v in r.items() if k != 'tool'}
+                for r in public['dialogue']['input_roles'] if r['tool'] == name]
         assert not {'tools','scientific_parameters','input_roles','parameter_catalog'} & projection.keys()
         assert public == before
         assert json.dumps(decision_schema(), sort_keys=True) == frozen
@@ -145,17 +143,23 @@ def test_explicit_api_detail_is_exact_without_filtering_discovery(registry):
         assert set(capabilities) == set(registry.names())
         for tool, metadata in capabilities.items():
             if not metadata.get('functions'): continue
-            wanted = {k for fn in expected.get(tool, ()) for k in metadata['functions'][fn]}
-            kwargs = metadata['parameters']['kwargs']
-            assert set(kwargs['members']) == wanted
-            assert set(kwargs['member_names']) == set(dict(registry.get(tool).optional_arguments['kwargs'].planning.conversational_members))
+            selected = expected.get(tool, ())
+            expanded = set(metadata.get('function_parameters', {}))
+            assert set(selected) <= expanded
+            native = dict(registry.get(tool).native_functions.functions)
+            assert all('n_comps' in native[fn] and 'n_comps=10' in utterance for fn in expanded - set(selected))
+            if expanded:
+                wanted = {k for fn in expanded for k in native[fn]}
+                assert set(metadata['parameters']['kwargs']['members']) == wanted
+            else:
+                assert 'kwargs' not in metadata.get('parameters', {})
     # A package-only request and unsupported function never guess a scientific route.
     c = _interpretation_public(public, 'Use Scanpy to investigate these cells.')['dialogue']['capabilities']
     assert c['run_scanpy']['parameters']['kwargs']['members']
     assert 'member_names' not in c['run_scanpy']['parameters']['kwargs']
     c = _interpretation_public(public, 'Run scanpy.pp.invented.')['dialogue']['capabilities']
     assert 'pp.invented' not in c['run_scanpy']['functions']
-    assert c['run_scanpy']['parameters']['kwargs']['members'] == {}
+    assert 'kwargs' not in c['run_scanpy'].get('parameters', {})
 
 
 @pytest.mark.parametrize('literal,evidence,utterance', [
@@ -199,6 +203,8 @@ def test_model_strings_never_authorize_invented_or_crossed_identities(registry, 
     source=tmp_path/'source.h5ad'
     ad.AnnData(np.ones((8,8))).write_h5ad(source)
     calls=[]
+    from test_response_contracts import OutcomeModel
+    outcome_model=OutcomeModel('The supplied proposal could not be admitted.')
     class Model:
         model_id='scripted/proposal-rejection'
         def complete(self, *, prompt, response_schema):
@@ -206,6 +212,13 @@ def test_model_strings_never_authorize_invented_or_crossed_identities(registry, 
             if 'clarification' in data:
                 return json.dumps(dict(text=data['request']))
             calls.append(json.loads(prompt))
+            if data.get('focus')=='outcome' or 'grounding_review_version' in data:
+                return outcome_model.complete(prompt=prompt,response_schema=response_schema)
+            if 'semantic_prompt_version' in data:
+                assert change=='value', 'Invalid identity reached the Planner'
+                # Original exact evidence grounds 10 despite the model's 11.
+                # Withhold the candidate here; no native PCA is executed.
+                return json.dumps(dict(schema_version=4,decision=dict(kind='unsupported',reason='Controlled candidate withheld.')))
             assert 'turn_schema_version' in calls[-1], 'Invalid proposal reached the Planner'
             return json.dumps(dict(turn_schema_version=1,decision=value))
     profile=PlanningModelProfile('test','scripted','scripted/proposal-rejection')
@@ -218,7 +231,11 @@ def test_model_strings_never_authorize_invented_or_crossed_identities(registry, 
     group=local.compose_group([record.resource_id],attachment_candidates=True)
     result=app.submit_turn('negative','first',utterance,expected_generation=0,registered_input=group)
     state=app._application.sessions.load('negative')
-    assert not state.turns and not state.revisions and len(calls)==1, result.to_dict()
+    assert not state.turns and not state.revisions, result.to_dict()
+    assert sum('turn_schema_version' in p for p in calls)==1
+    assert sum('semantic_prompt_version' in p for p in calls)==(1 if change=='value' else 0)
+    if change=='value':
+        assert state.interactions[0].admitted['inputs']['run_scanpy__pp_pca__kwargs']=={'n_comps':10}
     assert result.status in ('failed','clarification')
 
 

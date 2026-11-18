@@ -191,8 +191,8 @@ def test_concurrent_profiles_bind_all_roles_and_duplicate_pending(tmp_path):
         a = pool.submit(first, service, source, session='one', profile='alpha')
         assert started.wait(20)
         pending = first(service, source, session='one', profile='alpha')
-        assert pending.status == 'planning' and pending.response is None
-        assert service.status('one','first').status == 'planning'
+        assert pending.status == 'finalizing' and pending.response is None
+        assert service.status('one','first').status == 'finalizing'
         b = pool.submit(first, service, source, session='two', profile='beta')
         release.set()
         av, bv = a.result(), b.result()

@@ -14,6 +14,17 @@ RESULT_FIELDS = tuple(k for k in adaptation.RESULT_FIELDS if k!='adaptation_spec
 RECOVERY_POLICY = c.POLICY
 
 
+def check_parent_matrix(value, parent):
+    """Exact parent purpose/vocabulary/reference applicability, without training."""
+    if parent['contract_version']!=c.LIFECYCLE_CONTRACT or parent['arguments']['profile']['purpose']!='initialization':
+        raise ValueError('Post-training requires an initialized EpiZooX checkpoint.')
+    if (value['species']!=parent['reference']['species'] or value['assembly']!=parent['reference']['target_assembly']
+            or value['ordered_feature_sha256']!=parent['preprocessing']['ordered_feature_sha256']
+            or reference_binding(value)['identity_sha256']!=parent['reference']['reference_identity_sha256']
+            or matrix_semantics(value)!=parent['arguments']['profile']['matrix_semantics']):
+        raise ValueError('Training matrix does not match the exact initialized model vocabulary/reference/measurement.')
+
+
 def expand(arguments):
     args=dict(arguments)
     if set(args)-set(ARGUMENTS)-set(OPTIONAL_ARGUMENTS) or not set(ARGUMENTS)<=set(args):
@@ -22,16 +33,10 @@ def expand(arguments):
         if k.endswith('_sha256'): c.checks.sha(args[k])
         else: c.checks.absolute_path(str(args[k]))
     parent=owner.load_manifest(args['target_model_manifest_path'],args['target_model_manifest_sha256'])
-    if parent['contract_version']!=c.LIFECYCLE_CONTRACT or parent['arguments']['profile']['purpose']!='initialization':
-        raise ValueError('Post-training requires an initialized EpiZooX checkpoint.')
     value=matrix.load_manifest_bytes(Path(args['matrix_manifest_path']).read_bytes())
     if c.file_record(args['matrix_manifest_path'])['sha256']!=args['matrix_manifest_sha256']:
         raise ValueError('Training matrix identity differs.')
-    if (value['species']!=parent['reference']['species'] or value['assembly']!=parent['reference']['target_assembly']
-            or value['ordered_feature_sha256']!=parent['preprocessing']['ordered_feature_sha256']
-            or reference_binding(value)['identity_sha256']!=parent['reference']['reference_identity_sha256']
-            or matrix_semantics(value)!=parent['arguments']['profile']['matrix_semantics']):
-        raise ValueError('Training matrix does not match the exact initialized model vocabulary/reference/measurement.')
+    check_parent_matrix(value,parent)
     expanded=deepcopy(parent['arguments'])
     expanded.update(matrices=[dict(manifest_path=str(args['matrix_manifest_path']),manifest_sha256=args['matrix_manifest_sha256'])],
         profile=lifecycle_profile(matrix_semantics=matrix_semantics(value),operation='posttraining',
@@ -75,3 +80,14 @@ def posttrain_epizoo_model(matrix_manifest_path,matrix_manifest_sha256,target_mo
         target_model_manifest_sha256,output_dir,max_steps=None,learning_rate=None,training_batch_size=None,
         target_model_source_run_id=None,target_model_source_step_id=None):
     return execute({k:v for k,v in locals().items() if v is not None})
+
+
+def prepare_operation(arguments, context):
+    from agent.orchestration.scientific_inputs import ScientificDiagnostic
+    dataset=context.existing(arguments.get('matrix_manifest_path'));parent=context.existing(arguments.get('target_model_manifest_path'))
+    if dataset is None or parent is None:return arguments
+    if not dataset.matches_sha256(arguments.get('matrix_manifest_sha256'),context.registry) or not parent.matches_sha256(arguments.get('target_model_manifest_sha256'),context.registry):
+        raise ScientificDiagnostic('SPECIES_PREREQUISITE_INVALID','Selected manifest differs from its exact declared identity.')
+    try:check_parent_matrix(matrix.load_manifest_bytes(dataset.read_bytes(max_bytes=matrix.MAX_MANIFEST_BYTES)),owner.load_manifest(parent.path,parent.sha256))
+    except ValueError as exc:raise ScientificDiagnostic('SPECIES_PREREQUISITE_INVALID',str(exc)) from exc
+    return arguments

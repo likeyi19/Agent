@@ -42,7 +42,7 @@ def _assert_equivalent(original, compact):
 def test_complete_fixture_grammars_are_identical(monkeypatch, registry, case):
     original, compact = _pair(monkeypatch, registry, _request(case))
     _assert_equivalent(original, compact)
-    assert len(compact['$defs']['step']['anyOf']) == len(registry.names()) == 39
+    assert len(compact['$defs']['step']['anyOf']) == len(set(registry.names()) - {'invoke_native_function'})
 
 
 @pytest.mark.parametrize('mode', ('no_inputs', 'all_inputs', 'one_missing_member', 'native_inputs'))
@@ -63,13 +63,13 @@ def test_all_registered_domains_and_resource_correlations(monkeypatch, registry,
 
 
 def test_historical_handles_and_typed_ports_stay_exact(monkeypatch, registry):
-    types = ('chromvar_scores_h5ad.v1', 'scatac_matrix_h5ad.v1', 'scatac_barcode_qc.v1')
+    types = ('cell_embedding_h5ad.v1', 'native_matrix_h5ad.v1', 'native_fragments_file.v1')
     items = tuple(ActiveContextItem(f'ctx.{i}', PriorOutputBinding(
         'PRIVATE:run', 'PRIVATE-step', tool, port, semantic, '1'*64, '2'*64, '3'*64))
         for i, (tool, port, semantic) in enumerate((
-            ('compute_motif_accessibility', 'scores', types[0]),
-            ('build_scATAC_matrix', 'dataset', types[1]),
-            ('compute_scATAC_qc', 'barcode_qc', types[2]))))
+            ('epizoo_embed_cells', 'dataset', types[0]),
+            ('run_scanpy', 'dataset', types[1]),
+            ('run_snapatac2', 'fragments', types[2]))))
     with planning_context(ActivePlanningContext('private-session', 'private-revision', 3, items)):
         original, compact = _pair(monkeypatch, registry, _request('downstream_canonical'))
     _assert_equivalent(original, compact)

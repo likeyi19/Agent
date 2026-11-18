@@ -234,3 +234,17 @@ def optimize_regulatory_sequences(output_dir,condition,sequence_path=None,sequen
         assembly=None,comparison_conditions=None,comparison_weight=None,max_changes=None,iterations=None,
         edit_start=None,edit_end=None,protected_regions=None,sequence_index=None):
     return execute({k:v for k,v in locals().items() if v is not None})
+
+
+def prepare_operation(arguments, context):
+    from agent.orchestration.scientific_inputs import ScientificInputRequired,ScientificInputRequirement,ScientificDiagnostic
+    values=shared.prepare_sequence_input(arguments,context)
+    model=shared.preparation_model('DeepPBMC','sequence_predictor')
+    if not values.get('condition'):
+        raise ScientificInputRequired(ScientificInputRequirement('condition','condition','scalar',choices=tuple(model['conditions'])))
+    if values['condition'] not in model['conditions']:
+        raise ScientificDiagnostic('SEQUENCE_CONDITION_UNSUPPORTED','The supplied target is not an exact qualified DeepPBMC condition.')
+    # Existing parameter owner validates actual comparison conditions and budgets.
+    try:parameters(values,model['conditions'])
+    except ValueError as exc:raise ScientificDiagnostic('SEQUENCE_PARAMETERS_INVALID',str(exc)) from exc
+    return values

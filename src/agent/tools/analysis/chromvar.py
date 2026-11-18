@@ -372,3 +372,25 @@ DELIVERY_FILES = {
     'metadata.json': ('Motif method, source and resource metadata','application/json'),
     'native-receipt.json': ('Native completion and software versions','application/json'),
 }
+
+
+def prepare_operation(arguments, context):
+    """Expose count declarations, exact slots and qualified motif resources."""
+    from dataclasses import replace
+    from . import motifmatchr
+    from agent.orchestration.scientific_inputs import parameter_requirements, ScientificInputRequired
+    observed_args = dict(arguments)
+    source = context.existing(arguments.get('input_path'))
+    if source is not None:
+        observed_args['input_path'] = source.path
+    needs = parameter_requirements(context.tool, parameter_prerequisites(observed_args))
+    if source is not None:
+        slots = observe_input(source.path)['slots'] if any(r.argument=='count_slot' for r in needs) else ()
+        needs = tuple(replace(r, choices=tuple(slots)) if r.argument=='count_slot' else r for r in needs)
+    # Genomic ranges and motif qualification share their scientific owner.
+    resources = motifmatchr.preparation_requirements(observed_args, context)
+    known = {r.argument for r in needs}
+    needs += tuple(r for r in resources if r.argument not in known)
+    if needs:
+        raise ScientificInputRequired(*needs, bindings=arguments)
+    return arguments

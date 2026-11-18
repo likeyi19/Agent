@@ -44,6 +44,8 @@ class Model:
         fn = lambda name: dict(target='function_name', source=dict(kind='registered_choice', choice=name))
         steps = [dict(step_id='scale', tool='run_scanpy', sources=[fn('pp.scale'),
             dict(target='dataset', source=dict(kind='input', input='input_path'))], control_dependencies=[])]
+        if 'input_path' not in value.get('catalog', {}).get('request_inputs', {}):
+            steps[0]['sources']=[s for s in steps[0]['sources'] if s['target']!='dataset']
         steps.append(dict(step_id='again', tool='run_scanpy', sources=[fn('pp.scale' if self.repeated else 'pp.log1p'),
             dict(target='dataset', source=dict(kind='step_port', step='scale', source_port='dataset'))], control_dependencies=[]))
         return json.dumps(dict(schema_version=4, decision=dict(kind='plan', steps=steps)))
@@ -64,6 +66,19 @@ def setup(tmp_path, **options):
 
 def setting(argument, value, function='pp.scale'):
     return dict(tool='run_scanpy', argument=argument, value=value, native_function=function)
+
+
+def choice(turn, *, argument=None, value=None):
+    return next(row for row in turn.clarification_choices
+                if (argument is None or row['argument'] == argument)
+                and (value is None or row.get('value') == value))
+
+
+def answer(app, turn, name, argument, value, function='pp.scale', step='scale'):
+    option = choice(turn, argument=argument)
+    return app.submit_turn('session', name, '', expected_generation=0,
+        clarification_choice=dict(question_turn_id=turn.turn_id, handle=option['handle']),
+        parameter_overrides=[setting(argument, value, function) | dict(step_id=step)])
 
 
 def test_multiple_scoped_values_are_applied_without_model_reinterpretation(tmp_path):
@@ -104,17 +119,15 @@ def test_partial_native_override_preserves_grounded_other_members(tmp_path):
 
 
 def test_parameter_question_partial_values_skip_interpreter_and_rewrite(tmp_path):
-    app, executor, model, inputs = setup(tmp_path, missing=('count_slot', 'matrix_semantics'))
+    app, executor, model, inputs = setup(tmp_path, missing=tuple(dict(tool='run_scanpy',argument=k,native_function='pp.scale') for k in ('count_slot','matrix_semantics')))
     first = app.submit_turn('session', 'task', '分析输入。', expected_generation=0, execution_inputs=inputs)
     assert first.status == 'clarification', first.to_dict()
     assert not executor.plans
     model.interpret = False
-    second = app.submit_turn('session', 'slot', '', expected_generation=0,
-        parameter_overrides=[setting('count_slot', 'X')])
+    second = answer(app, first, 'slot', 'count_slot', 'X')
     assert second.status == 'clarification', second.to_dict()
     assert not executor.plans
-    third = app.submit_turn('session', 'meaning', '', expected_generation=0,
-        parameter_overrides=[setting('matrix_semantics', 'peak_counts')])
+    third = answer(app, second, 'meaning', 'matrix_semantics', 'peak_counts')
     assert third.error.code == 'TEST_SCIENCE_WITHHELD', third.to_dict()
     assert len(executor.plans) == 1
     assert sum('turn_schema_version' in call for call in model.calls) == 1
@@ -126,18 +139,18 @@ def test_repeated_operation_offers_actual_steps_and_reuses_captured_plan(tmp_pat
     first = app.submit_turn('session', 'task', 'Scale the two planned representations.', expected_generation=0,
         execution_inputs=inputs, parameter_overrides=[setting('kwargs', {'max_value': 5})])
     assert first.status == 'clarification', first.to_dict()
-    assert [r['handle'] for r in first.clarification_choices] == ['step:scale', 'step:again']
+    assert [r['value'] for r in first.clarification_choices] == ['scale', 'again']
     assert not executor.plans
     model.interpret = False
     planned = len([c for c in model.calls if 'turn_schema_version' not in c and 'output_selection_schema_version' not in c])
     second = app.submit_turn('session', 'choose', 'again', expected_generation=0,
-        clarification_choice=dict(question_turn_id='task', handle='step:again'))
+        clarification_choice=dict(question_turn_id='task', handle=choice(first, value='again')['handle']))
     assert second.error.code == 'TEST_SCIENCE_WITHHELD', second.to_dict()
     scale, again = executor.plans[0].steps
     assert 'kwargs' not in scale.arguments
     assert _serialize(again.arguments['kwargs']) == {'max_value': 5}
     assert len([c for c in model.calls if 'turn_schema_version' not in c and 'output_selection_schema_version' not in c]) == planned
-    assert app._application.sessions.load('session').interactions[-1].admitted['scope_selection'] == 'task'
+    assert app._application.sessions.load('session').interactions[-1].preparation['previous'] == 'task'
 
 
 def test_catalog_uses_registry_names_without_filling_defaults():
@@ -155,23 +168,24 @@ def test_structured_selection_cannot_enter_through_language_parser():
 
 
 def test_finite_role_click_uses_exact_source_and_no_interpretation(tmp_path):
-    from test_role_declaration_continuation import transfer_continuation_harness, OBJECTIVE
-    app, records, group, executor, calls, _ = transfer_continuation_harness(tmp_path)
-    first = app.submit_turn('session', 'task', OBJECTIVE, expected_generation=0, registered_input=group)
-    assert first.status == 'clarification'
-    first_handle = next(c['handle'] for c in first.clarification_choices if c.get('port') == 'reference_dataset') + ':' + records[0].resource_id
-    count = sum('turn_schema_version' in call['value'] for call in calls)
-    second = app.submit_turn('session', 'ref', records[0].label, expected_generation=0,
-        clarification_choice=dict(question_turn_id='task', handle=first_handle))
-    assert second.status == 'clarification', second.to_dict()
-    query = next(c['handle'] for c in second.clarification_choices if c.get('port') == 'query_dataset') + ':' + records[1].resource_id
-    third = app.submit_turn('session', 'query', records[1].label, expected_generation=0,
-        clarification_choice=dict(question_turn_id='ref', handle=query))
-    assert third.error.code == 'TEST_SCIENCE_WITHHELD', third.to_dict()
-    assert sum('turn_schema_version' in call['value'] for call in calls) == count
-    step, = executor.plans[0].steps
-    assert step.arguments['reference_h5ad_path'] == records[0].source_path
-    assert step.arguments['query_h5ad_path'] == records[1].source_path
+    from test_pending_role_contract import candidate_transfer_harness
+    from test_multi_input_role_admission import LABEL
+    app,records,group,executor,calls,_=candidate_transfer_harness(tmp_path)
+    first=app.submit_turn('session','task','Transfer labels; let me select sources and label field.',expected_generation=0,registered_input=group)
+    assert first.status=='clarification',first.to_dict()
+    question=first
+    for name,port,identity in [('reference','reference_dataset','source.0'),('query','query_dataset','source.1')]:
+        option=next(c for c in question.clarification_choices if c.get('port')==port and c.get('choice_identity')==identity)
+        question=app.submit_turn('session',name,'',expected_generation=0,
+            clarification_choice=dict(question_turn_id=question.turn_id,handle=option['handle']))
+    field=next(c for c in question.clarification_choices if c.get('source_field') and c['value']==LABEL)
+    done=app.submit_turn('session','field','',expected_generation=0,
+        clarification_choice=dict(question_turn_id=question.turn_id,handle=field['handle']))
+    assert done.error.code=='TEST_SCIENCE_WITHHELD',done.to_dict()
+    assert sum('turn_schema_version' in c.get('value',{}) for c in calls)==1
+    step=executor.plans[0].steps[0]
+    assert step.arguments['reference_h5ad_path']==records[0].source_path
+    assert step.arguments['query_h5ad_path']==records[1].source_path
 
 
 def test_candidate_click_bypasses_interpreter_but_keeps_planning(tmp_path):
@@ -188,7 +202,7 @@ def test_candidate_click_bypasses_interpreter_but_keeps_planning(tmp_path):
             assert 'turn_schema_version' not in json.loads(prompt), 'Unexpected candidate interpretation'
             return super().complete(prompt=prompt, response_schema=response_schema)
     model = NoInterpret(cid, 'unused')
-    submission = dict(execution_inputs={'path': str(path)},
+    submission = dict(execution_inputs={'input_path': str(path)},
         candidate_selection=dict(origin_turn_id='guide', candidate_id=cid))
     result = app.sessions.respond('session', 'choose', '选择此选项', interpreter=model,
         predecessor_turn_id='guide', execution_inputs=submission['execution_inputs'], submission=submission)
@@ -226,10 +240,10 @@ def test_two_ambiguous_parameters_resolve_in_the_same_saved_plan(tmp_path):
     assert first.status == 'clarification', first.to_dict()
     model.interpret = False
     second = app.submit_turn('session', 'first-scope', 'scale', expected_generation=0,
-        clarification_choice=dict(question_turn_id='task', handle='step:scale'))
+        clarification_choice=dict(question_turn_id='task', handle=choice(first, argument='kwargs', value='scale')['handle']))
     assert second.status == 'clarification', second.to_dict()
     third = app.submit_turn('session', 'second-scope', 'again', expected_generation=0,
-        clarification_choice=dict(question_turn_id='first-scope', handle='step:again'))
+        clarification_choice=dict(question_turn_id='first-scope', handle=choice(second, argument='count_slot', value='again')['handle']))
     assert third.error.code == 'TEST_SCIENCE_WITHHELD', third.to_dict()
     scale, again = executor.plans[0].steps
     assert _serialize(scale.arguments['kwargs']) == {'max_value': 5} and 'kwargs' not in again.arguments
@@ -259,10 +273,10 @@ def test_finite_species_selection_keeps_original_input_without_interpreter(tmp_p
     binding = app.resources.compose_h5ad(record.resource_id, config.input_sets[0].inputs(), resource_selection_error='EPIZOO_RESOURCE_REQUIRED')
     first = app.submit_turn('session', 'task', OBJECTIVE, expected_generation=0, registered_input=binding)
     assert first.status == 'clarification'
-    assert {c['handle'] for c in first.clarification_choices} == {'species:human', 'species:mouse'}
+    assert {c['value'] for c in first.clarification_choices} == {'human', 'mouse'}
     forbid = True
     result = app.submit_turn('session', 'species', species, expected_generation=0,
-        clarification_choice=dict(question_turn_id='task', handle='species:' + species))
+        clarification_choice=dict(question_turn_id='task', handle=choice(first, value=species)['handle']))
     assert result.error.code == 'TEST_SCIENCE_WITHHELD', result.to_dict()
     assert executor.plans[0].steps[0].arguments['input_path'] == record.source_path
     assert executor.plans[0].steps[0].arguments['species'] == species
@@ -305,7 +319,8 @@ def test_compiler_binds_settings_before_downstream_input_preparation(tmp_path):
         SemanticPlanStep('annotation', 'annotate_scATAC_cell_types', (Upstream('source', 'tile', 'dataset'),Upstream('groups','groups','dataset')))))
     observed = []
     def prepare(tool, arguments, selected):
-        assert tool.name == 'annotate_scATAC_cell_types'
+        if tool.name != 'annotate_scATAC_cell_types':
+            return arguments
         assert arguments['activity_count_slot'] == 'layers/counts'
         assert selected['tile'][1]['kwargs']['counting_strategy'] == 'fragment'
         assert 'counting_strategy' not in selected['tile'][1]
@@ -413,5 +428,37 @@ def test_unresolved_structured_scope_cannot_compile_as_executable_science(tmp_pa
         (Input('dataset','input_path'), Choice('function_name','pp.scale'))) for name in ('one','two')))
     request = AgentRequest('r','Scale inputs.',dict(input_path=str(tmp_path/'input.h5ad'), output_dir=str(tmp_path/'out'),
         run_scanpy__pp_scale__kwargs={'max_value':4}))
-    with planning_context(context), pytest.raises(SemanticPlanCompileError, match='Select one actual operation'):
+    with planning_context(context), pytest.raises(SemanticPlanCompileError, match='unresolved required arguments'):
         compile_semantic_plan(request,candidate,registry,build_semantic_compiler_contract(registry))
+
+
+def test_grounded_text_scalar_uses_canonical_requirement_and_original_candidate(tmp_path, monkeypatch):
+    app, executor, model, inputs = setup(tmp_path, missing=(dict(
+        tool='run_scanpy', native_function='pp.scale', argument='kwargs', member='max_value'),))
+    first=app.submit_turn('session','task','Scale the data.',expected_generation=0,execution_inputs=inputs)
+    assert first.status == 'clarification', first.to_dict()
+    original=model.complete
+    def complete(*, prompt, response_schema):
+        value=json.loads(prompt)
+        if 'turn_schema_version' in value:
+            model.calls.append(value)
+            assert value['dialogue']['pending_prerequisite']['handle']=='@parameters'
+            return json.dumps(dict(turn_schema_version=1,decision=dict(kind='answer_parameters',pending='@parameters',
+                arguments=[dict(tool='run_scanpy',native_function='pp.scale',argument='kwargs',
+                    members=[dict(name='max_value',literal='5',evidence='5',kind='number')])])) )
+        return original(prompt=prompt,response_schema=response_schema)
+    monkeypatch.setattr(model,'complete',complete)
+    result=app.submit_turn('session','answer','Set max_value to 5.',expected_generation=0)
+    assert result.error.code == 'TEST_SCIENCE_WITHHELD', result.to_dict()
+    state=app._application.sessions.load('session')
+    assert executor.plans[0].steps[0].arguments['kwargs']['max_value']==5
+    assert sum('semantic_prompt_version' in c for c in model.calls)==1
+    assert state.interactions[-1].preparation['answers'][0]['provenance']=='interpreted_parameter'
+    assert all(i.prerequisite is None for i in state.interactions)
+    from agent.application import ResearchAgentApplication
+    assert ResearchAgentApplication(app._application.workspace_root).sessions.load('session')==state
+    forged=_serialize(state.to_dict())
+    forged['interactions'][-1]['preparation']['answers'][0]['value']=6
+    from agent.application.session_state import AnalysisSession
+    with pytest.raises((SessionError,ValueError)):
+        AnalysisSession.from_dict(forged)

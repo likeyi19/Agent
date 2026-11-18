@@ -96,7 +96,7 @@ def test_completion_reuses_r5_and_never_revokes_scientific_success(tmp_path, fai
         assert all(c['source']['revision_id'] == view.revision_id for c in scientific['citations'])
     else:
         assert scientific is None and view.response.error is not None
-        assert 'Analysis accepted; response unavailable:' in view.response.text
+        assert view.response.error.code in view.response.text
     assert calls == ['inspect_scATAC']
     assert models[0].phases.count('dialogue_schema_version') == 1
     assert models[0].phases.count('grounding_review_version') == (failure not in ('provider', 'binding'))
@@ -113,8 +113,8 @@ def test_completion_reuses_r5_and_never_revokes_scientific_success(tmp_path, fai
 def test_simple_completion_groups_aliases_and_exposes_exact_fields(tmp_path):
     facade, source, calls, models = service(tmp_path, explain=False)
     view = submit(facade, source)
-    assert view.response.scientific is None and view.response.text == 'Analysis accepted.'
-    assert len(models[0].phases) == 3 and calls == ['inspect_scATAC']
+    assert view.response.scientific['availability']=='generated' and 'two cells' in view.response.text
+    assert len(models[0].phases) == 5 and calls == ['inspect_scATAC']
     revision = facade.revision('session', view.revision_id)
     assert len(revision.outputs) == 4 and len(revision.result_groups) == 1
     group = revision.result_groups[0]
@@ -212,7 +212,7 @@ def test_distinct_operations_keep_result_identity_without_alias_fanout(app, monk
     groups = facade.revision('session', rid).result_groups
     assert len(groups) == 2 and {g['canonical_output'] for g in groups} == {'output0','output1'}
     result = completion(app.sessions, 'session', 'initial', TurnOutcome('execute','activated'))
-    assert result.scientific is None and result.text == 'Analysis accepted.'
+    assert result.scientific is None and result.text == ''
     assert all(g['evidence']['status']=='available' for g in groups)
 
 
@@ -467,7 +467,7 @@ def test_review_withholding_keeps_independently_published_figure_pins(tmp_path,m
     view=overlay_submit(facade,coords)
     assert view.status=='succeeded' and calls==['scripted_cluster_owner']
     assert view.response.scientific is None and view.response.error is not None
-    assert 'Analysis accepted; response unavailable:' in view.response.text
+    assert view.response.error.code in view.response.text
     assert view.response.version==3 and len(view.response.artifacts)==1
     assert sum('dialogue_schema_version' in c for c in models[0].calls)==1
     assert sum('grounding_review_version' in c for c in models[0].calls)==1

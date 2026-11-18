@@ -522,3 +522,53 @@ def execute_evaluation(values, execution_identity=None):
 def evaluate_regulatory_predictions(prediction_manifest_path, prediction_manifest_sha256,
                                     observations_path, observations_sha256, output_dir):
     return execute_evaluation(locals())
+
+
+def preparation_model(family, kind):
+    """Read qualified catalog metadata; execution checks the full model closure."""
+    from agent.tools._native_process import NativeExecutionError
+    from agent.orchestration.scientific_inputs import ScientificDiagnostic
+    try:
+        entries=library().entries()
+    except NativeExecutionError as exc:
+        if exc.code!='NATIVE_EXECUTION_UNAVAILABLE':raise
+        entries=()
+    selected=[e for e in entries if e['kind']==kind and e['resource']['family']==family]
+    if len(selected)!=1:
+        raise ScientificDiagnostic('SEQUENCE_MODEL_UNAVAILABLE','A unique qualified '+family+' resource must be configured by the operator.')
+    return selected[0]['resource']
+
+
+def prepare_sequence_input(arguments, context):
+    """Conditional DNA source and BED declarations, without sequence extraction."""
+    from agent.orchestration.scientific_inputs import ScientificInputRequired,ScientificDiagnostic,parameter_requirements
+    inline=arguments.get('sequence') is not None;source=arguments.get('sequence_path') is not None
+    if inline and source:
+        raise ScientificDiagnostic('SEQUENCE_SOURCE_CONFLICT','Select exactly one inline DNA sequence or one sequence source.')
+    if not inline and not source:
+        raise ScientificInputRequired(*parameter_requirements(context.tool,('sequence_path',)))
+    observed=context.existing(arguments.get('sequence_path')) if source else None
+    if observed is not None:
+        from agent.tools._file_identity import checked_file
+        checked_file(observed.path,observed.sha256)
+        with open(observed.path,'rb') as stream:
+            first=stream.read(4096).lstrip()
+        checked_file(observed.path,observed.sha256)
+        if first and not first.startswith(b'>'):
+            if not arguments.get('assembly'):
+                raise ScientificInputRequired(*parameter_requirements(context.tool,('assembly',)))
+            from .sequence_reference import matching_genome_entries,qualified_genome_entries
+            try:entry=matching_genome_entries(qualified_genome_entries(),arguments['assembly'])
+            except ValueError as exc:raise ScientificDiagnostic('SEQUENCE_REFERENCE_REQUIRED',str(exc)) from exc
+            if entry['resource']['species']['taxonomy_id']!=9606:
+                raise ScientificDiagnostic('SEQUENCE_REFERENCE_SPECIES_INVALID','This model requires a qualified human genome for BED extraction.')
+    return arguments
+
+
+def prepare_operation(arguments, context):
+    values=prepare_sequence_input(arguments,context)
+    model=preparation_model('DHS64','sequence_predictor')
+    from agent.orchestration.scientific_inputs import ScientificDiagnostic
+    if values.get('condition') is not None and values['condition'] not in model['conditions']:
+        raise ScientificDiagnostic('SEQUENCE_CONDITION_UNSUPPORTED','The supplied condition is not an exact qualified DHS64 condition.')
+    return values

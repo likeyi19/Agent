@@ -26,7 +26,7 @@ from agent.orchestration import (
     ToolRegistry,
     ToolSpec,
     build_default_tool_registry,
-    build_m92_semantic_compiler_contract,
+    build_semantic_compiler_contract,
     build_semantic_compiler_contract,
     compile_semantic_plan,
 )
@@ -641,7 +641,7 @@ def test_multiple_complete_grouped_request_sources_are_ambiguous() -> None:
 
 def test_grouped_request_source_with_wrong_lineage_fails_closed() -> None:
     registry = build_default_tool_registry()
-    contract = build_m92_semantic_compiler_contract(registry)
+    contract = build_semantic_compiler_contract(registry)
     altered = tuple(
         replace(rule, lineage=SemanticLineage.QUERY)
         if rule.tool_name == "transfer_cell_labels"

@@ -146,7 +146,7 @@ def tool_specs():
             ports=[replace(p,required=False) if p.name=='strategy' else p for p in ports]
         ints={'artifact_schema_version','n_cells','n_features','nnz','total_count','zero_row_count','completed_step','optimizer_steps','amp_skipped_steps'}
         fields={k:(int,) if k in ints else (dict,) if k=='species' else (str,type(None)) if k=='mapping_identity_sha256' else (str,) for k in result_fields}
-        specs.append(ToolSpec(name=name,function=getattr(public,name),required_arguments=required,optional_arguments=optional,
+        specs.append(ToolSpec(preparation_owner=None if is_adoption else public.prepare_operation, source_encodings={'source':('h5ad',)} if name == 'adopt_scATAC_cell_by_features' else {}, source_input_types={'source':('h5ad',)} if name == 'adopt_scATAC_cell_by_features' else {}, name=name,function=getattr(public,name),required_arguments=required,optional_arguments=optional,
             result_contract=ResultContract('NeutralMatrixResult' if is_adoption else 'SpeciesAdaptationResult',fields,
                 validator=validator,planning_fields={k:_planning_result('Verified exact artifact binding.',bindable=True,
                     artifact=A.RAW_SCATAC if k=='matrix_path' else A.SCATAC_CELL_BY_FEATURES if is_adoption else A.EPIZOO_TARGET_MODEL)

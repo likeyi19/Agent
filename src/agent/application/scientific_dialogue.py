@@ -175,7 +175,9 @@ def validate_capture(state, interaction, preceding):
     if value is None:
         return
     keys = ('outputs', 'predecessor', 'requested_predecessor', 'ambiguous')
-    _shape(_serialize(value), keys + tuple(k for k in ('context', 'results', 'source_fields', 'source_view') if k in value))
+    _shape(_serialize(value), keys + tuple(k for k in ('context', 'results', 'source_fields', 'source_view', 'prerequisite_capture_version') if k in value))
+    if 'prerequisite_capture_version' in value and (type(value['prerequisite_capture_version']) is not int or value['prerequisite_capture_version'] != 2):
+        raise ValueError('Invalid prerequisite capture version.')
     if 'source_fields' in value or 'source_view' in value:
         from .dialogue_execution import validate_source_fields
         validate_source_fields(interaction, preceding)
@@ -1535,10 +1537,10 @@ def completion(sessions, session_id, turn_id, outcome, *, model=None):
         figure_relationships=relationships)
     if delivery['unfulfilled']:
         limitations.append('Requirements not fulfilled: ' + '; '.join(delivery['unfulfilled']) + '.')
-    if not {'explanation', 'comparison'} & set(requested):
-        missing = [kind for kind in ('visualization',) if delivery[kind] == 'unavailable']
-        text = 'Analysis accepted.' + (' Output unavailable: ' + ', '.join(missing) if missing else '')
-        return replace(outcome, text=text, artifacts=artifacts)
+    if 'files_only' in requested:
+        return replace(outcome, text='', artifacts=artifacts)
+    if interaction is None:
+        return replace(outcome, text='', artifacts=artifacts)
     targets = ()
     try:
         groups = revision_results(sessions, state, revision)
@@ -1595,10 +1597,41 @@ def status_outcome(outcome, code):
     """Minimal application status, never a second prose engine or model retry."""
     from .interactive_schemas import ClientError
     error = outcome.error or ClientError(code, 'Response unavailable: ' + code)
-    label = ('Analysis accepted; response unavailable' if outcome.status in {'activated', 'stale'}
-             else 'Input required' if outcome.kind == 'clarify' else 'Response unavailable')
     codes = error.code if error.code == code else error.code + '; ' + code
-    return replace(outcome, text=label + ': ' + codes, error=error)
+    return replace(outcome, text=codes, error=error)
+
+
+def _preparation_outcome(interactions, interaction, preparation):
+    """Project canonical controls/active answers for prose, without binding data."""
+    from .preparation_state import active_answers, choices
+    from .dialogue_evidence import _unsafe_fact_value
+    def public_choice(choice):
+        # These are the same labels/actions already offered by the canonical UI.
+        # Component records and source/answer tokens remain with their owners.
+        return {key: _serialize(choice[key]) for key in ('label', 'action')
+                if key in choice and not _unsafe_fact_value(choice[key])}
+    controls = choices(interaction)
+    requirements = []
+    for row in preparation['requirements']:
+        public = {key: _serialize(row[key]) for key in (
+            'step_id', 'tool_name', 'port', 'argument', 'native_function', 'member', 'kind', 'messages') if key in row}
+        offered = [public_choice(c) for c in controls if c.get('requirement_id') == row['requirement_id']]
+        public.update(offered_choices=offered[:32], choices_omitted=max(0, len(offered)-32))
+        requirements.append(public)
+    resolved = []
+    answers = () if interaction.preparation is None else active_answers(interactions, interaction.preparation)
+    for answer, requirement in answers:
+        public = {key: _serialize(requirement[key]) for key in (
+            'step_id', 'tool_name', 'port', 'argument', 'native_function', 'member') if key in requirement}
+        value = answer['value']
+        if answer['kind'] in {'scalar', 'scope'} and not _unsafe_fact_value(value):
+            public['value'] = _serialize(value)
+        elif isinstance(value, Mapping):
+            public.update(public_choice(value))
+        resolved.append(public)
+    return dict(status=preparation['status'], requirements=requirements,
+        resolved_inputs=resolved[:32], resolved_inputs_omitted=max(0, len(resolved)-32),
+        diagnostics=[dict(code=row['code']) for row in preparation.get('diagnostics', ())])
 
 
 def explain_outcome(sessions, session_id, interaction, outcome, model):
@@ -1607,6 +1640,7 @@ def explain_outcome(sessions, session_id, interaction, outcome, model):
     turn = next((t for t in state.turns if t.turn_id == interaction.turn_id), None)
     run = None if turn is None or turn.run_id is None else sessions._application.run_store.load(turn.run_id)
     admitted = interaction.admitted or {}
+    preparation = admitted.get('preparation_result')
     recorded_error = next((e for e in run.errors if outcome.error is not None
         and e.code == outcome.error.code), None) if run is not None else None
     facts = dict(kind=outcome.kind, status=outcome.status,
@@ -1620,6 +1654,12 @@ def explain_outcome(sessions, session_id, interaction, outcome, model):
         steps=[] if run is None else [dict(step_id=s.step_id, tool=s.tool_name,
             status=s.status.value, attempt_count=s.attempt_count,
             error_code=None if s.error is None else s.error.code) for s in run.steps])
+    if preparation is not None:
+        facts['preparation'] = _preparation_outcome(state.interactions, interaction, preparation)
+        facts['pending_task_preserved'] = interaction.preparation is not None
+        if interaction.preparation is not None:
+            from .preparation_state import origin_record
+            facts['preserved_objective'] = origin_record(state.interactions, interaction.preparation)['task']['objective']
     if interaction.prerequisite is not None:
         origin = next((i for i in state.interactions
             if i.turn_id == interaction.prerequisite['origin_turn_id']), None)

@@ -54,11 +54,24 @@ def planner_app(app, tmp_path, failure=None):
     ad.AnnData(sparse.csr_matrix([[1,0],[0,2]])).write_h5ad(path)
     calls = []
     class Planner:
+        name = 'typed-guidance-fixture'
         def plan(self, request, registry):
+            # Public complete-plan execution remains a separate supported API.
             calls.append((request, current_context()))
-            if failure == 'planner': raise PlannerError('Explicit test rejection')
             return AgentPlan('inspect-plan', request.request_id, 'Explicit inspection.',
-                (PlanStep('inspect','inspect_scATAC',dict(path=str(path if failure != 'preflight' else tmp_path/'missing.h5ad'))),))
+                (PlanStep('inspect','inspect_scATAC',dict(path=str(path))),))
+        def acquire_candidate(self, request, registry):
+            from agent.orchestration.llm_planner import LLMPlanner
+            calls.append((request, current_context()))
+            if failure == 'planner': raise PlannerError('PLANNER_OUTPUT_INVALID', 'Explicit test rejection')
+            if failure == 'preflight': path.unlink(missing_ok=True)
+            class Model:
+                model_id = 'typed-guidance-fixture'
+                def complete(self, *, prompt, response_schema):
+                    return json.dumps(dict(schema_version=4,decision=dict(kind='plan',steps=[
+                        dict(step_id='inspect',tool='inspect_scATAC',control_dependencies=[],sources=[
+                            dict(target='dataset',source=dict(kind='input',input='input_path'))])])) )
+            return LLMPlanner(Model()).acquire_candidate(request, registry)
     return ResearchAgentApplication(app.workspace_root, planner=Planner()), path, calls
 
 
@@ -73,7 +86,7 @@ def test_selection_restarts_hands_off_and_replays(app, tmp_path, utterance, evid
     original = app.sessions.load('session').interactions[0]
     app, path, calls = planner_app(app,tmp_path)
     model = Selection(cid,evidence)
-    result = ask(app,'execute',utterance,model,execution_inputs={'path':str(path)})
+    result = ask(app,'execute',utterance,model,execution_inputs={'input_path':str(path)})
     assert result.status == 'activated', result
     assert len(calls) == 1 and calls[0][1].items == ()
     intent = json.loads(calls[0][0].prompt)
@@ -85,7 +98,7 @@ def test_selection_restarts_hands_off_and_replays(app, tmp_path, utterance, evid
     assert state.interactions[-1].admitted['selected_candidate']['candidate_id'] == cid
     assert model.calls[0]['dialogue']['execution_candidates'][0]['candidate'] == cid
     assert 'guidance_schema_version' not in json.dumps(model.calls)
-    replay = ask(app,'execute',utterance,model,execution_inputs={'path':str(path)})
+    replay = ask(app,'execute',utterance,model,execution_inputs={'input_path':str(path)})
     assert replay.status == 'activated' and len(calls) == 1
 
 
@@ -135,7 +148,7 @@ def test_normal_execution_rejection(app,tmp_path,failure):
     accepted(app,'inspect_scATAC'); cid=offer(app)
     before=app.sessions.load('session')
     app,path,calls=planner_app(app,tmp_path,failure)
-    result=ask(app,'select','Run option 1.',Selection(cid,'Run option 1.'),execution_inputs={'path':str(path)})
+    result=ask(app,'select','Run option 1.',Selection(cid,'Run option 1.'),execution_inputs={'input_path':str(path)})
     assert result.status=='failed',result
     assert len(calls)==1
     state=app.sessions.load('session')
@@ -147,7 +160,7 @@ def test_reference_survives_intervening_discussion(app,tmp_path):
     result=ask(app,'discussion','What does this result show?',Dialogue(question('r0')))
     assert result.status=='answered',result
     app,path,calls=planner_app(app,tmp_path)
-    result=ask(app,'select','Run the inspection option.',Selection(cid,'Run the inspection option.'),execution_inputs={'path':str(path)})
+    result=ask(app,'select','Run the inspection option.',Selection(cid,'Run the inspection option.'),execution_inputs={'input_path':str(path)})
     assert result.status=='activated',result
     assert len(calls)==1
 
@@ -161,15 +174,15 @@ def test_strict_minimal_branch():
 
 def test_original_ordinals_survive_single_option_rationale(app,tmp_path):
     accepted(app,'inspect_scATAC')
-    cid=offer(app,tools=('inspect_scATAC','cluster_cells'))
+    cid=offer(app,tools=('inspect_scATAC','annotate_scATAC_cell_types'))
     refs=app.sessions.load('session').interactions[0].guidance_candidates
-    assert refs[0]['capability']=='cluster_cells'  # canonical ordering, not model order
+    assert refs[0]['capability']=='annotate_scATAC_cell_types'  # canonical ordering, not model order
     cid=refs[1]['candidate_id']
     rationale=ask(app,'why','Why would the second option help?',Guidance(decision(candidate='second option')))
     assert rationale.status=='answered',rationale
     app,path,calls=planner_app(app,tmp_path)
     model=Selection(cid,'Run option 2.')
-    result=ask(app,'select','Run option 2.',model,execution_inputs={'path':str(path)})
+    result=ask(app,'select','Run option 2.',model,execution_inputs={'input_path':str(path)})
     assert result.status=='activated',result
     options=model.calls[0]['dialogue']['execution_candidates']
     assert [(x['option'],x['candidate']) for x in options]==[(n+1,r['candidate_id']) for n,r in enumerate(refs)]
@@ -215,7 +228,7 @@ def test_missing_subject_fails_closed(app,monkeypatch):
 @pytest.mark.parametrize('utterance',['Do the other one.','Run that analysis.',
     'Run option 1 for a different subject instead.'])
 def test_semantic_ambiguity_and_conflicting_refinement_clarify(app,monkeypatch,utterance):
-    accepted(app,'inspect_scATAC'); offer(app,tools=('inspect_scATAC','cluster_cells'))
+    accepted(app,'inspect_scATAC'); offer(app,tools=('inspect_scATAC','annotate_scATAC_cell_types'))
     model=Dialogue(dict(kind='clarify',reason='ambiguous_subject'))
     result=ask(forbid_work(app,monkeypatch),'select',utterance,model)
     assert result.status=='clarification'
@@ -235,10 +248,10 @@ def test_durable_selection_rejects_identity_tampering(app,tmp_path):
     from agent.application.session_state import AnalysisSession
     accepted(app,'inspect_scATAC'); cid=offer(app)
     app,path,_=planner_app(app,tmp_path)
-    assert ask(app,'select','Run option 1.',Selection(cid,'Run option 1.'),execution_inputs={'path':str(path)}).status=='activated'
+    assert ask(app,'select','Run option 1.',Selection(cid,'Run option 1.'),execution_inputs={'input_path':str(path)}).status=='activated'
     state=app.sessions.load('session')
     payload=state.to_dict()
-    payload['interactions'][-1]['admitted']['selected_candidate']['capability']='cluster_cells'
+    payload['interactions'][-1]['admitted']['selected_candidate']['capability']='annotate_scATAC_cell_types'
     with pytest.raises(ValueError): AnalysisSession.from_dict(payload)
 
 
@@ -275,7 +288,7 @@ def test_state_change_during_output_selection_prevents_submission(app,tmp_path,m
     from agent.orchestration.executor import PlanExecutor
     def forbidden(*args,**kwargs): raise AssertionError('Stale candidate entered execution')
     monkeypatch.setattr(PlanExecutor,'execute',forbidden)
-    result=ask(app,'select','Run option 1.',RacingModel(cid,'Run option 1.'),execution_inputs={'path':str(path)})
+    result=ask(app,'select','Run option 1.',RacingModel(cid,'Run option 1.'),execution_inputs={'input_path':str(path)})
     assert result.status=='failed',result
     assert len(calls)==1
     assert not any(t.turn_id=='select' for t in app.sessions.load('session').turns)

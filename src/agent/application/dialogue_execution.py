@@ -77,7 +77,41 @@ def captured_input_group(interaction, preceding=()):
         current = _candidate_view(current)
     pending = interaction.snapshot.get('prerequisite') or {}
     binding = None
-    if pending.get('field') == 'roles':
+    if 'preparation' in interaction.snapshot:
+        if not preceding:
+            # Capture already projected any offered source fields above. A
+            # task with no source view cannot synthesize an input-role group.
+            return None
+        from .preparation_state import intake_context
+        preceding = tuple(i for i in preceding if i.turn_id != interaction.turn_id)
+        origin, source = intake_context(interaction, preceding)
+        from .preparation_state import intake_task
+        intake_owner = intake_task(preceding, source.preparation)
+        if intake_owner in ('resources', None) and source.preparation['candidate_origin'] is None:
+            return None
+        received = current if (interaction.submission or {}).get('candidate_input') is not None else interaction
+        try:
+            if intake_owner in ('resources', None):
+                # A Candidate's external-input Requirements use the same exact
+                # registered-member append contract, without legacy role intake.
+                offered = source.snapshot.get('dialogue', {}).get('source_view')
+                if offered is None and not source.admitted.get('registered_input'):
+                    # A direct-source scalar question has no attachment catalog
+                    # to merge. New captured files are offers, never replacements.
+                    metadata = (current.submission or {}).get('registered_input', {})
+                    return (LocalResourceAdmission._submission_binding(current.submission)
+                            if metadata.get('composition') == 'scientific-role-selection.v1' else None)
+                captured = (replace(source, admitted={**source.admitted,
+                    'registered_input': offered['registered_input']}) if offered is not None else source)
+                binding = _role_binding(origin, captured if captured.admitted.get('registered_input') else None, received)
+            elif intake_owner != 'roles':
+                from .raw_handoff import source_binding
+                binding = source_binding(origin, source, interaction, intake_owner)
+            else:
+                binding = _role_binding(origin, source, received)
+        except IntentError as exc:
+            raise SessionConflictError('Captured role selection changed.') from exc
+    elif pending.get('field') == 'roles':
         origin, source = _role_source(pending, preceding)
         received = current if (interaction.submission or {}).get('candidate_input') is not None else interaction
         binding = _role_binding(origin, source, received)
@@ -97,11 +131,11 @@ def captured_input_group(interaction, preceding=()):
         if binding is None:
             return received
         return replace(binding, execution_inputs=received.execution_inputs,
-                       roles=(), resource_choice=received.resource_choice,
+                       roles=(), resource_choice=binding.resource_choice,
                        attachment_candidates=received.attachment_candidates)
     return (None if binding is None else replace(binding,
         execution_inputs=(current.submission or {}).get('execution_inputs', {}),
-        roles=(), resource_choice=None, attachment_candidates=True))
+        roles=(), resource_choice=binding.resource_choice, attachment_candidates=True))
 
 
 def validate_source_fields(interaction, preceding=()):
@@ -224,9 +258,10 @@ def scientific_parameters(registry):
             elif is_exact_string_argument(spec):
                 item.update(exact_string=True, provenance_role=(spec.planning.provenance_role.value if spec.planning.provenance_role is not None else None))
                 if spec.planning.observation_source is not None:
-                    from .local_resources import _GROUP_PORTS
-                    if (tool_name, spec.planning.observation_source) in _GROUP_PORTS:
+                    from .local_resources import source_ports
+                    if (tool_name, spec.planning.observation_source) in source_ports(registry):
                         item['observation_source'] = spec.planning.observation_source
+                        item['observation_axis'] = spec.planning.observation_axis
             offered.append(item)
     return offered
 
@@ -363,7 +398,7 @@ def _retained_field_roles(sessions, interaction, retained, roles):
     existing owners. No file discovery or scientific qualification happens here.
     """
     from .turn_context import stored_step
-    from .local_resources import _GROUP_PORTS, _group_port
+    from .local_resources import source_ports, _group_port
     state = sessions.load(sessions._interaction_session_id)
     registry = sessions._application.registry
     offered = captured_input_group(interaction, state.interactions[:-1])
@@ -381,7 +416,7 @@ def _retained_field_roles(sessions, interaction, retained, roles):
         _, argument = _parameter_input(registry, row['tool'], row['argument'])
         port_name = argument.planning.observation_source
         key = row['tool'], port_name
-        if key not in _GROUP_PORTS or key in explicit:
+        if key not in source_ports(registry) or key in explicit:
             continue
         port, _, _ = _group_port(registry, row['tool'], port_name)
         if any(m.field_name in received for m in port.members):
@@ -583,6 +618,10 @@ def _validate_argument_record(interaction):
     """Recheck current-turn typed declarations without providers or science."""
     from .session_state import SessionError
     admitted = interaction.admitted or {}
+    if interaction.preparation is not None and interaction.preparation['previous'] is not None:
+        # The origin retains initial argument grounding; answer deltas have
+        # exact submission provenance in the versioned preparation decoder.
+        return
     if 'result_edit' in admitted:
         from .structured_parameters import validate_result_edit
         validate_result_edit(interaction)
@@ -657,29 +696,6 @@ def _validate_argument_record(interaction):
         raise SessionError('Invalid persisted scientific arguments.') from exc
 
 
-def _missing_parameters(error, admitted, registry):
-    if error is None or error.code not in {'MISSING_REQUIRED_SOURCE', 'MISSING_REQUIRED_BINDING'}:
-        return None
-    tool_name = error.details.get('tool_name')
-    names = error.details.get('argument_names')
-    if tool_name not in registry.names() or not isinstance(names, (list, tuple)) or not 1 <= len(names) <= 8:
-        return None
-    tool = registry.get(tool_name)
-    required = tool.required_arguments
-    try:
-        for name in names:
-            if name not in required:
-                return None
-            input_name, _ = _parameter_input(registry, tool_name, name)
-            if required[name].planning.conversational_choice:
-                return None
-            if input_name in admitted['inputs']:
-                return None
-    except IntentError:
-        return None
-    return tool_name, list(names)
-
-
 def _validate_input_role_record(interaction):
     """Replay captured associations without current sources or scientific reads."""
     from .session_state import SessionError
@@ -700,7 +716,8 @@ def _validate_input_role_record(interaction):
         return
     try:
         from agent.orchestration.registry import build_default_tool_registry
-        if not grouped or not _input_roles(_serialize(admitted.get('roles', []))):
+        roles = _input_roles(_serialize(admitted.get('roles', [])))
+        if not grouped or not roles and not received.get('attachment_candidates'):
             raise ValueError('Missing captured scientific input roles.')
         declarations = _scientific_arguments(_serialize(admitted.get('arguments', [])))
         expected = _replay_initial_inputs(build_default_tool_registry(), interaction, declarations)
@@ -717,8 +734,8 @@ def _parameter_source(reference, preceding):
     return origin, source, _serialize(source.admitted['inputs'])
 
 
-def request_parameter_repair(sessions, interaction, raw, inputs, resources):
-    """Capture a question, never execute a rejected interpreter decision."""
+def admit_parameter_correction(sessions, interaction, raw, inputs, resources):
+    """Retain grounded members and describe missing values for preparation."""
     if interaction.submission is None:
         raise IntentError('invalid_prerequisite')
     import json
@@ -779,11 +796,8 @@ def request_parameter_repair(sessions, interaction, raw, inputs, resources):
     safe = merge_decision(safe, interaction, registry)
     if not isinstance(safe, Execute):
         raise IntentError('invalid_prerequisite')
-    admitted = admit(sessions, interaction, safe, inputs, epizoo_resources=resources)
-    # The original objective and all valid context survive; rejected model values
-    # are not offered as human choices and never enter execution inputs.
-    return request_parameters(sessions, interaction, admitted,
-                              [*safe.missing_parameters, *missing], resources)
+    safe = replace(safe, missing_parameters=tuple([*safe.missing_parameters, *missing]))
+    return admit(sessions, interaction, safe, inputs, epizoo_resources=resources)
 
 
 def _missing_parameter_inputs(registry, tool_name, names, values):
@@ -830,7 +844,7 @@ def _native_count_record(run, step):
         diagnostic_sha256=digest(diagnostic)), diagnostic
 
 
-def _continue_native_count(sessions, origin, admitted):
+def _continue_native_count(sessions, interaction, origin, admitted):
     """Rebind the exact attempted plan using the ordinary prepared-plan path.
 
     PriorOutputRefs retain accepted upstream authority. Outputs from the failed
@@ -866,7 +880,12 @@ def _continue_native_count(sessions, origin, admitted):
             args['input_sha256'] = diagnostic['source_sha256']
         steps.append(replace(planned, arguments=args))
     plan = replace(run.plan, plan_id=request_id + ':parameter-answer', request_id=request_id, steps=tuple(steps))
-    return dict(admitted, native_failure=_serialize(failure), native_plan=plan.to_dict())
+    from .structured_parameters import bound_records, bind_plan
+    continued = dict(admitted, native_failure=_serialize(failure))
+    rows = bound_records(continued, state.interactions, app.registry,
+                         current_utterance=interaction.utterance, interaction=interaction)
+    plan = bind_plan(plan, rows, admitted['inputs'], app.registry, continued)
+    return dict(continued, native_plan=plan.to_dict())
 
 
 def request_parameters(sessions, interaction, admitted, names, resources):
@@ -911,6 +930,14 @@ def _validate_parameter_prerequisite(interaction, preceding):
                         or pending['tool'] != admitted['tool']
                         or missing_slots(registry, pending_slots(interaction, registry), values) != list(pending['missing'])):
                     raise ValueError('Native parameter requirement changed.')
+                if 'preparation_question' in pending:
+                    from .preparation_state import observation
+                    q=observation(interaction)
+                    reqs=q['requirements']
+                    if (interaction.preparation is None or len(reqs)!=1 or reqs[0]['step_id']!=failure['step_id']
+                            or reqs[0]['argument']!='kwargs' or reqs[0].get('member')!='num_clusters'
+                            or reqs[0].get('applicability',{}).get('native_failure')!=failure):
+                        raise ValueError('Native canonical question changed its failed-Run scope.')
                 return
             if 'parameter_slots' in admitted:
                 from .structured_parameters import parameter_slots, missing_slots
@@ -1009,14 +1036,6 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
         raise IntentError('ambiguous_parameter')
     if resource_context_digest(resources) != reference['resource_context_sha256']:
         raise IntentError('invalid_prerequisite')
-    if not slots and 'parameter_request' not in origin.admitted:
-        stored = sessions._application.run_store.load(origin.admitted['request_id'] + ':run')
-        original_error = next((e for e in stored.errors
-            if _missing_parameters(e, origin.admitted, sessions._application.registry) ==
-               (reference['tool'], list(origin.prerequisite['missing']))), None)
-        if (stored.steps or stored.request.prompt != _execution_objective(origin, state.interactions) or original_error is None
-                or any(stored.request.inputs.get(k) != v for k, v in origin.admitted['inputs'].items())):
-            raise IntentError('invalid_prerequisite')
     current = (_serialize(interaction.submission)['execution_inputs'] if interaction.submission is not None
                else _serialize(execution_inputs or {}))
     declared_inputs = {_parameter_input(sessions._application.registry, d.tool, d.argument)[0]
@@ -1079,34 +1098,64 @@ def admit_parameters(sessions, interaction, decision, resources, *, execution_in
     if interaction.submission is None:
         admitted['parameter_received_inputs_sha256'] = digest(current)
     if not missing and 'native_failure' in origin.prerequisite:
-        admitted = _continue_native_count(sessions, origin, admitted)
+        admitted = _continue_native_count(sessions, interaction, origin, admitted)
     return admitted
 
 
-def _parameter_records(admitted, interactions):
+def parameter_record_owners(admitted, interactions, *, interaction=None):
     """Follow only the existing prerequisite links, never conversation order."""
     records = []
-    queue = [admitted]
+    queue = [(admitted,interaction)]
     by_id = {i.turn_id: i for i in interactions}
-    visited = set()
+    visited, selected_scopes = set(), {}
     while queue:
-        record = queue.pop()
-        records.append(record)
+        record,linked = queue.pop()
+        if linked is not None and linked.preparation is not None:
+            for answer in linked.preparation['answers']:
+                if answer['kind'] != 'scope' or answer['step_id'].startswith('@request:'):
+                    continue
+                previous = by_id[answer['question_turn_id']]
+                from .preparation_state import observation
+                requirement = next(r for r in observation(previous)['requirements']
+                    if r['requirement_id'] == answer['requirement_id'])
+                for row in record.get('arguments', ()):
+                    if (row.get('step_id') == answer['value'] and row['tool'] == requirement['tool_name']
+                            and row['argument'] == requirement['argument']
+                            and row.get('native_function') == requirement['native_function']):
+                        key = digest({k: _serialize(v) for k, v in row.items() if k != 'step_id'})
+                        selected_scopes.setdefault(key, answer['value'])
+        projected = []
+        for row in record.get('arguments', ()):
+            key = digest({k: _serialize(v) for k, v in row.items() if k != 'step_id'})
+            projected.append(dict(row, step_id=selected_scopes[key])
+                if row.get('step_id') is None and key in selected_scopes else row)
+        records.append((dict(record, arguments=projected)
+            if _serialize(projected) != _serialize(record.get('arguments', ())) else record,linked))
+        if linked is not None and linked.preparation is not None:
+            pointer = linked.preparation['previous']
+            if pointer is not None and pointer not in visited:
+                visited.add(pointer)
+                queue.append((by_id[pointer].admitted,by_id[pointer]))
+            continue
         continuation = record.get('parameter_continuation', record.get('continuation'))
         if continuation is None:
             continue
         for pointer in dict.fromkeys(continuation.get(k) for k in ('origin_turn_id', 'binding_turn_id')):
             if pointer is not None and pointer not in visited:
                 visited.add(pointer)
-                queue.append(by_id[pointer].admitted)
+                queue.append((by_id[pointer].admitted,by_id[pointer]))
     return records
 
 
-def _parameter_identities(admitted, interactions):
+def _parameter_records(admitted, interactions, *, interaction=None):
+    return [record for record,_ in parameter_record_owners(admitted,interactions,interaction=interaction)]
+
+
+def _parameter_identities(admitted, interactions, *, interaction=None):
     """Read only explicitly linked declarations and originally missing identities."""
     identities = set()
     by_id = {i.turn_id: i for i in interactions}
-    records = _parameter_records(admitted, interactions)
+    records = _parameter_records(admitted, interactions,interaction=interaction)
     for record in records:
         continuation = record.get('parameter_continuation', record.get('continuation'))
         if continuation is not None and continuation.get('field') == 'parameters':
@@ -1125,116 +1174,42 @@ def _parameter_identities(admitted, interactions):
     return identities
 
 
-def parameter_scope_choices(admitted, interactions):
-    return tuple(sorted(tool + '.' + name for tool, name in _parameter_identities(admitted, interactions)))
+def parameter_scope_choices(admitted, interactions, *, interaction=None):
+    return tuple(sorted(tool + '.' + name for tool, name in _parameter_identities(admitted, interactions,interaction=interaction)))
 
 
-def _check_parameter_plan(registry, plan, admitted, interactions):
-    """Verify exact consumers of scoped declarations; never alter a plan."""
-    from .local_resources import _group_port, plan_source_path
+def _check_parameter_plan(registry, plan, admitted, interactions, *, interaction=None):
+    """Assert shared exact parameter projection at final scientific admission."""
+    from agent.orchestration.native_parameters import parameter_matches,declaration_input
+    from .structured_parameters import (parameter_projection,preparation_parameter_values,
+        assert_parameter_projection,prepared_resource_values)
     if 'result_edit' in admitted:
         from .structured_parameters import check_plan
-        check_plan(plan, admitted['arguments'], admitted['inputs'], registry, admitted)
-        return {(r['step_id'], r['argument']) for r in admitted['arguments']}
-    identities = _parameter_identities(admitted, interactions)
-    records = _parameter_records(admitted, interactions)
-    from .structured_parameters import bound_records
-    explicit = bound_records(admitted, interactions, registry)
-    def overridden(row):
-        return any(all(row.get(k) == setting.get(k) for k in ('tool', 'argument', 'native_function', 'port', 'source'))
-                   for setting in explicit)
-    records = [dict(record, arguments=[d for d in (*record.get('arguments', ()), *record.get('retained_parameters', ()))
-                                      if d.get('origin') != 'structured' and not overridden(d)])
-               for record in records]
-    remaining = {(d['tool'], d['argument']) for record in records for d in record.get('arguments', ())}
-    identities -= {(d['tool'], d['argument']) for d in explicit} - remaining
-    members = (admitted.get('registered_input') or {}).get('members', ())
-    roles = admitted.get('roles', ())
-    from .structured_parameters import matches
-    authorized = {(step.step_id, row['argument']) for row in explicit
-                  for step in matches(plan, row, registry, admitted)}
-    names = set()
-    native_scopes = set()
-    for tool_name, argument_name in identities:
-        name, _ = _parameter_input(registry, tool_name, argument_name)
-        consumers = [s for s in plan.steps if s.tool_name == tool_name]
-        # The latest linked declaration owns scope. No conversation-order lookup.
-        declarations = next(([d for d in record.get('arguments', ())
-            if (d['tool'], d['argument']) == (tool_name, argument_name)]
-            for record in records if any((d['tool'], d['argument']) == (tool_name, argument_name)
-                for d in record.get('arguments', ()))), [])
-        native = [d for d in declarations if d.get('native_function') is not None]
-        if native:
-            native_scopes.add((tool_name, argument_name))
-            if len(native) != len(declarations):
-                raise IntentError('ambiguous_parameter')
-            from agent.orchestration.native_parameters import input_name, function_choices
-            for declaration in native:
-                fn = declaration['native_function']
-                if fn not in function_choices(registry.get(tool_name)):
-                    raise IntentError('invalid_reference')
-                matches = [s for s in consumers if s.arguments.get('function_name') == fn]
-                if declaration.get('port') is not None:
-                    role = dict(tool=tool_name, port=declaration['port'], source=declaration['source'])
-                    index = int(declaration['source'].split('.')[1])
-                    if role not in roles or index >= len(members):
-                        raise IntentError('invalid_reference')
-                    port, _, _ = _group_port(registry, tool_name, declaration['port'])
-                    matches = [s for s in matches if plan_source_path(s.arguments.get(port.members[0].field_name), plan.steps) == members[index]['source_path']]
-                key = input_name(tool_name, fn, argument_name)
-                if argument_name == 'function_name' and matches:
-                    authorized.update((s.step_id, argument_name) for s in matches)
-                    continue
-                if len(matches) != 1 or (matches[0].step_id, argument_name) in authorized:
-                    raise IntentError('ambiguous_parameter')
-                if matches[0].arguments.get(argument_name) != admitted['inputs'][key]:
-                    raise IntentError('planning_failed')
-                authorized.add((matches[0].step_id, argument_name))
-            continue
-        names.add(name)
-        scoped = [d for d in declarations if d.get('port') is not None]
-        if scoped:
-            if len(scoped) != len(declarations):
-                raise IntentError('ambiguous_parameter')
-            selected = []
-            for declaration in scoped:
-                role = dict(tool=tool_name, port=declaration['port'], source=declaration['source'])
-                index = int(declaration['source'].split('.')[1])
-                if role not in roles or index >= len(members):
-                    raise IntentError('invalid_reference')
-                port, _, _ = _group_port(registry, tool_name, declaration['port'])
-                path = members[index]['source_path']
-                matches = [step for step in consumers if plan_source_path(
-                    step.arguments.get(port.members[0].field_name), plan.steps) == path]
-                if len(matches) != 1 or matches[0] in selected:
-                    raise IntentError('ambiguous_parameter')
-                selected.extend(matches)
-        else:
-            if len(consumers) != 1:
-                raise IntentError('ambiguous_parameter')
-            selected = consumers
-        for step in selected:
-            if step.arguments.get(argument_name) != admitted['inputs'][name]:
-                raise IntentError('planning_failed')
-            authorized.add((step.step_id, argument_name))
+        check_plan(plan,admitted['arguments'],admitted['inputs'],registry,admitted)
+        return {(r['step_id'],r['argument']) for r in admitted['arguments']}
+    rows=parameter_projection(admitted,interactions,registry,interaction=interaction)
+    prepared=preparation_parameter_values(interaction,interactions,registry)
+    authorized=assert_parameter_projection(plan,rows,registry,admitted,prepared_values=prepared)
+    prepared_resource_values(plan,admitted,interactions,registry,interaction=interaction)
+    # Method declarations select registered operations, possibly several calls
+    # of the same function. They are not scalar overrides of prerequisites.
+    for record in _parameter_records(admitted,interactions,interaction=interaction):
+        for declaration in _scientific_arguments(_serialize(record.get('arguments',()))):
+            if declaration.argument!='function_name':continue
+            row=_serialize(vars(declaration))
+            selected=parameter_matches(plan.steps,row,registry,admitted)
+            name,_=_parameter_input(registry,declaration.tool,declaration.argument)
+            key=declaration_input(registry,declaration,name)
+            expected=admitted['inputs'][key]
+            selected=[step for step in selected if step.arguments.get('function_name')==expected]
+            if not selected:raise IntentError('planning_failed')
+            authorized.update((step.step_id,'function_name') for step in selected)
     for step in plan.steps:
-        tool = registry.get(step.tool_name)
+        tool=registry.get(step.tool_name)
         if tool.native_functions is not None:
-            functions = dict(tool.native_functions.functions)
-            function = step.arguments.get('function_name')
-            kwargs = step.arguments.get('kwargs', {})
-            if function not in functions or not isinstance(kwargs, Mapping) or set(kwargs) - set(functions[function]):
+            functions=dict(tool.native_functions.functions);function=step.arguments.get('function_name');kwargs=step.arguments.get('kwargs',{})
+            if function not in functions or not isinstance(kwargs,Mapping) or set(kwargs)-set(functions[function]):
                 raise IntentError('invalid_parameter_value')
-        for candidate in {**tool.required_arguments, **tool.optional_arguments}:
-            try:
-                other_input, _ = _parameter_input(registry, step.tool_name, candidate)
-            except IntentError:
-                continue
-            if ((other_input in names or (step.tool_name, candidate) in native_scopes) and candidate in step.arguments
-                    and (step.step_id, candidate) not in authorized):
-                raise IntentError('ambiguous_parameter')
-    from .structured_parameters import check_plan
-    check_plan(plan, explicit, admitted['inputs'], registry, admitted)
     return authorized
 
 
@@ -1242,15 +1217,6 @@ def resource_context_digest(resources):
     # Exact operator policy, including pins and default designations. Changing
     # the catalog during a clarification cannot silently select another model.
     return digest(sorted((asdict(r) for r in resources), key=lambda r: r['resource_id']))
-
-
-def _missing_species(error, submission):
-    return (submission is not None
-        and submission.get('registered_input', {}).get('composition') == 'h5ad-science.v1'
-        and error is not None and error.code in {'MISSING_REQUIRED_SOURCE', 'MISSING_REQUIRED_BINDING'}
-        and error.details.get('tool_name') == 'epizoo_embed_cells'
-        and error.details.get('target_port') == 'species'
-        and 'species' not in submission['execution_inputs'])
 
 
 def _role_source(reference, preceding):
@@ -1415,40 +1381,6 @@ def _validate_role_prerequisite(interaction, preceding):
         raise SessionError('Invalid pending scientific role binding.') from exc
 
 
-def missing_file_request(registry, interaction, decision, execution_inputs=None):
-    """Admit a typed target's absent file roles before any planning reservation.
-
-    No language classification or workflow completion: this only handles an empty
-    source set with no selected result context. Ambiguous and supplied inputs
-    retain their ordinary semantic binding and scientific qualification path.
-    """
-    from .local_resources import available_input_view, LocalResourceAdmission, group_choices
-    from .turn_decisions import RequestRoles, RoleRequirement
-    if (decision.target not in registry.names() or decision.context == 'current' or decision.input_results
-            or decision.roles or interaction.submission is None or execution_inputs
-            or interaction.submission.get('execution_inputs')):
-        return None
-    if interaction.submission.get('available_input_overflow'):
-        raise IntentError('ambiguous_subject')
-    received = interaction
-    if 'source_view' in interaction.snapshot.get('dialogue', {}):
-        snapshot = _serialize(interaction.snapshot)
-        snapshot['dialogue'].pop('source_view')
-        received = replace(interaction, snapshot=snapshot)
-    viewed = available_input_view(received, allow_empty=True)
-    metadata = viewed.submission.get('registered_input', {})
-    if metadata.get('composition') != 'scientific-role-selection.v1' or metadata.get('members'):
-        return None
-    binding = LocalResourceAdmission._submission_binding(viewed.submission)
-    ports = {p.name: p for p in registry.get(decision.target).semantic_planning.consumer_ports}
-    required = tuple(RoleRequirement(r['tool'], r['port']) for r in group_choices(binding, registry)['roles']
-        if r['tool'] == decision.target and ports[r['port']].required)
-    return (RequestRoles(decision.target, required, arguments=decision.arguments,
-        references=decision.references, delivery=decision.delivery, unfulfilled=decision.unfulfilled,
-        visualization=decision.visualization, comparison=decision.comparison,
-        retain_parameters=decision.retain_parameters) if required else None)
-
-
 def admit_role_request(sessions, interaction, decision, resources):
     """Capture a known registered objective without creating a Run or Plan."""
     from .local_resources import available_input_view
@@ -1478,54 +1410,35 @@ def admit_role_request(sessions, interaction, decision, resources):
                 interaction.turn_id, integrity=False)
             if context is None or not context.items:
                 raise IntentError('unavailable_context')
-    pending = dict(origin_turn_id=interaction.turn_id, binding_turn_id=interaction.turn_id,
-        field='roles', tool=decision.target, required_roles=admitted['required_roles'],
-        resource_context_sha256=resource_context_digest(resources))
-    return admitted, pending, tuple(r['tool'] + '.' + r['port'] for r in missing)
-
-
-def admit_roles(sessions, interaction, decision, resources):
-    """Continue only the exact offered pending task and ordered registered inputs."""
-    from .local_resources import LocalResourceAdmission
-    state = sessions.load(sessions._interaction_session_id)
-    reference = interaction.snapshot.get('prerequisite')
-    if (decision.pending != '@roles' or reference is None or reference['field'] != 'roles'
-            or state.generation != interaction.base_generation or state.active_revision_id != interaction.base_revision_id
-            or state.interactions[-1].turn_id != interaction.turn_id
-            or resource_context_digest(resources) != reference['resource_context_sha256']):
-        raise IntentError('invalid_prerequisite')
-    validate_prerequisite(interaction, state.interactions[:-1])
-    origin, source = _role_source(reference, state.interactions[:-1])
-    owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
-    owner.validate_binding(_role_binding(origin, source, interaction))
-    values, roles, missing, metadata = _role_completion(sessions._application.registry, origin,
-        source, interaction, decision.roles, decision.arguments)
-    admitted = dict(kind='clarify' if missing else 'execute', tool=origin.admitted['tool'],
-        revision_id=interaction.base_revision_id, inputs=values, roles=roles,
-        required_roles=_serialize(origin.admitted['required_roles']), registered_input=metadata,
-        continuation={k: reference[k] for k in ('origin_turn_id', 'binding_turn_id', 'field')})
-    if origin.admitted.get('context') == 'current':
-        admitted['context'] = 'current'
-    if decision.arguments:
-        admitted['arguments'] = [asdict(d) for d in decision.arguments]
-    pending = None
-    if missing:
-        choices = [r['tool'] + '.' + r['port'] for r in missing]
-        admitted.update(reason='missing_input_roles', choices=choices, value_required=True)
-        pending = {k: _serialize(v) for k, v in reference.items() if k != 'predecessor_turn_id'}
-        pending['binding_turn_id'] = interaction.turn_id
-    else:
-        admitted.update(operation='plan', request_id='turn-' + digest(dict(session=state.session_id,
-            turn=interaction.turn_id)))
-    return admitted, pending
+    return admitted
 
 
 def capture_prerequisite(preceding, revision_id, generation, submission, predecessor=None, *,
-                         execution_inputs=None, canonical_sources=False):
+                         execution_inputs=None, canonical_sources=False, utterance=None, live=False):
     """Offer only the immediately pending request in the same captured scope."""
     if not preceding or predecessor is not None:
         return None
-    prior = preceding[-1]
+    selection = (submission or {}).get('clarification_choice') or {}
+    prior = (next((i for i in preceding if i.turn_id == selection.get('question_turn_id')), None)
+             if selection.get('handle', '').startswith('spp.') else preceding[-1])
+    if prior is None:
+        return None
+    if live and not (prior.prerequisite is not None and prior.prerequisite.get('native_failure')):
+        # Canonical preparation owns every pre-execution question. Only an
+        # actual native scientific failure retains the separate Run-scoped path.
+        return None
+    if prior.preparation is not None:
+        from .preparation_state import head, choices
+        if (head(preceding, prior.preparation['task_id']) != prior
+                or prior.base_revision_id != revision_id or prior.base_generation != generation
+                or prior.status != 'clarification'):
+            return None
+        if selection and selection['handle'] not in {c['handle'] for c in choices(prior)}:
+            return None
+        # Capture only the immutable owner projection. Later exact reduction
+        # and the scientific input owner validate submitted identities.
+        return (None if prior.prerequisite is None else
+                dict(_serialize(prior.prerequisite), predecessor_turn_id=prior.turn_id))
     if (prior.prerequisite is None or prior.base_revision_id != revision_id
             or prior.base_generation != generation):
         return None
@@ -1544,7 +1457,7 @@ def capture_prerequisite(preceding, revision_id, generation, submission, predece
         try:
             if canonical_sources:
                 from .session_state import Interaction
-                received = Interaction(prior.turn_id, prior.utterance, revision_id,
+                received = Interaction(prior.turn_id, prior.utterance if utterance is None else utterance, revision_id,
                                        generation, {}, submission=current)
                 if pending['field'] == 'roles' and current.get('candidate_input') is not None:
                     from .raw_handoff import _candidate_view
@@ -1597,6 +1510,56 @@ def validate_prerequisite(interaction, preceding):
     """Validate optional Session references without reading providers or science."""
     from .session_state import SessionError
     admitted = interaction.admitted or {}
+    record = interaction.preparation
+    if record is not None and admitted.get('native_failure'):
+        # Canonical controls retain the existing failed-Run continuation owner.
+        _validate_parameter_prerequisite(interaction, preceding)
+        return
+    if record is not None:
+        from .preparation_state import intake_task
+        if (intake_task((*preceding, interaction), record) == 'resources'
+                and (record['previous'] is None or any(a['kind']=='input_resource' for a in record['answers']))):
+            from .resource_continuation import validate
+            validate(interaction, preceding)
+            return
+    if record is not None:
+        from .preparation_state import intake_task
+        if (intake_task((*preceding, interaction), record) in {'fastq','bam','fragments','annotation','epizoo'}
+                and (record['previous'] is None or 'declarations' in record
+                     or any(a['kind']=='declaration' for a in record['answers']))):
+            if admitted:
+                from .scientific_preparation import validate_source_admission
+                validate_source_admission(interaction, preceding)
+            return
+    if record is not None and 'resume' in record:
+        from .scientific_preparation import resume_admission
+        expected = resume_admission(interaction, preceding, record)
+        actual = {k: _serialize(v) for k, v in admitted.items()
+                  if k not in {'preparation_result','native_resource_bindings','choices','resource_options'}}
+        if admitted and actual != expected:
+            raise SessionError('Resumed preparation changed its original admission.')
+        return
+    if record is not None and record['version'] >= 2:
+        from .preparation_state import intake_task
+        if intake_task((*preceding, interaction), record) == 'roles':
+            from .scientific_preparation import validate_role_admission
+            validate_role_admission(interaction, preceding)
+            return
+    if (record is not None and record['previous'] and (record['answers'] or record.get('authorization'))
+            and all(a['kind'] in (('scalar', 'scope', 'resource') if record['version'] >= 2 else ('scalar', 'scope')) and a['provenance'] in ('exact_submission','interpreted_resource','interpreted_parameter')
+                    for a in record['answers'])):
+        if admitted:
+            from .preparation_state import continued_admission
+            expected = continued_admission(preceding, record, admitted.get('request_id'))
+            if record['version'] == 1:
+                previous = next(i for i in preceding if i.turn_id == record['previous'])
+                expected.update({k: _serialize(v) for k, v in previous.admitted.items() if k in {'choices', 'resource_options'}})
+            actual = {k: _serialize(v) for k, v in admitted.items()
+                      if k not in ({'preparation_result', 'native_resource_bindings', 'choices', 'resource_options'}
+                                  if record['version'] >= 2 else {'preparation_result', 'native_resource_bindings'})}
+            if actual != expected:
+                raise SessionError('Exact preparation answer changed its admitted task.')
+        return
     if 'result_edit' in admitted:
         from .structured_parameters import validate_result_edit
         validate_result_edit(interaction)
@@ -1611,7 +1574,8 @@ def validate_prerequisite(interaction, preceding):
         expected = capture_prerequisite(preceding, interaction.base_revision_id,
             interaction.base_generation, interaction.submission,
             interaction.snapshot.get('dialogue', {}).get('requested_predecessor'),
-            canonical_sources='source_view' in interaction.snapshot.get('dialogue', {}))
+            canonical_sources='source_view' in interaction.snapshot.get('dialogue', {}),
+            utterance=interaction.utterance if interaction.snapshot.get('dialogue', {}).get('prerequisite_capture_version') == 2 else None)
         if (expected is None or _serialize(interaction.snapshot.get('prerequisite')) != expected
                 or _serialize(interaction.prerequisite) != {
                     k: v for k, v in expected.items() if k != 'predecessor_turn_id'}):
@@ -1646,7 +1610,8 @@ def validate_prerequisite(interaction, preceding):
         expected = capture_prerequisite(preceding, interaction.base_revision_id,
             interaction.base_generation, interaction.submission,
             captured.get('dialogue', {}).get('requested_predecessor'),
-            canonical_sources='source_view' in captured.get('dialogue', {}))
+            canonical_sources='source_view' in captured.get('dialogue', {}),
+            utterance=interaction.utterance if captured.get('dialogue', {}).get('prerequisite_capture_version') == 2 else None)
         if captured.get('prerequisite') != expected:
             raise SessionError('Pending declaration capture changed.')
         _validate_role_prerequisite(interaction, preceding)
@@ -1678,7 +1643,8 @@ def validate_prerequisite(interaction, preceding):
     expected = capture_prerequisite(preceding, interaction.base_revision_id,
         interaction.base_generation, interaction.submission,
         captured.get('dialogue', {}).get('requested_predecessor'),
-        canonical_sources='source_view' in captured.get('dialogue', {}))
+        canonical_sources='source_view' in captured.get('dialogue', {}),
+            utterance=interaction.utterance if captured.get('dialogue', {}).get('prerequisite_capture_version') == 2 else None)
     reference = captured.get('prerequisite')
     if reference is not None and reference != expected:
         raise SessionError('Pending declaration capture changed.')
@@ -1736,6 +1702,9 @@ def validate_prerequisite(interaction, preceding):
 
 
 def prerequisite_public(interaction, preceding):
+    if 'preparation' in interaction.snapshot:
+        from .preparation_state import public_question
+        return public_question(interaction, preceding)
     reference = interaction.snapshot.get('prerequisite')
     if reference is None:
         return None
@@ -1762,80 +1731,6 @@ def prerequisite_public(interaction, preceding):
                 objective=origin.utterance)
 
 
-def admit_species(sessions, interaction, decision, resources):
-    """Bind one semantic species answer to exact captured inputs and policy."""
-    from .local_resources import LocalResourceAdmission, ResourceAdmissionError, select_epizoo_resource
-    state = sessions.load(sessions._interaction_session_id)
-    reference = interaction.snapshot.get('prerequisite')
-    if (decision.pending != '@species' or reference is None
-            or state.generation != interaction.base_generation
-            or state.active_revision_id != interaction.base_revision_id
-            or state.interactions[-1].turn_id != interaction.turn_id):
-        raise IntentError('invalid_prerequisite')
-    validate_prerequisite(interaction, state.interactions[:-1])
-    origin = next(i for i in state.interactions if i.turn_id == reference['origin_turn_id'])
-    original = _serialize(execution_submission(origin))
-    request_id = 'turn-' + digest(dict(session=state.session_id, turn=origin.turn_id))
-    if origin.admitted['request_id'] != request_id:
-        raise IntentError('invalid_prerequisite')
-    try:
-        run = sessions._application.run_store.load(request_id + ':run')
-    except (ValueError, RuntimeError, OSError) as exc:
-        raise IntentError('invalid_prerequisite') from exc
-    if (run.request.prompt != origin.utterance or run.steps
-            or any(run.request.inputs.get(k) != v for k, v in original['execution_inputs'].items())
-            or not any(_missing_species(error, original) for error in run.errors)):
-        raise IntentError('invalid_prerequisite')
-    current = {} if interaction.submission is None else _serialize(interaction.submission)
-    original_choice = original['registered_input'].get('resource_choice')
-    received_choice = current.get('registered_input', {}).get('resource_choice')
-    typed_species = current.get('execution_inputs', {}).get('species')
-    if typed_species is not None and typed_species != decision.species:
-        raise IntentError('conflicting_species')
-    if resource_context_digest(resources) != reference['resource_context_sha256']:
-        raise ResourceAdmissionError('EPIZOO_RESOURCE_SELECTION_INVALID')
-    owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
-    # Verify the original registration before composing; never substitute the
-    # current UI selection for the pending source.
-    binding = owner._submission_binding(original)
-    owner.validate_binding(binding)
-    declarations = {k: v for k, v in original['execution_inputs'].items() if k != 'input_path'}
-    argument = sessions._application.registry.get('epizoo_embed_cells').required_arguments['species']
-    argument.validate('species', decision.species)
-    declarations['species'] = decision.species
-    original_pins = declarations.get('expected_resource_identity')
-    current_inputs = current.get('execution_inputs', {})
-    if decision.arguments:
-        _bind_arguments(sessions._application.registry, interaction.utterance, current_inputs, decision.arguments)
-        declarations = _bind_arguments(sessions._application.registry, interaction.utterance,
-                                       declarations, decision.arguments, replace_existing=True)
-    changed = {_parameter_input(sessions._application.registry, d.tool, d.argument)[0] for d in decision.arguments}
-    current_pins = current_inputs.get('expected_resource_identity')
-    selected_id = (original_pins or current_pins or {}).get('resource_id')
-    declarations, selection_error = select_epizoo_resource(declarations, selected_id, resources)
-    # Selection cannot replace an already validated declaration, including an
-    # explicit model chosen before the species was supplied.
-    if (any(declarations.get(k) != value for k, value in original['execution_inputs'].items()
-            if k != 'input_path' and k not in changed)
-            or any(declarations.get(k) != current_inputs[k]
-                   for k in ('checkpoint_path', 'expected_resource_identity') if k in current_inputs)):
-        raise ResourceAdmissionError('EPIZOO_RESOURCE_SELECTION_INVALID')
-    completed = owner.compose_h5ad(binding.resource_id, declarations,
-                                  resource_selection_error=selection_error,
-                                  resource_choice=(received_choice if received_choice is not None
-                                                   else binding.resource_choice))
-    admitted = dict(kind='execute', operation='plan', tool=origin.admitted['tool'],
-        revision_id=interaction.base_revision_id,
-        request_id='turn-' + digest(dict(session=state.session_id, turn=interaction.turn_id)),
-        inputs=_serialize(completed.execution_inputs), registered_input=completed.attribution(),
-        continuation=dict(origin_turn_id=origin.turn_id, species=decision.species))
-    if origin.admitted.get('context') == 'current':
-        admitted['context'] = 'current'
-    if decision.arguments:
-        admitted['arguments'] = [asdict(d) for d in decision.arguments]
-    return admitted
-
-
 def execution_submission(interaction):
     """Use the admitted binding for continuation, preserving the received turn."""
     admitted = interaction.admitted or {}
@@ -1859,6 +1754,8 @@ def is_execution_command(utterance):
 
 def _received_origin(interaction, interactions):
     """Follow exact persisted links to the original received request."""
+    if interaction.preparation is not None:
+        return next(i for i in interactions if i.turn_id == interaction.preparation['task_origin'])
     by_id = {i.turn_id: i for i in interactions}
     visited = set()
     while True:
@@ -1876,6 +1773,9 @@ def _received_origin(interaction, interactions):
 
 
 def _execution_objective(interaction, interactions):
+    if interaction.preparation is not None:
+        from .preparation_state import origin_record
+        return origin_record(interactions, interaction.preparation)['task']['objective']
     origin = _received_origin(interaction, interactions)
     # Result edits retain the original scientific task even when their UI
     # submission has no utterance; a later count answer keeps that same task.
@@ -1887,6 +1787,10 @@ def planning_task(interaction, state, registry=None):
     origin = _received_origin(interaction, state.interactions)
     admitted = origin.admitted or {}
     task = {k:_serialize(admitted[k]) for k in ('input_results', 'references', 'delivery', 'retained_parameters', 'unfulfilled', 'visualization', 'comparison') if k in admitted}
+    from .turn_context import ordinary_clarification
+    ordinary = ordinary_clarification(origin.snapshot, state)
+    if ordinary:
+        task['ordinary_clarification'] = ordinary
     current = interaction.admitted or {}
     for field in ('fastq', 'fragments', 'bam'):
         receipt = current.get(field + '_context', {})
@@ -1914,15 +1818,18 @@ def planning_task(interaction, state, registry=None):
                     'Include UMAP and annotation in the accepted outputs.'
                     if current['annotation']['generate_umap'] else
                     'Skip optional UMAP computation. Continue annotation and its other available figures and downloads.'))
-    from .structured_parameters import bound_records
+    from .structured_parameters import parameter_projection,preparation_parameter_values
     if registry is None:
         from agent.orchestration.registry import build_default_tool_registry
         registry = build_default_tool_registry()
-    settings = bound_records(interaction.admitted or {}, state.interactions, registry, current_utterance=interaction.utterance)
+    settings = parameter_projection(interaction.admitted or {},state.interactions,registry,interaction=interaction)
+    prepared=preparation_parameter_values(interaction,state.interactions,registry)
+    if prepared:task['prepared_parameter_values']=list(prepared)
     if settings:
-        from .structured_parameters import input_key, effective_value
-        task['parameter_overrides'] = [dict(row, input_name=input_key(registry, row),
-            value=effective_value(row, settings, current['inputs'], registry)) for row in settings]
+        task['parameter_sources'] = {k:_serialize(current[k]) for k in
+            ('registered_input','roles','bam','bam_sources','bam_context','fragments','fragments_sources','fragments_context','native_failure')
+            if k in current}
+        task['parameter_overrides'] = list(settings)
         task['parameter_binding'] = 'Exact researcher settings. Application binds these to matching operations; do not change values or introduce extra operations solely for settings.'
     if origin.turn_id == interaction.turn_id or not task:
         return task
@@ -1957,8 +1864,8 @@ def planning_task(interaction, state, registry=None):
             if task['comparison'][side] != 'new':
                 task['comparison'][side] = rebind(task['comparison'][side])
     if 'retained_parameters' in task:
-        changed = {(d['tool'], d['argument'], d.get('native_function')) for record in _parameter_records(interaction.admitted, state.interactions)
-                   if record != origin.admitted for d in record.get('arguments', ())}
+        changed = {(d['tool'], d['argument'], d.get('native_function')) for record,record_owner in parameter_record_owners(interaction.admitted, state.interactions,interaction=interaction)
+                   if record_owner is not None and record_owner.turn_id!=origin.turn_id for d in record.get('arguments', ())}
         task['retained_parameters'] = [dict(row, result=rebind(row['result']))
             for row in task['retained_parameters'] if (row['tool'], row['argument'], row.get('native_function')) not in changed]
     return task
@@ -1980,6 +1887,8 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
                 request_id='turn-' + digest(dict(session=sessions._interaction_session_id, turn=interaction.turn_id)),
                 inputs=values)
     admitted.update(intent)
+    if decision.missing_parameters:
+        admitted['requested_parameters'] = _serialize(decision.missing_parameters)
     grouped = (interaction.submission is not None
         and interaction.submission.get('registered_input', {}).get('composition') == 'scientific-role-selection.v1')
     if grouped:
@@ -2055,139 +1964,7 @@ def admit(sessions, interaction, decision, inputs, *, epizoo_resources=()):
     return admitted
 
 
-def prepare_native_task(sessions, interaction, admitted):
-    """Plan and resolve native inputs before immutable intent publication.
-
-    This is the existing nondurable PLAN_ONLY mode, followed by the ordinary
-    durable executor only after all requested inputs have been bound. A saved
-    candidate conveys no execution or retry permission.
-    """
-    from .turns import _AdmittedPlanner
-    from .native_raw_handoff import bind_plan, ResourcePrerequisite
-    from .shared_resources import scientific_resource_scope
-    from agent.orchestration.runtime import AgentRuntime
-    from agent.orchestration.active_context import ActivePlanningContext, planning_context, input_preparation
-    from agent.orchestration.planner import PlannerError
-    from agent.schemas import ErrorCategory, RunMode
-    field = next((f for f in ('fastq','fragments','bam') if admitted.get(f + '_context',{}).get('adapter') == 'native-inputs.v1'), 'annotation')
-    app = sessions._application
-    sid = sessions._interaction_session_id
-    current = replace(interaction, admitted=admitted)
-    state = sessions.load(sid)
-    task = planning_task(current, state, app.registry)
-    intent = _execution_objective(current, state.interactions)
-    if 'selected_candidate' in admitted:
-        from .guidance_selection import execution_context, planning_intent
-        context = execution_context(sessions, current, admitted)
-        intent = planning_intent(sessions, current, admitted, context)
-        context = replace(context, task=task)
-    else:
-        context,_ = sessions.execution_context_for_interaction(sid, interaction.turn_id, admitted=admitted)
-        context = (context if context is not None else
-            ActivePlanningContext(sid,interaction.base_revision_id,interaction.base_generation,(),task=task))
-    request = AgentRequest(admitted['request_id'], intent, admitted['inputs'])
-    prepared,_ = app._prepare_request(request)
-    question = None
-    captured_candidate = None
-    question_candidate = None
-    def capture_candidate(payload):
-        nonlocal captured_candidate
-        captured_candidate = _serialize(payload)
-    bindings = []
-    from .structured_parameters import bound_records, bind_plan as bind_parameters, ScopeRequired
-    explicit = bound_records(admitted, state.interactions, app.registry, current_utterance=interaction.utterance)
-    parameter_scope = None
-    def bind_native(plan):
-        nonlocal question, parameter_scope
-        try:
-            plan = bind_parameters(plan, explicit, admitted['inputs'], app.registry, admitted)
-        except ScopeRequired as exc:
-            parameter_scope = dict(plan=exc.plan.to_dict(), argument=exc.row, choices=[step.step_id for step in exc.choices])
-            raise PlannerError('AMBIGUOUS_PARAMETER_SCOPE', 'Select the parameter operation.', category=ErrorCategory.USER_INPUT_ERROR) from exc
-        # A saved scope plan may defer private annotation materialization.
-        from agent.orchestration.active_context import prepare_selected_inputs
-        steps = []
-        selected = {step.step_id: (step.tool_name, dict(step.arguments)) for step in plan.steps}
-        for step in plan.steps:
-            arguments = prepare_selected_inputs(app.registry.get(step.tool_name), dict(step.arguments), selected)
-            selected[step.step_id] = (step.tool_name, arguments)
-            dependencies = tuple(dict.fromkeys((*step.depends_on,
-                *(value.step_id for value in arguments.values() if isinstance(value, StepOutputRef)))))
-            steps.append(replace(step, arguments=arguments, depends_on=dependencies))
-        plan = replace(plan, steps=tuple(steps))
-        if field == 'annotation':
-            return plan
-        try:
-            return bind_plan(plan,admitted[field + '_context'],bindings=bindings)
-        except ResourcePrerequisite as exc:
-            question = (plan,exc.questions,exc.options)
-            raise PlannerError('NATIVE_RESOURCE_REQUIRED',str(exc),category=ErrorCategory.USER_INPUT_ERROR) from exc
-    reference_owner = getattr(sessions,'_reference_resources',None)
-    from .annotation_preparation import preparer, AnnotationPrerequisite
-    from agent.orchestration.prior_outputs import prior_output_store
-    prepare_annotation = preparer(sessions, current, admitted)
-    def prepare_inputs(tool, arguments, selected):
-        nonlocal question, question_candidate
-        try:
-            return prepare_annotation(tool, arguments, selected)
-        except AnnotationPrerequisite as exc:
-            question = (None, exc.questions,exc.options)
-            question_candidate = captured_candidate
-            raise PlannerError('ANNOTATION_INPUT_REQUIRED', str(exc), category=ErrorCategory.USER_INPUT_ERROR) from exc
-    delegate = app.runtime.planner
-    if 'native_plan' in admitted:
-        from agent.schemas.run_state import _decode_plan
-        class PreparedPlanner:
-            def plan(self, request, registry):
-                return _decode_plan(admitted['native_plan'])
-        delegate = PreparedPlanner()
-    elif (interaction.submission or {}).get('clarification_choice') and admitted.get('continuation'):
-        previous = next(i for i in state.interactions
-            if i.turn_id == admitted['continuation']['binding_turn_id'])
-        saved = (previous.admitted or {}).get('native_semantic_candidate')
-        # An exact pending choice changes declarations, not captured source
-        # operands. Recompile the saved proposal; it has no execution authority.
-        if (saved is not None and previous.status == 'clarification'
-                and previous.base_generation == interaction.base_generation
-                and previous.base_revision_id == interaction.base_revision_id
-                and all(_serialize(admitted.get(key)) == _serialize(previous.admitted.get(key))
-                    for key in ('inputs', 'registered_input', 'resource_catalog'))):
-            saved = _serialize(saved)
-            captured_candidate = saved
-            class CapturedPlanner:
-                def plan(self, request, registry):
-                    from agent.orchestration.llm_planner import _semantic_v4_plan
-                    from agent.orchestration.semantic_compiler import build_semantic_compiler_contract
-                    return _semantic_v4_plan(json.dumps(saved), request, registry,
-                        build_semantic_compiler_contract(registry), planner_name='captured-native-semantic-candidate')
-            delegate = CapturedPlanner()
-    with scientific_resource_scope(None if reference_owner is None else reference_owner.library), planning_context(context), input_preparation(prepare_inputs, capture_candidate=capture_candidate), prior_output_store(app.run_store):
-        planning = AgentRuntime(planner=_AdmittedPlanner(delegate,lambda *a:None,bind_native),
-            registry=app.registry,executor=app.runtime.executor).run(replace(prepared,mode=RunMode.PLAN_ONLY))
-    admitted = dict(admitted,native_planning_trace=[row.to_dict() for row in planning.trace])
-    if parameter_scope is not None:
-        return dict(admitted, parameter_scope=parameter_scope), None, None
-    if question is not None:
-        plan,questions,options = question
-        admitted.update(choices=list(questions))
-        if options:
-            admitted['resource_options'] = list(options)
-        if plan is not None:
-            admitted['native_resource_plan'] = plan.to_dict()
-        elif question_candidate is not None:
-            admitted['native_semantic_candidate'] = question_candidate
-        pending = dict(origin_turn_id=admitted.get('continuation',{}).get('origin_turn_id',interaction.turn_id),
-            binding_turn_id=interaction.turn_id,field=field,tool=admitted['tool'],
-            resource_context_sha256=digest(admitted['resource_catalog']))
-        return admitted,pending,None
-    if planning.plan is None or not planning.verification or not planning.verification.passed:
-        return admitted,None,next(iter(planning.errors),None)
-    admitted['native_plan'] = planning.plan.to_dict()
-    admitted['native_resource_bindings'] = bindings
-    return admitted,None,None
-
-
-def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
+def execute(sessions, interaction, admitted, model, *, epizoo_resources=(), prepared_plan=None):
     from .turns import _AdmittedPlanner, _update, TurnOutcome
     from .service import ResearchAgentApplication
     from .scientific_dialogue import _json
@@ -2196,6 +1973,7 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
     sid = sessions._interaction_session_id
     selected = 'selected_candidate' in admitted
     state = sessions.load(sid)
+    interaction = next(i for i in state.interactions if i.turn_id == interaction.turn_id)
     intent = _execution_objective(replace(interaction, admitted=admitted), state.interactions)
     context = None
     interaction = replace(interaction, admitted=admitted, submission=execution_submission(
@@ -2214,7 +1992,6 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
     registered = interaction.submission is not None and 'registered_input' in interaction.submission
     resources = LocalResourceAdmission(app._workspace, registry=app.registry) if registered else None
     resource_failure = None
-    parameter_failure = None
     def select_outputs(plan):
         if 'native_failure' in admitted:
             origin = next(i for i in sessions.load(sid).interactions
@@ -2352,16 +2129,15 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
 
     def accept(effective, plan, *, reserve=True):
         """Validate the prepared plan; reservation also selects scientific outputs."""
-        nonlocal resource_failure, parameter_failure
+        nonlocal resource_failure
         if type(reserve) is not bool:
             raise TypeError("Plan reservation policy must be boolean.")
         if admitted['tool'] not in {s.tool_name for s in plan.steps}:
             raise IntentError('planning_failed')
         try:
-            _check_parameter_plan(app.registry, plan, admitted, sessions.load(sid).interactions)
+            _check_parameter_plan(app.registry, plan, admitted, sessions.load(sid).interactions,interaction=interaction)
         except IntentError as exc:
             if exc.reason == 'ambiguous_parameter':
-                parameter_failure = exc
                 from agent.orchestration.planner import PlannerError
                 from agent.schemas import ErrorCategory
                 raise PlannerError('AMBIGUOUS_PARAMETER_SCOPE',
@@ -2377,12 +2153,15 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                 admitted=admitted)
             if checked_context != context or checked_locators != context_locators:
                 raise IntentError('unavailable_context')
-        if registered:
+        if registered or interaction.preparation is not None:
             # The last provider call has completed. Check application byte identity
             # before execution; scientific compatibility still belongs to the tools.
             try:
-                resources.validate_plan(interaction.submission, plan)
-                if any(effective.inputs.get(key) != value
+                from .scientific_preparation import validate_direct_source
+                validate_direct_source(sessions.load(sid).interactions, interaction.preparation)
+                if registered:
+                    resources.validate_plan(interaction.submission, plan)
+                if registered and any(effective.inputs.get(key) != value
                        for key, value in interaction.submission['execution_inputs'].items()):
                     raise ResourceAdmissionError('LOCAL_RESOURCE_BINDING_INVALID')
             except ResourceAdmissionError as exc:
@@ -2393,6 +2172,15 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
         if not reserve:
             return
         def link(state):
+            captured = next(i for i in state.interactions if i.turn_id == interaction.turn_id)
+            if captured.preparation is not None:
+                from .preparation_state import head, observation
+                if (state.active_revision_id != captured.base_revision_id
+                        or state.generation != captured.base_generation
+                        or head(state.interactions, captured.preparation['task_id']) != captured
+                        or captured.status != 'admitted'
+                        or (observation(captured) or {}).get('status') != 'READY'):
+                    raise SessionConflictError('Scientific preparation changed before reservation.')
             if ('continuation' in admitted or 'result_edit' in admitted) and (
                     state.active_revision_id != interaction.base_revision_id
                     or state.generation != interaction.base_generation
@@ -2416,7 +2204,12 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
         sessions._store._update(sid, link)
 
     delegate = app.runtime.planner
-    if 'native_plan' in admitted:
+    if prepared_plan is not None:
+        class PreparedPlanner:
+            def plan(self, request, registry):
+                return prepared_plan
+        delegate = PreparedPlanner()
+    elif 'native_plan' in admitted:
         from agent.schemas.run_state import _decode_plan
         class PreparedPlanner:
             def plan(self, request, registry):
@@ -2453,51 +2246,27 @@ def execute(sessions, interaction, admitted, model, *, epizoo_resources=()):
                     native_function=failure['function_name'], argument='kwargs', member='num_clusters')], epizoo_resources)
                 pending['native_failure'] = failure
                 from .turn_decisions import Clarify
-                _update(sessions, interaction.turn_id, status='clarification', prerequisite=pending)
+                from . import preparation_state as preparations
+                from agent.orchestration.semantic_compiler import ScientificRequirement
+                current=next(i for i in state.interactions if i.turn_id==interaction.turn_id)
+                record=current.preparation
+                if record is None:
+                    # Result edits have their own execution entry; the question
+                    # explicitly belongs to the already failed native Run.
+                    record=preparations.start(state.session_id,current,run.request.prompt,
+                        sources=dict(failed_run_id=run.run_id),context=dict(native_failure=failure))
+                requirement=ScientificRequirement(record['candidate_id'],failure['step_id'],'run_episcanpy',
+                    failure['function_name'],'kwargs','kwargs','scalar',member='num_clusters',
+                    dependencies=('failed_run:'+failure['run_id'],)).to_dict()
+                requirement['applicability']=dict(native_failure=failure)
+                result=preparations.question(record,current,[requirement],diagnostics=(dict(
+                    code='NATIVE_CLUSTER_COUNT_REQUIRED',run_id=run.run_id),))
+                pending['preparation_question']=result
+                _update(sessions, interaction.turn_id, status='clarification', prerequisite=pending,preparation=record)
                 return TurnOutcome('clarify', 'clarification',
                     Clarify('missing_parameter_value', tuple(pending['missing']), True), error=step.error)
         return completion_outcome(state, interaction.turn_id, error=result.error)
     error = resource_failure or result.error or next(iter(result.run_result.errors), None)
-    if parameter_failure is not None:
-        from .turn_decisions import Clarify
-        _update(sessions, interaction.turn_id, status='clarification')
-        return TurnOutcome('clarify', 'clarification', Clarify('ambiguous_parameter',
-            parameter_scope_choices(admitted, sessions.load(sid).interactions)))
-    # Selected guidance candidates retain M17.2's missing-input failure contract;
-    # prerequisite continuation captures an ordinary utterance, not candidate context.
-    if not selected and _missing_species(error, interaction.submission):
-        # Presentation of a compiler-authored missing-port fact, not a second
-        # interpretation of the utterance or a repaired scientific plan.
-        from .turn_decisions import Clarify
-        pending = dict(origin_turn_id=interaction.turn_id, field='species',
-                       resource_context_sha256=resource_context_digest(epizoo_resources))
-        _update(sessions, interaction.turn_id, status='clarification', prerequisite=pending)
-        return TurnOutcome('clarify', 'clarification', Clarify('missing_species', ('human', 'mouse'), True))
-    missing = None if selected else _missing_parameters(error, admitted, app.registry)
-    if missing is not None:
-        from .turn_decisions import Clarify
-        tool_name, names = missing
-        pending = dict(origin_turn_id=interaction.turn_id, field='parameters',
-            binding_turn_id=interaction.turn_id, tool=tool_name, missing=names,
-            resource_context_sha256=resource_context_digest(epizoo_resources))
-        _update(sessions, interaction.turn_id, status='clarification', prerequisite=pending)
-        return TurnOutcome('clarify', 'clarification', Clarify('missing_parameter_value', tuple(names), True))
-    if (not selected and 'resource_catalog' in admitted and 'continuation' not in admitted
-            and error is not None and error.code in {
-                'FRAGMENTS_REFERENCE_REQUIRED', 'FRAGMENTS_PROFILE_REQUIRED', 'FRAGMENTS_NAMESPACE_REQUIRED',
-                'FRAGMENTS_RESOURCE_AMBIGUOUS', 'BAM_REFERENCE_REQUIRED', 'BAM_PROFILE_REQUIRED',
-                'BAM_LIBRARY_CONTEXT_REQUIRED', 'BAM_RESOURCE_AMBIGUOUS', 'FASTQ_REFERENCE_REQUIRED',
-                'FASTQ_LIBRARY_CONTEXT_REQUIRED', 'FASTQ_RESOURCE_AMBIGUOUS'}):
-        from .turn_decisions import Clarify
-        from .input_sets import ScientificInputSet
-        from .resource_continuation import offers
-        rows = _serialize(admitted['resource_catalog'])
-        pending = dict(origin_turn_id=interaction.turn_id, binding_turn_id=interaction.turn_id,
-            field='resources', tool=admitted['tool'], resource_context_sha256=digest(rows))
-        _update(sessions, interaction.turn_id, status='clarification', prerequisite=pending)
-        choices = tuple(c['label'] for c in offers(interaction.submission,
-            tuple(ScientificInputSet(**r) for r in rows)))
-        return TurnOutcome('clarify', 'clarification', Clarify('missing_resources', choices, True))
     _update(sessions, interaction.turn_id, status='failed')
     return TurnOutcome('execute', 'failed', error=error,
         text=error.message if error is not None else

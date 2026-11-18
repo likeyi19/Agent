@@ -1,0 +1,26 @@
+{
+  "A": {
+    "origin": "checkpoint-4/provider-023",
+    "utterance": "这是 Human 的 GRCh38 单细胞 ATAC H5AD。请对文件中已有的分组做细胞类型注释，不重新聚类。里面有两个已有分组字段，请让我用界面选一个实际字段。",
+    "response": "{\"turn_schema_version\":1,\"decision\":{\"kind\":\"clarify\",\"reason\":\"ambiguous_parameter\",\"choices\":[]}}",
+    "response_sha256": "d17ca0a7d5e9037b27938dd60bba56621e5dea43381d8cedb6d274f04a6f6a3a"
+  },
+  "B": {
+    "origin": "checkpoint-4/provider-027",
+    "utterance": "请用 MACS3 的 bdgcmp 比较这个 treatment bedGraph 和稍后上传的 control bedGraph，method=subtract。control 还未上传，请先让我补文件。",
+    "response": "{\"turn_schema_version\":1,\"decision\":{\"kind\":\"request_roles\",\"target\":\"run_macs3\",\"arguments\":[{\"tool\":\"run_macs3\",\"argument\":\"function_name\",\"literal\":\"bdgcmp\",\"evidence\":\"请用 MACS3 的 bdgcmp 比较这个 treatment bedGraph 和稍后上传的 control bedGraph\",\"value\":\"bdgcmp\",\"native_function\":null},{\"tool\":\"run_macs3\",\"argument\":\"kwargs\",\"members\":[{\"name\":\"method\",\"kind\":\"string\",\"literal\":\"subtract\",\"evidence\":\"method=subtract\"}],\"native_function\":\"bdgcmp\"}],\"roles\":[{\"tool\":\"run_macs3\",\"port\":\"dataset\",\"source\":\"source.0\"}],\"context\":\"none\",\"input_results\":[],\"references\":[],\"delivery\":[\"explanation\"],\"unfulfilled\":[],\"visualization\":null,\"comparison\":null,\"retain_parameters\":[],\"required_roles\":[{\"tool\":\"run_macs3\",\"port\":\"control\"}]}}",
+    "response_sha256": "91ee7045390c9bab2779902437208da660298cc1da3baf52dde1d57079b38a49"
+  },
+  "C": {
+    "origin": "checkpoint-4/provider-012",
+    "utterance": "请对这个小型技术矩阵用 Scanpy 做 PCA（n_comps=3），随后直接用生成的 PCA 表示构建邻居图（n_neighbors=3）。保留两个步骤结果，并提供最后的 H5AD 下载。这是技术验收数据，不做生物解释。",
+    "response": "{\"turn_schema_version\":1,\"decision\":{\"kind\":\"execute_plan\",\"target\":\"run_scanpy\",\"arguments\":[{\"tool\":\"run_scanpy\",\"argument\":\"function_name\",\"literal\":\"PCA\",\"evidence\":\"用 Scanpy 做 PCA（n_comps=3）\",\"value\":\"pp.pca\",\"native_function\":null},{\"tool\":\"run_scanpy\",\"argument\":\"kwargs\",\"members\":[{\"name\":\"n_comps\",\"kind\":\"number\",\"literal\":\"3\",\"evidence\":\"PCA（n_comps=3）\"}],\"native_function\":\"pp.pca\"},{\"tool\":\"run_scanpy\",\"argument\":\"function_name\",\"literal\":\"构建邻居图\",\"evidence\":\"随后直接用生成的 PCA 表示构建邻居图（n_neighbors=3）\",\"value\":\"pp.neighbors\",\"native_function\":null},{\"tool\":\"run_scanpy\",\"argument\":\"kwargs\",\"members\":[{\"name\":\"n_neighbors\",\"kind\":\"number\",\"literal\":\"3\",\"evidence\":\"邻居图（n_neighbors=3）\"}],\"native_function\":\"pp.neighbors\"},{\"tool\":\"run_scanpy\",\"argument\":\"use_rep\",\"literal\":\"生成的 PCA 表示\",\"evidence\":\"直接用生成的 PCA 表示构建邻居图\",\"value\":\"X_pca\",\"native_function\":\"pp.neighbors\"}],\"roles\":[{\"tool\":\"run_scanpy\",\"port\":\"dataset\",\"source\":\"source.0\"}],\"context\":\"none\",\"input_results\":[],\"references\":[],\"delivery\":[\"explanation\"],\"unfulfilled\":[],\"visualization\":null,\"comparison\":null,\"retain_parameters\":[],\"missing_parameters\":[]}}",
+    "response_sha256": "972041d5005bd052fd5ee2eb252e5ff889c1b136d68c0920e62fe4859c2e6e1c"
+  },
+  "D": {
+    "origin": "checkpoint-4/provider-018",
+    "utterance": "请使用刚才接受结果中的 PCA 表示 X_pca，用 Scanpy 构建邻居图。保持其余原生默认参数，不改变 PCA，也不重新运行上游步骤。",
+    "response": "{\"turn_schema_version\":1,\"decision\":{\"kind\":\"execute_plan\",\"target\":\"run_scanpy\",\"arguments\":[{\"tool\":\"run_scanpy\",\"argument\":\"function_name\",\"literal\":\"pp.neighbors\",\"evidence\":\"用 Scanpy 构建邻居图\",\"value\":\"pp.neighbors\",\"native_function\":null},{\"tool\":\"run_scanpy\",\"argument\":\"use_rep\",\"literal\":\"X_pca\",\"evidence\":\"使用刚才接受结果中的 PCA 表示 X_pca\",\"value\":\"X_pca\",\"native_function\":null},{\"tool\":\"run_scanpy\",\"argument\":\"parameter_selection\",\"literal\":\"native_defaults\",\"evidence\":\"保持其余原生默认参数\",\"value\":\"native_defaults\",\"native_function\":null}],\"roles\":[],\"context\":\"current\",\"input_results\":[\"g0\"],\"references\":[],\"delivery\":[\"explanation\"],\"unfulfilled\":[],\"visualization\":null,\"comparison\":null,\"retain_parameters\":[],\"missing_parameters\":[]}}",
+    "response_sha256": "76b25d9eb89b3baf917e1fa2b1d4f86c19f68509c4f79bb32491e21a31ea596f"
+  }
+}

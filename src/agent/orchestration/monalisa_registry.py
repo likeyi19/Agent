@@ -44,8 +44,8 @@ def tool_spec():
             ports.append(scalar_port(owner.TOOL, tuple(owner.FUNCTIONS), key, required=key in required)
                 if spec.planning.scientific_parameter else scalar(key, required=key in required))
     pub = owner.publication
-    return ToolSpec(native_functions=NativeFunctionCatalog(owner.package, tuple(owner.FUNCTIONS.items())), name=owner.TOOL, function=owner.invoke,
-        required_arguments=required, optional_arguments=optional, parameter_prerequisites=owner.parameter_prerequisites,
+    return ToolSpec(source_encodings={'dataset':('h5ad',),'bins':('tsv',),'genome':('fasta',)}, source_input_types={'dataset':('h5ad',), 'bins':('h5ad','attachment'), 'genome':('fasta',)}, native_functions=NativeFunctionCatalog(owner.package, tuple(owner.FUNCTIONS.items())), name=owner.TOOL, function=owner.invoke,
+        required_arguments=required, optional_arguments=optional, preparation_owner=owner.prepare_operation, parameter_prerequisites=owner.parameter_prerequisites,
         scientific_delivery=delivery_spec(owner, 'scientific_native_result'),
         result_contract=ResultContract('NativeMonaLisaResult', owner.RESULT_FIELDS, planning_fields={k: _planning_result('Exact native enrichment publication.', bindable=True, artifact=A.RAW_SCATAC)
             for k in ('manifest_path', 'manifest_sha256', 'table_path', 'table_sha256')}),

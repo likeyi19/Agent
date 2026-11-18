@@ -47,8 +47,8 @@ def tool_spec():
             request_sources=(request('genome_path',rm('path','genome_path'),rm('sha256','genome_sha256')),)),
         scalar('output_dir',required=True),*(scalar(k,required=False) for k in optional if k not in ('genome_path','genome_sha256'))]
     from .native_delivery import delivery_spec
-    return ToolSpec(scientific_delivery=delivery_spec(owner,'scientific_motifs', h5ad_roles=('motif-accessibility.h5ad',), figure=('patterns.png','motif_accessibility_heatmap')),name=owner.TOOL,function=owner.compute_motif_accessibility,required_arguments=required,optional_arguments=optional,
-        parameter_prerequisites=owner.parameter_prerequisites,
+    return ToolSpec(source_encodings={'dataset':('h5ad',),'genome':('fasta',)}, source_input_types={'dataset':('h5ad',), 'genome':('fasta',)}, scientific_delivery=delivery_spec(owner,'scientific_motifs', h5ad_roles=('motif-accessibility.h5ad',), figure=('patterns.png','motif_accessibility_heatmap')),name=owner.TOOL,function=owner.compute_motif_accessibility,required_arguments=required,optional_arguments=optional,
+        preparation_owner=owner.prepare_operation, parameter_prerequisites=owner.parameter_prerequisites,
         result_contract=ResultContract('MotifAccessibilityResult',owner.RESULT_FIELDS,planning_fields={k:_planning_result(
             'Exact native cell-by-motif result; deviations and z-scores are distinct, never peak counts.',bindable=True,artifact=A.MOTIF_ACCESSIBILITY)
             for k in owner.RESULT_FIELDS if k.endswith(('_path','_sha256'))}),

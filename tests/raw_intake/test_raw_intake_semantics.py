@@ -8,7 +8,7 @@ from agent.orchestration import (
     build_default_tool_registry, build_semantic_planning_catalog,
     SemanticPlanCandidate, SemanticPlanStep, SemanticRequestInputSource,
     SemanticStepOutputSource, SemanticPlanCompileError, compile_semantic_plan,
-    build_m92_semantic_compiler_contract,
+    build_semantic_compiler_contract,
 )
 from agent.orchestration.registry import ArtifactSemanticKind, PlanningToolRole, ToolRegistry
 from agent.orchestration.error_policy import build_recovery_policy_snapshot
@@ -47,7 +47,7 @@ def request():
 
 
 def compile_candidate(req, candidate, registry):
-    return compile_semantic_plan(req, candidate, registry, build_m92_semantic_compiler_contract(registry))
+    return compile_semantic_plan(req, candidate, registry, build_semantic_compiler_contract(registry))
 
 
 def test_registry_and_semantic_artifact_boundaries():

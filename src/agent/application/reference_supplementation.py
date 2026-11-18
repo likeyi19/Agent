@@ -188,14 +188,22 @@ def pending(service, session_id, expected_generation=None, origin_turn_id=None):
     state = service._load(session_id)
     if not state.interactions:
         _fail('First request the scientific analysis that needs this reference.')
-    last = state.interactions[-1]
-    ref = last.prerequisite
-    if (ref is None or ref['field'] != 'resources' or last.base_generation != state.generation
+    from .preparation_state import intake_task, observation, capture_intake
+    captured = capture_intake(state.interactions, state.generation, state.active_revision_id, {})
+    last = (None if captured is None else next(i for i in state.interactions
+            if i.turn_id == captured['binding_turn_id']))
+    if last is not None and intake_task(state.interactions, last.preparation) == 'resources':
+        origin_id = last.preparation['task_origin']
+        active = ((observation(last) or {}).get('status') == 'NEEDS_INPUT'
+                  and last.preparation['candidate_origin'] is None)
+    else:
+        active, origin_id = False, None
+    if (not active or last.base_generation != state.generation
             or last.base_revision_id != state.active_revision_id
             or expected_generation is not None and state.generation != expected_generation
-            or origin_turn_id is not None and ref['origin_turn_id'] != origin_turn_id):
+            or origin_turn_id is not None and origin_id != origin_turn_id):
         _fail('The pending reference request changed. Reopen the current scientific request.')
-    origin = next(i for i in state.interactions if i.turn_id == ref['origin_turn_id'])
+    origin = next(i for i in state.interactions if i.turn_id == origin_id)
     required = _serialize(origin.admitted.get('reference_requirement'))
     if required is None:
         _fail('The current request is not awaiting a genome reference.')

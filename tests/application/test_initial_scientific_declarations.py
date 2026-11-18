@@ -15,7 +15,7 @@ import pytest
 from agent.application.dialogue_execution import scientific_parameters
 from agent.application.session_state import SessionError, digest
 from agent.application.turn_decisions import (
-    Clarify, Execute, IntentError, ScalarChoiceArgument, ScopedArgument, SpeciesAnswer,
+    Clarify, Execute, IntentError, ScalarChoiceArgument, ScopedArgument, SpeciesAnswer, NativeStructuredArgument, ArgumentMember,
     admit_scientific_argument, decision_schema, interpret, parse_decision,
 )
 from agent.orchestration import build_default_tool_registry
@@ -45,7 +45,9 @@ def choice(utterance, literal='human', value='human', *, tool='epizoo_embed_cell
 
 def numeric(utterance, literal='0.7'):
     start = utterance.index(literal)
-    return ScopedArgument('cluster_cells', 'resolution', literal, start, start + len(literal))
+    return NativeStructuredArgument(tool='run_snapatac2',native_function='tl.leiden',argument='kwargs',
+        literal=literal,start=start,end=start+len(literal),
+        members=(ArgumentMember('resolution','number',literal,start,start+len(literal)),))
 
 
 def wire(decision):
@@ -71,8 +73,10 @@ class InitialWitness(MappingWitness):
             self.calls.append(value)
             if self.initial_decision is not None:
                 return wire(self.initial_decision)
-            decision = dict(kind='execute_plan', target='compute_cell_umap',
-                arguments=[asdict(item) for item in self.declarations])
+            decision = dict(kind='execute_plan', target='run_snapatac2',
+                arguments=[dict(tool=item.tool,native_function=item.native_function,argument=item.argument,
+                    members=[dict(name=m.name,kind=m.kind,literal=m.literal,evidence=self.objective) for m in item.members])
+                    if isinstance(item,NativeStructuredArgument) else asdict(item) for item in self.declarations])
             return wire(decision)
         raw = super().complete(prompt=prompt, response_schema=response_schema)
         if self.repeated and 'semantic_prompt_version' in value:
@@ -139,14 +143,15 @@ def assert_admitted(h, result, *, species='human', objective=EXPLICIT, extra=Non
     interaction = state.interactions[-1]
     assert interaction.prerequisite is None
     received = _serialize(binding.execution_inputs)
-    if 'continuation' not in interaction.admitted:
-        assert interaction.submission['execution_inputs'] == received
-    selected = interaction.admitted['inputs']['expected_resource_identity']['resource_id']
+    continued = interaction.preparation['previous'] is not None
+    assert state.interactions[0].submission['execution_inputs'] == received
+    selected = plan.steps[0].arguments['expected_resource_identity']['resource_id']
     resource = next(row for row in ScientificResourceLibrary(config.scientific_resource_root).models() if row.species == species and row.resource_id == selected)
     expected = received | dict(species=species) | resource.inputs() | (extra or {})
-    assert _serialize(interaction.admitted['inputs']) == expected
-    assert interaction.admitted['registered_input']['resource_id'] == record.resource_id
-    assert interaction.admitted['registered_input']['record_sha256'] == record.record_sha256
+    assert _serialize(interaction.admitted['inputs']) == (state.interactions[0].admitted['inputs'] if continued else expected)
+    source = state.interactions[0].submission['registered_input'] if continued else interaction.admitted['registered_input']
+    assert source['resource_id'] == record.resource_id
+    assert source['record_sha256'] == record.record_sha256
     for key, value in expected.items():
         if key in ('input_path', 'species', 'device', 'checkpoint_path', 'expected_resource_identity'):
             assert _serialize(plan.steps[0].arguments[key]) == value
@@ -159,13 +164,13 @@ def assert_admitted(h, result, *, species='human', objective=EXPLICIT, extra=Non
 def test_old_numeric_wire_and_new_choice_wire_share_one_arguments_contract():
     utterance = EXPLICIT + ' Use resolution 0.7.'
     declarations = (choice(utterance), numeric(utterance))
-    parsed = parse_decision(wire(dict(kind='execute_plan', target='compute_cell_umap',
+    parsed = parse_decision(wire(dict(kind='execute_plan', target='run_snapatac2',
         arguments=[asdict(item) for item in declarations])))
-    assert parsed == Execute('compute_cell_umap', arguments=declarations)
-    assert parse_decision(wire(dict(kind='execute_plan', target='cluster_cells',
-        arguments=[asdict(declarations[1])]))) == Execute('cluster_cells',
+    assert parsed == Execute('run_snapatac2', arguments=declarations)
+    assert parse_decision(wire(dict(kind='execute_plan', target='run_snapatac2',
+        arguments=[asdict(declarations[1])]))) == Execute('run_snapatac2',
             arguments=declarations[1:])
-    assert parse_decision(wire(dict(kind='execute_plan', target='compute_cell_umap'))) == Execute('compute_cell_umap')
+    assert parse_decision(wire(dict(kind='execute_plan', target='run_snapatac2'))) == Execute('run_snapatac2')
 
 
 def test_reviewed_species_and_fragment_choices_are_offered_in_closed_schema():
@@ -207,14 +212,14 @@ def test_canonical_choice_is_provider_owned_and_span_is_exact(utterance, literal
 def test_choice_wire_remains_closed_and_strict(change):
     item = asdict(choice(EXPLICIT)) | change
     with pytest.raises(IntentError, match='invalid_decision'):
-        parse_decision(wire(dict(kind='execute_plan', target='compute_cell_umap', arguments=[item])))
+        parse_decision(wire(dict(kind='execute_plan', target='run_snapatac2', arguments=[item])))
 
 
 @pytest.mark.parametrize('literal', [' ', '\t\n'])
 def test_whitespace_only_choice_literal_cannot_ground_a_scientific_declaration(literal):
     item = asdict(choice(EXPLICIT)) | dict(literal=literal, start=0, end=len(literal))
     with pytest.raises(IntentError, match='invalid_decision'):
-        parse_decision(wire(dict(kind='execute_plan', target='compute_cell_umap', arguments=[item])))
+        parse_decision(wire(dict(kind='execute_plan', target='run_snapatac2', arguments=[item])))
 
 
 @pytest.mark.parametrize('kind', ['answer_prerequisite', 'answer_parameters'])
@@ -234,12 +239,16 @@ def test_choice_argument_respects_species_and_shared_parameter_contracts(kind):
 
 
 @pytest.mark.parametrize('change', [dict(literal='Human'), dict(start=0), dict(end=len(EXPLICIT) + 1),
-                                  dict(value='macaque')])
+                                  dict(literal='human', value='macaque')])
 def test_invalid_or_ungrounded_choice_never_becomes_a_default(change):
     item = replace(choice(EXPLICIT), **change)
     spec = build_default_tool_registry().get('epizoo_embed_cells').required_arguments['species']
-    with pytest.raises(IntentError):
-        admit_scientific_argument(item, EXPLICIT, spec)
+    if change.get('value') == 'macaque':
+        # Exact offered literal outranks a contradictory model normalization.
+        assert admit_scientific_argument(item, EXPLICIT, spec) == 'human'
+    else:
+        with pytest.raises(IntentError):
+            admit_scientific_argument(item, EXPLICIT, spec)
 
 
 def test_prompt_assigns_dataset_declaration_and_model_support_meaning_to_interpreter():
@@ -250,7 +259,7 @@ def test_prompt_assigns_dataset_declaration_and_model_support_meaning_to_interpr
             assert 'model supporting human and mouse' in instructions and 'not a declaration' in instructions
             assert 'never infer species' in instructions
             assert captured['utterance'] == SUPPORTED
-            return wire(dict(kind='execute_plan', target='compute_cell_umap', arguments=[]))
+            return wire(dict(kind='execute_plan', target='run_snapatac2', arguments=[]))
     assert interpret(Model(), SUPPORTED, public()).arguments == ()
 
 
@@ -262,12 +271,12 @@ def test_supported_new_request_with_omitted_declaration_reaches_existing_compile
             variants = expand(response_schema)['properties']['decision']['anyOf']
             execution, = [v['properties'] for v in variants
                           if v['properties']['kind']['enum'] == ['execute_plan']]
-            assert 'compute_cell_umap' in captured['dialogue']['capabilities']
+            assert 'run_snapatac2' in captured['dialogue']['capabilities']
             assert execution['arguments'].get('minItems', 0) == 0
             assert not captured['dialogue'].get('pending_prerequisite')
-            return wire(dict(kind='execute_plan', target='compute_cell_umap', arguments=[]))
+            return wire(dict(kind='execute_plan', target='run_snapatac2', arguments=[]))
     decision = interpret(Model(), OMITTED, public())
-    assert decision == Execute('compute_cell_umap')
+    assert decision == Execute('run_snapatac2')
 
 
 
@@ -374,27 +383,29 @@ def test_fresh_missing_species_or_unoffered_answer_cannot_create_a_durable_prere
 def test_omitted_or_model_support_only_species_keeps_durable_pending_and_original_resume(tmp_path, objective):
     h = harness(tmp_path, objective=objective, declarations=())
     initial = submit(h, objective)
-    assert initial.status == 'clarification' and initial.response.clarification['reason'] == 'missing_species'
+    assert initial.status == 'clarification' and initial.response.clarification['reason'] == 'missing_parameter_value'
     assert not h[4].plans
     state = assert_no_publication(h)
-    assert state.interactions[0].prerequisite['origin_turn_id'] == 'initial'
+    assert state.interactions[0].prerequisite is None
+    assert state.interactions[0].preparation['task_origin'] == 'initial'
     before = len(h[5])
     restored = h[6]()
     assert restored.turn('session', 'initial') == initial
     restored.reopen_session('session')
     assert len(h[5]) == before
-    answer = restored.submit_turn('session', 'answer', 'These are human cells.', expected_generation=0)
+    answer = restored.submit_turn('session','answer','These are human cells.',expected_generation=0)
     state = assert_admitted(h, answer, objective=objective)
-    assert state.interactions[-1].admitted['continuation']['origin_turn_id'] == 'initial'
+    assert state.interactions[-1].preparation['task_origin'] == 'initial'
+    assert sum('semantic_prompt_version' in c for c in h[5]) == 1
 
 
 def test_initial_species_and_numeric_resolution_share_exact_consumer_binding(tmp_path):
     objective = EXPLICIT + ' Use resolution 0.7.'
     h = harness(tmp_path, objective=objective, declarations=(choice(objective), numeric(objective)))
     result = submit(h, objective)
-    state = assert_admitted(h, result, objective=objective, extra=dict(resolution=.7))
-    assert state.interactions[0].admitted['inputs']['resolution'] == .7
-    assert h[4].plans[0].steps[2].arguments['resolution'] == .7
+    state = assert_admitted(h, result, objective=objective, extra={__import__('agent.orchestration.native_parameters',fromlist=['input_name']).input_name('run_snapatac2','tl.leiden','kwargs'):{'resolution':.7}})
+    assert next(v for k,v in state.interactions[0].admitted['inputs'].items() if k.endswith('kwargs'))['resolution'] == .7
+    assert h[4].plans[0].steps[2].arguments['kwargs']['resolution'] == .7
     assert 'n_neighbors' not in h[4].plans[0].steps[1].arguments
     assert 'min_dist' not in h[4].plans[0].steps[3].arguments
 
@@ -404,11 +415,11 @@ def test_initial_choice_and_numeric_resolution_share_generic_binding_records(tmp
     resolution = numeric(objective)
     h = harness(tmp_path, objective=objective, declarations=(resolution, choice(objective)))
     result = submit(h, objective)
-    state = assert_admitted(h, result, objective=objective, extra=dict(resolution=.7))
+    state = assert_admitted(h, result, objective=objective, extra={__import__('agent.orchestration.native_parameters',fromlist=['input_name']).input_name('run_snapatac2','tl.leiden','kwargs'):{'resolution':.7}})
     admitted = state.interactions[0].admitted
     assert 'argument' not in admitted
-    assert _serialize(admitted['arguments']) == [asdict(resolution), asdict(choice(objective))]
-    assert h[4].plans[0].steps[2].arguments['resolution'] == .7
+    assert _serialize(admitted['arguments']) == _serialize([asdict(resolution), asdict(choice(objective))])
+    assert h[4].plans[0].steps[2].arguments['kwargs']['resolution'] == .7
 
 
 @pytest.mark.parametrize('mode,code', [('missing', 'EPIZOO_RESOURCE_REQUIRED'),
@@ -480,6 +491,7 @@ def test_valid_checksum_cannot_conceal_changed_initial_declaration_binding(tmp_p
         del admitted['arguments']
     elif mutation == 'value':
         admitted['arguments'][0]['value'] = 'mouse'
+        admitted['arguments'][0]['literal'] = 'mouse'
     elif mutation == 'source':
         admitted['inputs']['input_path'] = str(tmp_path / 'different.h5ad')
     elif mutation == 'device':
@@ -497,3 +509,61 @@ def test_valid_checksum_cannot_conceal_changed_initial_declaration_binding(tmp_p
     finally:
         path.write_bytes(original)
     assert counts == (len(h[5]), len(h[4].plans))
+
+
+@pytest.mark.parametrize('mode,code',[('missing','EPIZOO_RESOURCE_REQUIRED'),('ambiguous','EPIZOO_RESOURCE_AMBIGUOUS')])
+def test_canonical_species_answer_cannot_bypass_captured_model_selection(tmp_path,mode,code):
+    def resources(rows):
+        if mode=='missing':
+            return tuple(row for row in rows if row.species!='human')
+        human=next(row for row in rows if row.species=='human')
+        return rows+(replace(human,resource_id='human-other'),)
+    h=harness(tmp_path,objective=OMITTED,declarations=(),resources=resources)
+    first=submit(h,OMITTED)
+    assert first.status=='clarification',first.to_dict()
+    before=h[0]._application.sessions.load('session')
+    result=h[0].submit_turn('session','answer','These are human cells.',expected_generation=0)
+    assert result.status=='failed' and result.error.code==code,result.to_dict()
+    state=h[0]._application.sessions.load('session')
+    assert state.interactions[0]==before.interactions[0]
+    assert state.interactions[-1].admitted['preparation_result']['status']=='INVALID'
+    assert not state.turns and not state.revisions and not h[4].plans
+    assert sum('semantic_prompt_version' in c for c in h[5])==1
+    assert not list(h[0]._application.run_store.root.glob('*.json'))
+
+
+@pytest.mark.parametrize('changed_existing',[False,True])
+def test_explicit_resume_recaptures_added_qualified_model_without_replanning(tmp_path,changed_existing):
+    captured=[]
+    def missing_human(rows):
+        captured.extend(rows)
+        return tuple(row for row in rows if row.species!='human')
+    h=harness(tmp_path,objective=OMITTED,declarations=(),resources=missing_human)
+    first=submit(h,OMITTED)
+    failure=h[0].submit_turn('session','answer','These are human cells.',expected_generation=0)
+    assert failure.error.code=='EPIZOO_RESOURCE_REQUIRED',failure.to_dict()
+    before=h[0]._application.sessions.load('session')
+    calls=len(h[5])
+    from test_human_epizoo_mapping import model_library
+    rows=tuple(replace(row,label='Changed captured label') if changed_existing and row.species=='mouse' else row for row in captured)
+    model_library(h[1].scientific_resource_root,rows)
+    fresh=h[6]()
+    result=fresh.submit_turn('session','resume','',expected_generation=0,resume_task_id=first.preparation_task_id)
+    state=fresh._application.sessions.load('session')
+    assert state.interactions[:len(before.interactions)]==before.interactions
+    assert len(h[5])==calls and not h[4].plans and not state.turns
+    assert state.interactions[-1].preparation['candidate_id']==before.interactions[-1].preparation['candidate_id']
+    if changed_existing:
+        assert result.status=='failed' and result.error.code=='PREPARATION_RESOURCE_CHANGED',result.to_dict()
+        model_library(h[1].scientific_resource_root,tuple(captured))
+        restored=h[6]()
+        result=restored.submit_turn('session','restored','',expected_generation=0,resume_task_id=first.preparation_task_id)
+        recovered=restored._application.sessions.load('session')
+        assert result.status=='answered',result.to_dict()
+        assert recovered.interactions[-1].admitted['preparation_result']['status']=='READY'
+        assert recovered.interactions[:-1]==state.interactions
+        assert len(h[5])==calls and not h[4].plans and not recovered.turns
+    else:
+        assert result.status=='answered',result.to_dict()
+        assert state.interactions[-1].admitted['preparation_result']['status']=='READY'
+    assert fresh._application.sessions.load('session').interactions[:len(state.interactions)]==state.interactions

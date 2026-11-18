@@ -95,15 +95,34 @@ def test_repeated_parameter_scope_rejects_ambiguity_and_substitution(mutation):
         else:
             steps[1] = replace(steps[1], arguments=dict(steps[1].arguments, species='human'))
         plan = replace(plan, steps=tuple(steps))
-    with pytest.raises(IntentError):
+    if mutation in ('missing_scope','extra'):
         _check_parameter_plan(registry, plan, admitted, ())
+        if mutation=='extra':
+            with pytest.raises(ResourceAdmissionError):
+                owner._validate_group_consumption(binding,plan.steps)
+        else:
+            owner._validate_group_consumption(binding,plan.steps)
+            wrong=replace(plan.steps[0],arguments=dict(plan.steps[0].arguments,species='human'))
+            with pytest.raises(IntentError):
+                _check_parameter_plan(registry,replace(plan,steps=(wrong,)+plan.steps[1:]),admitted,())
+    else:
+        with pytest.raises(IntentError):
+            _check_parameter_plan(registry, plan, admitted, ())
 
 
 def test_conflicting_shared_parameter_values_do_not_silently_override_sources():
-    registry, declarations, *_ = example()
+    registry, declarations, binding, plan, admitted, _ = example()
     declarations = (declarations[0], replace(declarations[1], literal='human', start=6, end=11, value='human'))
+    admitted['inputs']=_bind_arguments(registry, 'mouse human',dict(binding.execution_inputs),declarations,replace_existing=True)
+    admitted['arguments']=[asdict(d) for d in declarations]
+    origin=SimpleNamespace(turn_id='origin',admitted=admitted,utterance='mouse human',preparation=None)
+    changed=replace(plan.steps[1],arguments=dict(plan.steps[1].arguments,species='human'))
+    _check_parameter_plan(registry,replace(plan,steps=(plan.steps[0],changed,plan.steps[2])),admitted,(origin,),interaction=origin)
+    with pytest.raises(IntentError):
+        _check_parameter_plan(registry,plan,admitted,(origin,),interaction=origin)
     with pytest.raises(IntentError, match='conflicting_scientific_parameter'):
-        _bind_arguments(registry, 'mouse human', {}, declarations, replace_existing=True)
+        _bind_arguments(registry, 'mouse human', {},
+            (declarations[0],replace(declarations[1],source=declarations[0].source)),replace_existing=True)
 
 
 @pytest.mark.parametrize('mutation', ['swap', 'substitute', 'unused', 'duplicate'])
@@ -131,8 +150,11 @@ def test_scoped_records_reject_invalid_historical_shapes_and_duplicate_identity(
     invalid = asdict(declarations[0]) | {'source': 'source.99'}
     with pytest.raises(ValueError):
         _scientific_arguments([invalid])
+    assert _scientific_arguments([asdict(declarations[0]) | {'step_id': 'first'}])[0].step_id=='first'
+    registry,_,_,plan,admitted,_=example()
+    admitted['arguments']=[asdict(declarations[0]) | {'step_id': 'missing_step'}]
     with pytest.raises(IntentError):
-        _scientific_arguments([asdict(declarations[0]) | {'step_id': 'first'}])
+        _check_parameter_plan(registry,plan,admitted,())
 
 
 def test_current_initialization_omits_training_choices_but_historical_declarations_remain_readable():
@@ -152,7 +174,7 @@ def test_accepted_parameter_evidence_uses_the_same_source_scope_owner():
     from agent.application.dialogue_evidence import _explicit_user_parameter_facts, _Unavailable
     registry, declarations, binding, plan, admitted, _ = example()
     admitted.update(kind='execute', operation='plan', request_id='request')
-    interaction = SimpleNamespace(turn_id='turn', admitted=admitted, utterance='mouse',
+    interaction = SimpleNamespace(turn_id='turn', admitted=admitted, utterance='mouse', preparation=None,
         snapshot={}, base_generation=0, base_revision_id=None)
     state = SimpleNamespace(turns=[SimpleNamespace(run_id='run', turn_id='turn')], interactions=[interaction])
     run = SimpleNamespace(run_id='run', request_id='request', plan=plan)

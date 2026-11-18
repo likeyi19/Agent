@@ -14,6 +14,7 @@ from agent.schemas import ErrorCategory, JsonValue, VerificationResult
 from .planner import PlannerError
 from .planning_diagnostics import (
     DiagnosedPlanningAttempt,
+    DiagnosedCandidateAttempt,
     PlanningAttemptKind,
     PlanningDiagnostic,
     PlanningDiagnosticContext,
@@ -250,9 +251,12 @@ class RecoveredPlanningAttempt:
     failover_used: bool
 
     def __post_init__(self) -> None:
-        if not isinstance(self.attempt, DiagnosedPlanningAttempt):
+        if not isinstance(self.attempt, (DiagnosedPlanningAttempt, DiagnosedCandidateAttempt)):
             raise TypeError("`attempt` must be a DiagnosedPlanningAttempt.")
-        if (
+        if isinstance(self.attempt, DiagnosedCandidateAttempt):
+            if self.preflight is not None:
+                raise ValueError('Candidate acquisition cannot claim executable preflight.')
+        elif (
             not isinstance(self.preflight, VerificationResult)
             or not self.preflight.passed
         ):
@@ -679,8 +683,27 @@ class PlanningRecoveryCoordinator:
             last_context = candidate.context
             emit(candidate.diagnostics)
             check_cancel()
+            if isinstance(candidate, DiagnosedCandidateAttempt) and candidate.analysis.error is not None:
+                error = candidate.analysis.error
+                from .llm_planner import _SEMANTIC_COMPILER_STAGES, _SEMANTIC_COMPILER_REASONS
+                failure = candidate.context.diagnostic(
+                    _SEMANTIC_COMPILER_STAGES.get(error.code, PlanningDiagnosticStage.CANDIDATE),
+                    error.code, 'failed', reason_code=_SEMANTIC_COMPILER_REASONS.get(error.code, 'semantic_compilation_failed'))
+                emit((failure,))
+                if can_repair(failure):
+                    schedule_repair(candidate.context, failure)
+                    continue
+                if can_failover(failure):
+                    schedule_failover(candidate.context, failure)
+                    continue
+                # Retain the final parsed graph for precise INVALID presentation
+                # and owner-scoped correction. It has no executable preflight.
+                return RecoveredPlanningAttempt(candidate, None, tuple(diagnostics), provider_calls,
+                    transport_retries > 0, repairs > 0, failovers > 0)
             try:
                 preflight, preflight_diagnostics = validate_candidate(candidate)
+                if preflight is None and not isinstance(candidate, DiagnosedCandidateAttempt):
+                    raise TypeError('Executable planning requires authoritative preflight.')
             except Exception as exc:
                 context = candidate.context
                 failure = context.diagnostic(
@@ -730,7 +753,7 @@ class PlanningRecoveryCoordinator:
                 ) from exc
 
             emit(preflight_diagnostics)
-            if not preflight.passed:
+            if preflight is not None and not preflight.passed:
                 failure = preflight_diagnostics[-1]
                 error = preflight.error
                 planner_error = PlannerError(

@@ -29,6 +29,7 @@ from agent.tools.analysis.epizoo_embedding import (
     EpiZooResourceIdentityError,
     validate_expected_resource_identity,
     validate_resource_provenance,
+    planned_output_properties as epizoo_planned_output_properties,
 )
 from agent.tools.data.raw_scatac import RawScATACError, RawScATACInspection
 from agent.tools.data._raw_fastq import FastqInspectionError
@@ -170,8 +171,11 @@ class ArgumentPlanningSemantics:
     conversational_json_object: bool = False
     conversational_members: tuple[tuple[str, str], ...] = ()
     observation_source: str | None = None
+    observation_axis: str = 'obs'
 
     def __post_init__(self) -> None:
+        if self.observation_axis not in ('obs', 'var', 'uns', 'obsm') or self.observation_source is None and self.observation_axis != 'obs':
+            raise ValueError('Source field axes require a registered observation source.')
         _planning_text(
             self.description,
             "description",
@@ -413,6 +417,8 @@ class SemanticProducerPortSpec:
     members: tuple[SemanticPortMember, ...]
     lineage_from_port: str | None = None
     accepted_file_sha256_field: str | None = None
+    identity_from_port: str | None = None
+    observation_sha256_field: str | None = None
 
     def __post_init__(self) -> None:
         _planning_text(self.name, "producer port name", 128)
@@ -423,6 +429,8 @@ class SemanticProducerPortSpec:
             raise TypeError(
                 "Semantic producer ports require SemanticPortMember values."
             )
+        if self.observation_sha256_field is not None:
+            _planning_text(self.observation_sha256_field,'observation digest field',128)
         if self.accepted_file_sha256_field is not None:
             _planning_text(self.accepted_file_sha256_field, 'accepted file digest field', 128)
             if len(self.members) != 1:
@@ -723,6 +731,7 @@ class NativeFunctionCatalog:
     package: str
     functions: tuple[tuple[str, tuple[str, ...]], ...]
     parameter_metadata: Callable | None = field(default=None, compare=False, repr=False)
+    output_available: Callable | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self):
         _planning_text(self.package, 'native package', 128)
@@ -757,6 +766,11 @@ class ToolSpec:
     # Optional native-owner projection of unresolved parameters from bound
     # request inputs. This supplies questions, never execution/validity authority.
     parameter_prerequisites: Callable[[Mapping[str, object]], tuple[str, ...]] | None = None
+    preparation_owner: Callable | None = None
+    planned_output_properties: Callable | None = None
+    source_input_types: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    source_request_aliases: Mapping[str, str] = field(default_factory=dict)
+    source_encodings: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     native_functions: NativeFunctionCatalog | None = None
     application_inputs: frozenset[str] = field(default_factory=frozenset)
     # Reviewed, internal annotation orchestration only. No production tool opts
@@ -774,6 +788,20 @@ class ToolSpec:
             raise ValueError('Annotation children must be distinct registered tool names.')
         if self.annotation_children and (self.durable_hooks is None or self.retryable_error_codes):
             raise ValueError('Annotation orchestration requires durable hooks and no automatic retries.')
+        if self.planned_output_properties is not None and not callable(self.planned_output_properties):
+            raise TypeError('Planned output property owner must be callable.')
+        if self.preparation_owner is not None and not callable(self.preparation_owner):
+            raise TypeError('Selected-operation preparation owner must be callable.')
+        ports = {p.name: p for p in (() if self.semantic_planning is None else self.semantic_planning.consumer_ports)}
+        if (set(self.source_input_types) - ports.keys()
+                or any(not isinstance(types, tuple) or not types for types in self.source_input_types.values())
+                or set(self.source_request_aliases) - self.source_input_types.keys()):
+            raise ValueError('Source admission must describe registered consumer ports and physical types.')
+        if set(self.source_encodings) - self.source_input_types.keys():
+            raise ValueError('Physical encoding metadata requires an authorized source port.')
+        object.__setattr__(self, 'source_encodings', MappingProxyType(dict(self.source_encodings)))
+        object.__setattr__(self, 'source_input_types', MappingProxyType(dict(self.source_input_types)))
+        object.__setattr__(self, 'source_request_aliases', MappingProxyType(dict(self.source_request_aliases)))
         if self.parameter_prerequisites is not None and not callable(self.parameter_prerequisites):
             raise TypeError('Tool parameter prerequisites must be callable.')
         if self.durable_hooks is not None and not isinstance(self.durable_hooks, DurableToolHooks):
@@ -1002,6 +1030,8 @@ def _validate_semantic_tool_spec(spec: ToolSpec) -> None:
 
     consumer_set = set(consumer_names)
     for port in semantic.producer_ports:
+        if port.observation_sha256_field is not None and (len(port.members)!=1 or spec.result_contract.required_fields.get(port.observation_sha256_field)!=(str,)):
+            raise ValueError('Observable publication files require one result member and its exact digest.')
         if port.accepted_file_sha256_field is not None:
             field = port.members[0].field_name
             metadata = spec.result_contract.planning_fields.get(field)
@@ -1019,6 +1049,10 @@ def _validate_semantic_tool_spec(spec: ToolSpec) -> None:
                     f"Semantic producer port {spec.name}.{port.name} names "
                     f"unknown result field {result_field!r}."
                 )
+        if port.identity_from_port is not None:
+            inputs = [p for p in semantic.consumer_ports if p.name==port.identity_from_port]
+            if len(inputs)!=1 or len(inputs[0].members)!=1 or len(port.members)!=1:
+                raise ValueError('Byte-transparent output requires one exact registered source member.')
         if (
             port.lineage_from_port is not None
             and port.lineage_from_port not in consumer_set
@@ -1157,7 +1191,7 @@ class ToolRegistry:
             ) from exc
 
     def validate_arguments(
-        self, name: str, arguments: Mapping[str, object]
+        self, name: str, arguments: Mapping[str, object], *, require_complete: bool = True
     ) -> Mapping[str, object]:
         spec = self.get(name)
         if not isinstance(arguments, Mapping):
@@ -1167,7 +1201,7 @@ class ToolRegistry:
         known = required.union(spec.optional_arguments)
         missing = sorted(required.difference(supplied))
         unknown = sorted(supplied.difference(known))
-        if missing:
+        if missing and require_complete:
             raise ToolArgumentError(
                 f"Tool {name!r} is missing required arguments: {missing}."
             )
@@ -1726,6 +1760,7 @@ def _planning_argument(
     conversational_json_object: bool = False,
     conversational_members: tuple[tuple[str, str], ...] = (),
     observation_source: str | None = None,
+    observation_axis: str = 'obs',
     provenance: PlanningProvenanceRole | None = None,
     conditional_note: str | None = None,
 ) -> ArgumentSpec:
@@ -1743,6 +1778,7 @@ def _planning_argument(
             conversational_json_object=conversational_json_object,
             conversational_members=conversational_members,
             observation_source=observation_source,
+            observation_axis=observation_axis,
             provenance_role=provenance,
             conditional_note=conditional_note,
         ),
@@ -1821,6 +1857,7 @@ def build_default_tool_registry() -> ToolRegistry:
     composable = PlanningSourceEligibility.REQUEST_INPUT_OR_UPSTREAM_RESULT
     branch = PlanningProvenanceRole.BRANCH_PRESERVING
     inspect_spec = ToolSpec(
+        source_encodings={'dataset': ('h5ad',)}, source_input_types={'dataset': ('h5ad',)}, source_request_aliases={'dataset':'input_path'},
         name="inspect_scATAC",
         function=inspect_scATAC,
         required_arguments={
@@ -1900,14 +1937,19 @@ def build_default_tool_registry() -> ToolRegistry:
                     "dataset",
                     "raw_scatac_dataset.v1",
                     (_semantic_member("dataset", "input_path"),),
-                    lineage_from_port="dataset",
+                    lineage_from_port="dataset", identity_from_port="dataset",
                 ),
             ),
         ),
     )
+    from agent.application.local_resources import prepare_epizoo_operation
     embedding_spec = ToolSpec(
+        source_encodings={'dataset': ('h5ad',)}, source_input_types={'dataset': ('h5ad',)},
+        preparation_owner=prepare_epizoo_operation,
+        planned_output_properties=epizoo_planned_output_properties,
         name="epizoo_embed_cells",
         function=epizoo_embed_cells,
+        application_inputs=frozenset({'checkpoint_path', 'expected_resource_identity'}),
         required_arguments={
             "input_path": _planning_argument(
                 path_types,
@@ -2111,6 +2153,7 @@ def build_default_tool_registry() -> ToolRegistry:
         ),
     )
     evaluation_spec = ToolSpec(
+        source_encodings={'analysis': ('h5ad',), 'ground_truth_dataset': ('h5ad',)}, source_input_types={'analysis': ('h5ad',), 'ground_truth_dataset': ('h5ad',)},
         name="evaluate_cell_clustering",
         function=evaluate_cell_clustering,
         required_arguments={
@@ -2260,6 +2303,7 @@ def build_default_tool_registry() -> ToolRegistry:
         ),
     )
     label_transfer_spec = ToolSpec(
+        source_encodings={'reference_dataset': ('h5ad',), 'query_dataset': ('h5ad',)}, source_input_types={'reference_dataset': ('h5ad',), 'query_dataset': ('h5ad',)},
         name="transfer_cell_labels",
         function=transfer_cell_labels,
         required_arguments={
@@ -2557,7 +2601,10 @@ def build_default_tool_registry() -> ToolRegistry:
             ),
         ),
     )
+    from agent.tools.analysis import replicate_pseudobulk as feature_owner
     feature_space_spec = ToolSpec(
+        preparation_owner=feature_owner.prepare_feature_space,
+        source_encodings={'input_path': ('h5ad',)}, source_input_types={'input_path': ('h5ad',)},
         name="validate_scATAC_feature_space",
         function=validate_scATAC_feature_space,
         required_arguments={
@@ -2750,11 +2797,14 @@ def build_default_tool_registry() -> ToolRegistry:
                     "feature_space",
                     "validated_feature_space.v1",
                     (_semantic_member("artifact", "feature_space_path"),),
+                    observation_sha256_field="feature_space_sha256",
                 ),
             ),
         ),
     )
     pseudobulk_spec = ToolSpec(
+        preparation_owner=feature_owner.prepare_pseudobulk,
+        application_inputs=frozenset({'group_annotation_path'}),
         name="build_replicate_pseudobulk",
         function=build_replicate_pseudobulk,
         required_arguments={
@@ -2903,11 +2953,14 @@ def build_default_tool_registry() -> ToolRegistry:
                     "pseudobulk",
                     "replicate_pseudobulk.v1",
                     (_semantic_member("artifact", "pseudobulk_path"),),
+                    observation_sha256_field="pseudobulk_sha256",
                 ),
             ),
         ),
     )
+    from agent.tools.analysis import differential_accessibility as da_owner
     differential_accessibility_spec = ToolSpec(
+        preparation_owner=da_owner.prepare_operation,
         name="run_replicate_differential_accessibility",
         function=run_replicate_differential_accessibility,
         required_arguments={

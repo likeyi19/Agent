@@ -80,7 +80,7 @@ def validate_selection(state, interaction, preceding):
     if 'scope_selection' in a:
         return  # The exact captured plan continuation is checked by validate_scope.
     _shape(a, ('kind','operation','tool','revision_id','request_id','inputs',
-               'selected_candidate','command_evidence','catalog_sha256') + tuple(k for k in ('arguments', 'parameter_scope', 'scope_selection', 'native_plan', 'native_planning_trace', 'native_resource_bindings') if k in a))
+               'selected_candidate','command_evidence','catalog_sha256') + tuple(k for k in ('arguments', 'parameter_scope', 'scope_selection', 'native_plan', 'native_planning_trace', 'native_resource_bindings', 'preparation_result') if k in a))
     r = a['selected_candidate']
     if (a['kind'] != 'execute' or a['operation'] != 'plan'
             or r not in [_serialize(v) for v in candidates(preceding, interaction.snapshot)]

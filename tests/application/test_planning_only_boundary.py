@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-pytestmark = pytest.mark.usefixtures('isolated_binding_catalog')
+
 
 from scipy import sparse
 
@@ -82,13 +82,15 @@ def prevent_execution_and_publication(monkeypatch):
 
 
 def wire_steps():
-    def step(name, tool, target=None, source=None):
-        return dict(step_id=name, tool=tool, control_dependencies=[],
-                    sources=[] if target is None else [dict(kind='step', target=target, step=source)])
-    return [step('pca', 'mock_embed_cells'),
-            step('graph', 'build_cell_neighbors', 'embedding', 'pca'),
-            step('clusters', 'cluster_cells', 'analysis', 'graph'),
-            step('umap', 'compute_cell_umap', 'analysis', 'clusters')]
+    steps = []
+    for sid, function, parent in [('pca','pp.pca',None), ('graph','pp.neighbors','pca'),
+                                  ('clusters','tl.leiden','graph'), ('umap','tl.umap','clusters')]:
+        source = dict(kind='input',input='input_path') if parent is None else dict(
+            kind='step_port',step=parent,source_port='dataset')
+        steps.append(dict(step_id=sid,tool='run_scanpy',control_dependencies=[],sources=[
+            dict(target='dataset',source=source),
+            dict(target='function_name',source=dict(kind='registered_choice',choice=function))]))
+    return steps
 
 
 class ScriptedPlanningModel:
@@ -101,10 +103,10 @@ class ScriptedPlanningModel:
         payload = json.loads(prompt)
         self.calls.append((payload, response_schema))
         if 'turn_schema_version' in payload:
-            decision = self.decision or dict(kind='execute_plan', target='mock_embed_cells',
-                roles=[dict(tool='mock_embed_cells', port='dataset', source='source.0')],
-                arguments=[dict(tool='mock_embed_cells', argument='n_components', literal='3',
-                                evidence='PCA with 3 components')])
+            decision = self.decision or dict(kind='execute_plan', target='run_scanpy',
+                roles=[dict(tool='run_scanpy', port='dataset', source='source.0')],
+                arguments=[dict(tool='run_scanpy', native_function='pp.pca', argument='kwargs',
+                    members=[dict(name='n_comps',kind='number',literal='3',evidence='PCA with 3 components')])])
             return json.dumps(dict(turn_schema_version=1, decision=decision))
         if 'semantic_prompt_version' in payload:
             if self.after_plan is not None:
@@ -114,7 +116,11 @@ class ScriptedPlanningModel:
         if 'output_selection_schema_version' in payload:
             if self.after_selection is not None:
                 self.after_selection()
-            return json.dumps(dict(outputs=[dict(name='map', step_id='umap', output_key='analysis_path')]))
+            return json.dumps(dict(outputs=[dict(name='map', step_id='umap', output_key='matrix_path')]))
+        if 'dialogue_schema_version' in payload:
+            return json.dumps(dict(support='supported',paragraphs=[dict(text='Preparation did not execute science.',kind='limitation',citations=[],comparisons=[])]))
+        if 'grounding_review_version' in payload:
+            return json.dumps(dict(verdicts={r['id']:dict(verdict='entailed',independent=True) for r in payload['paragraphs']}))
         pytest.fail('Unexpected extra model phase during planning qualification')
 
 
@@ -152,8 +158,9 @@ def setup_upload(tmp_path, **model_options):
 
 
 def submit(case):
-    return case.facade.submit_turn('session', 'request', REQUEST, expected_generation=0,
+    result = case.facade.submit_turn('session', 'request', REQUEST, expected_generation=0,
         attachment_ids=(case.record.resource_id,))
+    return result
 
 
 def assert_no_scientific_records(case):
@@ -177,7 +184,8 @@ def test_uploaded_turn_reaches_same_detailed_planner_and_validated_plan_without_
     assert result.verification.passed and result.steps == ()
     assert result.plan.planner_name.endswith(':wire-v4')
     assert stopped.request.mode is RunMode.PLAN_ONLY and stopped.request.prompt == REQUEST
-    assert len(case.models) == 1 and stopped.planner.model is case.models[0]
+    assert len(case.models) == 1
+    assert type(stopped.planner).__name__ == 'PreparedPlanner'
     phases = [next(key for key in ('turn_schema_version', 'semantic_prompt_version') if key in p)
               for p, _ in case.models[0].calls]
     assert phases == ['turn_schema_version', 'semantic_prompt_version']
@@ -185,16 +193,14 @@ def test_uploaded_turn_reaches_same_detailed_planner_and_validated_plan_without_
     assert detailed['user_request'] == REQUEST
     steps = {step.step_id: step for step in result.plan.steps}
     assert steps['pca'].arguments['input_path'] == case.record.source_path
-    assert steps['pca'].arguments['n_components'] == 3
-    assert steps['graph'].arguments['embedding_path'] == StepOutputRef('pca', 'embedding_path')
-    assert steps['graph'].arguments['cell_ids_path'] == StepOutputRef('pca', 'cell_ids_path')
-    assert steps['clusters'].arguments['analysis_path'] == StepOutputRef('graph', 'analysis_path')
-    assert steps['umap'].arguments['analysis_path'] == StepOutputRef('clusters', 'analysis_path')
-    assert {step.tool_name for step in steps.values()} == {
-        'mock_embed_cells', 'build_cell_neighbors', 'cluster_cells', 'compute_cell_umap'}
+    assert steps['pca'].arguments['kwargs']['n_comps'] == 3
+    assert steps['graph'].arguments['input_path'] == StepOutputRef('pca', 'matrix_path')
+    assert steps['clusters'].arguments['input_path'] == StepOutputRef('graph', 'matrix_path')
+    assert steps['umap'].arguments['input_path'] == StepOutputRef('clusters', 'matrix_path')
+    assert {step.tool_name for step in steps.values()} == {'run_scanpy'}
     state = assert_no_scientific_records(case)
     assert state.interactions[-1].status == 'admitted'
-    assert state.interactions[-1].admitted['inputs']['n_components'] == 3
+    assert next(v for k,v in state.interactions[-1].admitted['inputs'].items() if k.endswith('kwargs'))['n_comps'] == 3
     assert Path(case.record.source_path).read_bytes() == case.original
     assert case.record.source_sha256 == case.original_sha256
     # The deliberate operator stop uses the existing interruption closure. A
@@ -203,7 +209,7 @@ def test_uploaded_turn_reaches_same_detailed_planner_and_validated_plan_without_
     assert closed.status == 'failed' and closed.response.status == 'unavailable'
     assert 'Scientific execution has not been resumed' in closed.response.text
     assert submit(case) == closed
-    assert len(case.models[0].calls) == 2
+    assert sum('turn_schema_version' in p or 'semantic_prompt_version' in p for p,_ in case.models[0].calls) == 2
     assert_no_scientific_records(case)
 
 
@@ -213,14 +219,13 @@ def test_invalid_detailed_plan_cannot_reach_planned_status(tmp_path, monkeypatch
     if invalid == 'unknown_tool':
         steps[-1]['tool'] = 'invented_science'
     else:
-        steps[1]['sources'][0]['step'] = 'absent'
+        steps[1]['sources'][0]['source']['step'] = 'absent'
     case = setup_upload(tmp_path, steps=steps)
     install_operator_stop(monkeypatch)
-    with pytest.raises(PlanningBoundaryReached) as caught:
-        submit(case)
-    assert caught.value.result.status is RunStatus.FAILED
-    assert caught.value.result.errors
-    assert len(case.models[0].calls) == 2
+    view = submit(case)
+    assert view.status == 'failed', view.to_dict()
+    assert view.error.code == {'unknown_tool':'UNKNOWN_TOOL','missing_dependency':'UNKNOWN_DEPENDENCY'}[invalid]
+    assert sum('turn_schema_version' in p or 'semantic_prompt_version' in p for p,_ in case.models[0].calls) == 2
     assert_no_scientific_records(case)
 
 
@@ -229,11 +234,9 @@ def test_plan_only_retains_registered_source_integrity_check(tmp_path, monkeypat
         Path(case.record.source_path).write_bytes(b'changed simulated source'))
     # The source changes during the last (detailed-planning) provider completion.
     install_operator_stop(monkeypatch)
-    with pytest.raises(PlanningBoundaryReached) as caught:
-        submit(case)
-    assert caught.value.result.status is RunStatus.FAILED
-    assert caught.value.result.errors[0].code == 'LOCAL_RESOURCE_INTEGRITY_INVALID'
-    assert len(case.models[0].calls) == 2
+    view = submit(case)
+    assert view.status == 'failed' and view.error.code == 'LOCAL_RESOURCE_INTEGRITY_INVALID',view.to_dict()
+    assert sum('turn_schema_version' in p or 'semantic_prompt_version' in p for p,_ in case.models[0].calls) == 2
     assert_no_scientific_records(case)
 
 
@@ -256,7 +259,8 @@ def test_genuine_model_clarification_never_reaches_detailed_planning(tmp_path, m
     view = submit(case)
     assert view.status == 'clarification' and view.response.kind == 'clarify'
     assert view.response.clarification['reason'] == 'ambiguous_subject'
-    assert len(case.models[0].calls) == 1
+    assert sum('turn_schema_version' in p for p,_ in case.models[0].calls) == 1
+    assert not any('semantic_prompt_version' in p for p,_ in case.models[0].calls)
     assert_no_scientific_records(case)
 
 
@@ -267,27 +271,28 @@ DEFAULT_REQUEST = ('Inspect the uploaded matrix and explore cellular heterogenei
 
 def shared_source_decision(pca_source='source.0'):
     # Exact response structure authored by the real Interpreter in UAT-02.
-    return dict(kind='execute_plan', target='mock_embed_cells', delivery=['explanation'],
+    return dict(kind='execute_plan', target='run_scanpy', delivery=['explanation'],
         unfulfilled=[], arguments=[], roles=[
             dict(tool='inspect_scATAC', port='dataset', source='source.0'),
-            dict(tool='mock_embed_cells', port='dataset', source=pca_source)])
+            dict(tool='run_scanpy', port='dataset', source=pca_source)])
 
 
 def test_authentic_shared_source_roles_reach_inspection_pca_plan_without_science(tmp_path, monkeypatch):
     steps = wire_steps()
-    steps[0]['sources'] = [dict(kind='step', target='dataset', step='inspect')]
-    steps.insert(0, dict(step_id='inspect', tool='inspect_scATAC', sources=[], control_dependencies=[]))
+    steps[0]['sources'][0] = dict(target='dataset',source=dict(kind='step_port',step='inspect',source_port='dataset'))
+    steps.insert(0, dict(step_id='inspect', tool='inspect_scATAC', sources=[dict(target='dataset',source=dict(kind='input',input='input_path'))], control_dependencies=[]))
     case = setup_upload(tmp_path, decision=shared_source_decision(), steps=steps)
     install_operator_stop(monkeypatch)
     with pytest.raises(PlanningBoundaryReached) as caught:
-        case.facade.submit_turn('session', 'request', DEFAULT_REQUEST, expected_generation=0,
+        view = case.facade.submit_turn('session', 'request', DEFAULT_REQUEST, expected_generation=0,
             attachment_ids=(case.record.resource_id,))
+        pytest.fail(str(view.to_dict()))
     stopped = caught.value
     assert stopped.result.status is RunStatus.PLANNED
     assert stopped.result.verification.passed and stopped.result.steps == ()
     assert stopped.request.prompt == DEFAULT_REQUEST
     assert 'n_components' not in stopped.request.inputs
-    assert len(case.models[0].calls) == 2
+    assert sum('turn_schema_version' in p or 'semantic_prompt_version' in p for p,_ in case.models[0].calls) == 2
     assert case.models[0].calls[1][0]['user_request'] == DEFAULT_REQUEST
     task = case.models[0].calls[1][0]['research_context']['task']
     assert task['delivery'] == ['explanation'] and task['delivery_status'] == 'deferred'
@@ -297,10 +302,9 @@ def test_authentic_shared_source_roles_reach_inspection_pca_plan_without_science
     assert compiled['pca'].arguments['input_path'] == StepOutputRef('inspect', 'input_path')
     assert compiled['pca'].depends_on == ('inspect',)
     assert compiled['pca'].arguments.get('n_components') is None
-    assert compiled['graph'].arguments['embedding_path'] == StepOutputRef('pca', 'embedding_path')
-    assert compiled['graph'].arguments['cell_ids_path'] == StepOutputRef('pca', 'cell_ids_path')
-    assert compiled['clusters'].arguments['analysis_path'] == StepOutputRef('graph', 'analysis_path')
-    assert compiled['umap'].arguments['analysis_path'] == StepOutputRef('clusters', 'analysis_path')
+    assert compiled['graph'].arguments['input_path'] == StepOutputRef('pca','matrix_path')
+    assert compiled['clusters'].arguments['input_path'] == StepOutputRef('graph', 'matrix_path')
+    assert compiled['umap'].arguments['input_path'] == StepOutputRef('clusters', 'matrix_path')
     state = assert_no_scientific_records(case)
     admitted = state.interactions[-1].admitted
     assert admitted['roles'] == tuple(shared_source_decision()['roles'])
@@ -323,5 +327,6 @@ def test_shared_request_alias_cannot_bind_different_registered_sources(tmp_path,
     view = case.facade.submit_turn('session', 'request', DEFAULT_REQUEST, expected_generation=0,
         attachment_ids=(case.record.resource_id, other.resource_id))
     assert view.status == 'failed' and view.error.code == 'MULTI_INPUT_ROLE_INVALID'
-    assert len(case.models[0].calls) == 1
+    assert sum('turn_schema_version' in p for p,_ in case.models[0].calls) == 1
+    assert not any('semantic_prompt_version' in p for p,_ in case.models[0].calls)
     assert_no_scientific_records(case)

@@ -391,3 +391,24 @@ def prepare_scatac_regulatory_sequences(output_dir, input_path=None, input_sha25
         min_abs_logfc=None, max_peak_length=None, candidate_manifest_path=None, candidate_manifest_sha256=None,
         candidate_index=None):
     return execute({k:v for k,v in locals().items() if v is not None})
+
+
+def prepare_operation(arguments, context):
+    """Resolve mode prerequisites; actual selection and extraction stay native."""
+    from agent.orchestration.scientific_inputs import ScientificInputRequired,ScientificInputRequirement,ScientificDiagnostic,parameter_requirements
+    method=arguments.get('selection_method','descriptive')
+    if method in ('explicit','descriptive'):
+        missing=[name for name in ('input_path','species','assembly','coordinate_system') if not arguments.get(name)]
+        if method=='explicit' and not arguments.get('feature_ids'):missing.append('feature_ids')
+        if method=='descriptive' and not arguments.get('matrix_semantics'):missing.append('matrix_semantics')
+        if missing:raise ScientificInputRequired(*parameter_requirements(context.tool,missing))
+        observed=context.existing(arguments['input_path'])
+        from .sequence_reference import matching_genome_entries,qualified_genome_entries
+        try:
+            if observed is not None:check_declarations(observed.path,arguments)
+            matching_genome_entries(qualified_genome_entries(),arguments['assembly'],arguments['species'])
+        except ValueError as exc:raise ScientificDiagnostic('REGION_REFERENCE_INVALID',str(exc)) from exc
+    elif method in ('differential_accessibility','accepted_candidates'):
+        return context.accepted_input('differential_accessibility' if method=='differential_accessibility' else 'regions',arguments)
+    else:raise ScientificDiagnostic('REGION_SELECTION_MODE_INVALID','Select a supported region selection mode.')
+    return arguments

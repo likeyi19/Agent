@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 import hashlib
+import json
+from agent.orchestration.semantic_compiler import SemanticRegisteredChoiceSource as Choice
+from agent.orchestration.native_parameters import input_name
 
 from agent.orchestration import (
     AgentRequest,
@@ -31,7 +34,7 @@ from agent.orchestration import (
     ToolRegistry,
     ToolSpec,
     build_default_tool_registry,
-    build_m92_semantic_compiler_contract,
+    build_semantic_compiler_contract,
     compile_semantic_plan,
 )
 from benchmarks.planner.benchmark import (
@@ -66,6 +69,17 @@ def _case(case_id: str):
 def _request(case_id: str, **changes: object) -> AgentRequest:
     case = _case(case_id)
     inputs = dict(case.inputs)
+    if case_id in (DOWNSTREAM_CASE, DOWNSTREAM_EXPLICIT_CASE, CLUSTERING_EVALUATION_CASE):
+        inputs = {k: v for k, v in inputs.items() if k in ('input_path','species','output_dir','label_key')}
+        inputs.setdefault('label_key', 'celltype')
+        for fn, kwargs in [('pp.neighbors', {'use_rep':'X_epizoo','n_neighbors':15,'random_state':7}),
+                           ('tl.leiden', {'resolution':.7,'random_state':7}),
+                           ('tl.umap', {'random_state':7})]:
+            inputs[input_name('run_scanpy', fn, 'function_name')] = fn
+            inputs[input_name('run_scanpy', fn, 'kwargs')] = kwargs
+        inputs[input_name('run_scanpy', 'tl.leiden', 'parameter_selection')] = 'native_defaults'
+        if case_id == DOWNSTREAM_EXPLICIT_CASE:
+            inputs['embedding_overwrite'] = False
     for name, value in changes.items():
         if value is _MISSING:
             inputs.pop(name, None)
@@ -88,6 +102,30 @@ def _execution_fields(plan) -> tuple[object, ...]:
 
 def _v3_plan(case_id: str, request: AgentRequest, registry: ToolRegistry):
     case = _case(case_id)
+    if case_id in (DOWNSTREAM_CASE, DOWNSTREAM_EXPLICIT_CASE, CLUSTERING_EVALUATION_CASE):
+        inp = lambda k: dict(binding_type='input', input_name=k)
+        ref = lambda sid,key: dict(binding_type='ref',ref_step_id=sid,ref_output_key=key)
+        definitions = [('inspect_scATAC',dict(path=inp('input_path')),[]),
+            ('epizoo_embed_cells',dict(input_path=ref('provider-step-101','input_path'),species=inp('species'),
+                output_dir=inp('output_dir')),['provider-step-101'])]
+        if 'embedding_overwrite' in request.inputs:
+            definitions[1][1]['overwrite'] = inp('embedding_overwrite')
+        for index,fn in enumerate(('pp.neighbors','tl.leiden','tl.umap')):
+            parent='provider-step-'+str(102+index)
+            args=dict(input_path=ref(parent,'analysis_path' if index==0 else 'matrix_path'),
+                output_dir=inp('output_dir'),function_name=inp(input_name('run_scanpy',fn,'function_name')),
+                kwargs=inp(input_name('run_scanpy',fn,'kwargs')))
+            if fn=='tl.leiden':args['parameter_selection']=inp(input_name('run_scanpy',fn,'parameter_selection'))
+            definitions.append(('run_scanpy',args,[parent]))
+        if case_id==CLUSTERING_EVALUATION_CASE:
+            definitions[-1]=('evaluate_cell_clustering',dict(analysis_path=ref('provider-step-104','matrix_path'),
+                reference_h5ad_path=ref('provider-step-101','input_path'),label_key=inp('label_key'),
+                output_dir=inp('output_dir')),['provider-step-104','provider-step-101'])
+        steps=[dict(step_id='provider-step-'+str(101+i),tool_name=tool,
+            arguments={**{k:None for k in registry.get(tool).optional_arguments},**args},
+            depends_on=deps,description=None) for i,(tool,args,deps) in enumerate(definitions)]
+        return LLMPlanner(ScriptedPlanningModel(json.dumps(dict(schema_version=3,status='plan',steps=steps,reason=None))),
+            wire_mode=PlanningWireMode.V3).plan(request,registry)
     return LLMPlanner(ScriptedPlanningModel(oracle_response(case)), wire_mode=PlanningWireMode.V3).plan(
         request, registry
     )
@@ -178,7 +216,7 @@ def _transfer_candidate(*, optional: bool = False) -> SemanticPlanCandidate:
 def _downstream_candidate() -> SemanticPlanCandidate:
     return SemanticPlanCandidate(
         (
-            SemanticPlanStep("provider-step-101", "inspect_scATAC"),
+            SemanticPlanStep("provider-step-101", "inspect_scATAC", sources=(_input("dataset", "input_path"),)),
             SemanticPlanStep(
                 "provider-step-102",
                 "epizoo_embed_cells",
@@ -186,18 +224,18 @@ def _downstream_candidate() -> SemanticPlanCandidate:
             ),
             SemanticPlanStep(
                 "provider-step-103",
-                "build_cell_neighbors",
-                sources=(_step("embedding", "provider-step-102"),),
+                "run_scanpy",
+                sources=(_step("dataset", "provider-step-102", "dataset"), _input("function_name", input_name("run_scanpy", "pp.neighbors", "function_name"))),
             ),
             SemanticPlanStep(
                 "provider-step-104",
-                "cluster_cells",
-                sources=(_step("analysis", "provider-step-103"),),
+                "run_scanpy",
+                sources=(_step("dataset", "provider-step-103", "dataset"), _input("function_name", input_name("run_scanpy", "tl.leiden", "function_name"))),
             ),
             SemanticPlanStep(
                 "provider-step-105",
-                "compute_cell_umap",
-                sources=(_step("analysis", "provider-step-104"),),
+                "run_scanpy",
+                sources=(_step("dataset", "provider-step-104", "dataset"), _input("function_name", input_name("run_scanpy", "tl.umap", "function_name"))),
             ),
         )
     )
@@ -232,7 +270,7 @@ def _compile(
         request,
         candidate,
         registry,
-        contract or build_m92_semantic_compiler_contract(registry),
+        contract or build_semantic_compiler_contract(registry),
     )
 
 
@@ -334,23 +372,11 @@ def test_unique_downstream_scopes_are_derived_without_wire_selections(
     assert _execution_fields(plan) == _execution_fields(
         _v3_plan(DOWNSTREAM_EXPLICIT_CASE, request, registry)
     )
-    overwrite_inputs = {
-        "epizoo_embed_cells": "embedding_overwrite",
-        "build_cell_neighbors": "neighbors_overwrite",
-        "cluster_cells": "cluster_overwrite",
-        "compute_cell_umap": "umap_overwrite",
-    }
-    for step in plan.steps:
-        selector = overwrite_inputs.get(step.tool_name)
-        if selector is not None:
-            assert step.arguments["overwrite"] == request.inputs[selector]
-            assert step.arguments["overwrite"] is False
-        if step.tool_name in {
-            "build_cell_neighbors",
-            "cluster_cells",
-            "compute_cell_umap",
-        }:
-            assert step.arguments["random_seed"] == 7
+    assert plan.steps[1].arguments['overwrite'] is False
+    for step in plan.steps[2:]:
+        fn = step.arguments['function_name']
+        assert dict(step.arguments['kwargs']) == request.inputs[input_name('run_scanpy',fn,'kwargs')]
+        assert step.arguments['kwargs']['random_state'] == 7
     assert PlanExecutor(registry).preflight(plan).passed
 
 
@@ -362,7 +388,7 @@ def test_scoped_selector_cannot_be_routed_to_an_unrelated_optional_port(
         candidate.steps[2],
         sources=(
             *candidate.steps[2].sources,
-            _input("overwrite", "cluster_overwrite"),
+            _input("kwargs", input_name("run_scanpy", "tl.leiden", "kwargs")),
         ),
     )
 
@@ -424,13 +450,13 @@ def test_omitted_scoped_overwrite_preserves_all_tool_defaults(
     assert all("overwrite" not in step.arguments for step in plan.steps)
 
 
-def test_neighbors_uses_one_two_member_embedding_channel(
+def test_neighbors_uses_exact_compact_epizoo_dataset_channel(
     registry: ToolRegistry,
 ) -> None:
     request = _request(DOWNSTREAM_CASE)
     candidate = SemanticPlanCandidate(
         (
-            SemanticPlanStep("provider-step-101", "inspect_scATAC"),
+            SemanticPlanStep("provider-step-101", "inspect_scATAC", sources=(_input("dataset", "input_path"),)),
             SemanticPlanStep(
                 "provider-step-102",
                 "epizoo_embed_cells",
@@ -438,8 +464,8 @@ def test_neighbors_uses_one_two_member_embedding_channel(
             ),
             SemanticPlanStep(
                 "provider-step-103",
-                "build_cell_neighbors",
-                sources=(_step("embedding", "provider-step-102"),),
+                "run_scanpy",
+                sources=(_step("dataset", "provider-step-102", "dataset"), _input("function_name", input_name("run_scanpy", "pp.neighbors", "function_name"))),
             ),
         )
     )
@@ -449,12 +475,10 @@ def test_neighbors_uses_one_two_member_embedding_channel(
     assert _execution_fields(plan) == _execution_fields(
         _v3_plan(DOWNSTREAM_CASE, request, registry)
     )[:3]
-    assert neighbors.arguments["embedding_path"] == StepOutputRef(
-        "provider-step-102", "embedding_path"
+    assert neighbors.arguments["input_path"] == StepOutputRef(
+        "provider-step-102", "analysis_path"
     )
-    assert neighbors.arguments["cell_ids_path"] == StepOutputRef(
-        "provider-step-102", "cell_ids_path"
-    )
+    assert neighbors.arguments["kwargs"]["use_rep"] == "X_epizoo"
     assert neighbors.depends_on == ("provider-step-102",)
 
 
@@ -568,18 +592,18 @@ def test_clustering_evaluation_requires_ground_truth_source(
 
 
 
-def test_clustering_evaluation_requires_explicit_cluster_key_source(
-    registry: ToolRegistry,
-) -> None:
-    request = _request(CLUSTERING_EVALUATION_CASE, cluster_key="clusters")
-
+def test_clustering_evaluation_rejects_unpublished_native_cluster_key_source(registry):
+    request = _request(CLUSTERING_EVALUATION_CASE, cluster_key='clusters')
+    candidate = _clustering_evaluation_candidate()
+    evaluation=replace(candidate.steps[-1],sources=(*candidate.steps[-1].sources,
+        _step('cluster_key','provider-step-104','cluster_key')))
     with pytest.raises(SemanticPlanCompileError) as caught:
-        _compile(request, _clustering_evaluation_candidate(), registry)
-
-    assert caught.value.code == "AMBIGUOUS_SOURCE_SELECTION"
-
-
-
+        _compile(request,SemanticPlanCandidate((*candidate.steps[:-1],evaluation)),registry)
+    assert caught.value.code=='WRONG_SOURCE_PORT'
+    evaluation=replace(candidate.steps[-1],sources=(*candidate.steps[-1].sources,
+        _input('cluster_key','cluster_key')))
+    plan=_compile(request,SemanticPlanCandidate((*candidate.steps[:-1],evaluation)),registry)
+    assert plan.steps[-1].arguments['cluster_key']=='clusters'
 
 
 
@@ -1109,7 +1133,7 @@ def test_multiple_valid_channel_mappings_fail_closed() -> None:
 def test_incomplete_grouped_channel_authority_fails_before_plan(
     registry: ToolRegistry,
 ) -> None:
-    contract = build_m92_semantic_compiler_contract()
+    contract = build_semantic_compiler_contract(build_default_tool_registry())
     channels = tuple(
         replace(
             channel,

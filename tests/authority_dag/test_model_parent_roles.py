@@ -17,7 +17,8 @@ def test_only_exact_initialized_parent_can_accompany_trained_child(monkeypatch, 
     from agent.tools.data.authority_context import VerificationContext
     from agent.tools import scientific_authority
     monkeypatch.setattr(p, 'optional_binding_for_locator', lambda name, *args: SimpleNamespace(
-        run_id=name, step_id=name, manifest_sha256=name, tool_name='posttrain_epizoo_model'))
+        run_id=name, step_id=name, manifest_sha256=name, tool_name='posttrain_epizoo_model',
+        verification_mode='scientific-authority.v2'))
     monkeypatch.setattr(p, 'merge_context', lambda *args: None)
     monkeypatch.setattr(v, '_load_context', lambda *args: None)
     monkeypatch.setattr(v, '_accepted', lambda store, run, step: (None, SimpleNamespace(

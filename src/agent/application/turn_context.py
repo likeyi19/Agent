@@ -195,3 +195,37 @@ def public_context(captured):
     relations = captured['relations']
     return dict(relations=tuple(relations) + ('previous',) if relations else ('current',),
                 previous_is_ambiguous=len({v for k, v in relations.items() if k != 'current'}) > 1)
+
+
+def ordinary_clarification(captured, state):
+    """Read bounded unresolved conversation through the captured previous-turn link.
+
+    This is presentation context only: no new snapshot writer, task, source or
+    declaration authority. Stop at any other completed activity/new task.
+    """
+    by_id = {i.turn_id: i for i in state.interactions}
+    previous = captured.get('dialogue', {}).get('context', {}).get('previous_turn_id')
+    rows = []
+    seen = set()
+    while previous is not None and previous not in seen:
+        seen.add(previous)
+        item = by_id.get(previous)
+        if item is None or item.preparation is not None or item.prerequisite is not None:
+            break
+        admitted = item.admitted or {}
+        shown = item.presentation or {}
+        if (item.status == 'clarification' and admitted.get('kind') == 'clarify'
+                and admitted.get('reason') == 'ambiguous_subject'):
+            rows.append(dict(turn_id=item.turn_id, utterance=item.utterance,
+                             question=shown.get('text')))
+        elif (item.status == 'failed' and (shown.get('error') or {}).get('code') ==
+              'INTERACTIVE_INTENT_BINDING_INVALID'):
+            rows.append(dict(turn_id=item.turn_id, utterance=item.utterance,
+                             question=None, status='interpretation_failed'))
+        else:
+            break
+        previous = item.snapshot.get('dialogue', {}).get('context', {}).get('previous_turn_id')
+    # Keep the unresolved origin plus the three most recent actual questions.
+    if len(rows) > 4:
+        rows = rows[:3] + rows[-1:]
+    return list(reversed(rows))

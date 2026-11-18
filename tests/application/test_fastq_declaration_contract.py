@@ -77,10 +77,19 @@ def test_legacy_inputset_choice_and_catalog_identity_unchanged():
 
 
 def test_fastq_variant_does_not_admit_unrelated_epizoo_declarations():
-    from agent.application.turn_decisions import RequestRoles, ScopedArgument
-    with pytest.raises(ValueError, match='registered scientific consumers'):
-        RequestRoles('run_chromap', (), fastq=FastqDeclaration(),
-            arguments=(ScopedArgument('epizoo_embed_cells','species','human',0,5),))
+    from agent.application.turn_decisions import RequestRoles, ScalarChoiceArgument
+    from agent.application.dialogue_execution import _bind_arguments, _check_parameter_plan
+    from agent.orchestration import build_default_tool_registry
+    from agent.schemas import AgentPlan, PlanStep
+    declaration=ScalarChoiceArgument('epizoo_embed_cells','species','human',0,5,'human')
+    decision=RequestRoles('run_chromap', (), fastq=FastqDeclaration(),arguments=(declaration,))
+    assert decision.fastq==FastqDeclaration() and decision.arguments==(declaration,)
+    registry=build_default_tool_registry()
+    values=_bind_arguments(registry,'human',{},decision.arguments)
+    admitted=dict(inputs=values,arguments=[asdict(declaration)])
+    with pytest.raises(IntentError):
+        _check_parameter_plan(registry,AgentPlan('plan','request','Wrong downstream species.',(
+            PlanStep('embed','epizoo_embed_cells',dict(species='mouse')),)),admitted,())
 
 
 

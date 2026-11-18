@@ -83,6 +83,9 @@ def selected_answer(interaction, preceding):
     if selection is None:
         settings = (interaction.submission or {}).get('parameter_overrides', ())
         if reference is not None and reference['field'] == 'parameters' and settings:
+            origin=next(i for i in preceding if i.turn_id==reference['origin_turn_id'])
+            if origin.preparation is not None:
+                raise IntentError('invalid_reference')
             from .turn_decisions import ParameterAnswer, ExplicitArgument
             return ParameterAnswer('@parameters', tuple(ExplicitArgument(**_serialize(row)) for row in settings))
         return None
@@ -94,48 +97,8 @@ def selected_answer(interaction, preceding):
             raise IntentError('invalid_reference')
         from .turn_decisions import ParameterAnswer, ExplicitArgument
         return ParameterAnswer('@parameters', tuple(ExplicitArgument(**_serialize(row)) for row in settings))
-    if reference['field'] == 'roles':
-        from .dialogue_execution import captured_input_group
-        from .turn_decisions import RoleAnswer, InputRole
-        parts = selection['handle'].split(':', 3)
-        if len(parts) != 4 or parts[0] != 'role':
-            raise IntentError('invalid_reference')
-        _, tool, port, resource_id = parts
-        offered = pending_choices(reference, preceding)
-        if not any(row['tool'] == tool and row['port'] == port for row in offered):
-            raise IntentError('invalid_reference')
-        binding = captured_input_group(interaction, preceding)
-        matches = [] if binding is None else [i for i, member in enumerate(binding.members)
-                                              if member['resource_id'] == resource_id]
-        if len(matches) != 1:
-            raise IntentError('invalid_reference')
-        return RoleAnswer('@roles', (InputRole(tool, port, 'source.' + str(matches[0])),))
-    choices = pending_choices(reference, preceding)
-    if not any(option['handle'] == selection['handle'] for option in choices):
-        raise IntentError('invalid_reference')
-    from .turn_decisions import RoleAnswer, ResourceAnswer, SpeciesAnswer, InputRole
-    if reference['field'] == 'species':
-        return SpeciesAnswer('@species', selection['handle'].partition(':')[2])
-    if reference['field'] == 'resources':
-        return ResourceAnswer('@resources', selection['handle'])
-    if reference['field'] == 'annotation' and selection['handle'].startswith('annotation-column:'):
-        from .turn_decisions import ExplicitArgument
-        option = next(row for row in choices if row['handle'] == selection['handle'])
-        return RoleAnswer('@roles', (), arguments=(ExplicitArgument('annotate_scATAC_cell_types',
-            'group_column', option['value']),))
-    from .raw_handoff import empty
-    # Captured annotation options retain their owner inside a raw objective;
-    # the prerequisite field identifies that objective, not the option's type.
-    if selection['handle'].startswith('annotation-species:'):
-        from .raw_handoff import AnnotationDeclaration
-        option = next(row for row in choices if row['handle'] == selection['handle'])
-        return RoleAnswer('@roles', (), annotation=AnnotationDeclaration(species=option['value']))
-    if selection['handle'].startswith('annotation-umap:'):
-        from .raw_handoff import AnnotationDeclaration
-        return RoleAnswer('@roles', (), annotation=AnnotationDeclaration(
-            generate_umap=selection['handle'] == 'annotation-umap:generate'))
-    declared = replace(empty(reference['field']), resource=selection['handle'])
-    return RoleAnswer('@roles', (), **{reference['field']: declared})
+    # Saved legacy questions remain readable but cannot create new answers.
+    raise IntentError('invalid_reference')
 
 
 def preference_schema():
@@ -286,9 +249,7 @@ def request(sessions, interaction, decision, input_sets):
         if source_kind(interaction.submission) != 'h5ad':
             raise IntentError('invalid_prerequisite')
         admitted['reference_requirement'] = requirement(admitted['inputs'], decision.reference_category)
-    pending = dict(origin_turn_id=interaction.turn_id, binding_turn_id=interaction.turn_id,
-        field='resources', tool=decision.target, resource_context_sha256=digest(_serialize(rows)))
-    return admitted, pending
+    return admitted
 
 
 def _completed(origin, source, interaction, choice_handle, arguments, registry, reference_record=None, reference_source=None):
@@ -323,6 +284,11 @@ def _completed(origin, source, interaction, choice_handle, arguments, registry, 
     current = _serialize(interaction.submission or {})
     if binding is None and 'registered_input' in current:
         raise IntentError('invalid_prerequisite')
+    received = current.get('registered_input')
+    captured = original.get('registered_input', {})
+    if received is not None and any(received.get(k) != captured.get(k) for k in
+            ('resource_id', 'record_sha256', 'collection_id', 'tool_name', 'composition', 'members')):
+        raise IntentError('invalid_prerequisite')
     received_choice = current.get('registered_input', {}).get('resource_choice')
     if received_choice is not None and received_choice != (_serialize(original_choice) if reference_record is not None else chosen.resource_choice()):
         raise IntentError('invalid_prerequisite')
@@ -340,32 +306,20 @@ def _completed(origin, source, interaction, choice_handle, arguments, registry, 
     return dict(execution_inputs=_serialize(completed.execution_inputs), registered_input=completed.attribution())
 
 
-def answer(sessions, interaction, decision, input_sets, *, reference_resources=None):
-    from .dialogue_execution import validate_prerequisite
+def complete(sessions, interaction, origin, source, choice, arguments, *, reference_resources=None):
+    """Scientific admission only; canonical preparation owns question/answer state."""
     from .local_resources import LocalResourceAdmission
     from dataclasses import asdict
     state = sessions.load(sessions._interaction_session_id)
-    reference = interaction.snapshot.get('prerequisite')
-    if (decision.pending != '@resources' or not reference or reference['field'] != 'resources'
-            or state.generation != interaction.base_generation or state.active_revision_id != interaction.base_revision_id
-            or state.interactions[-1].turn_id != interaction.turn_id
-            or digest(catalog(input_sets)) != reference['resource_context_sha256']):
-        raise IntentError('invalid_prerequisite')
-    validate_prerequisite(interaction, state.interactions[:-1])
-    origin, source = _source(reference, state.interactions[:-1])
-    if origin.admitted['kind'] == 'execute':
-        run = sessions._application.run_store.load(origin.admitted['request_id'] + ':run')
-        if run.steps or not run.errors or run.request.prompt != origin.utterance:
-            raise IntentError('invalid_prerequisite')
     reference_record = reference_source = None
     if 'reference_requirement' in origin.admitted:
         from .reference_supplementation import select
-        reference_record, reference_source = select(reference_resources, state.session_id, origin, decision.choice)
-    completed = _completed(origin, source, interaction, decision.choice, decision.arguments,
+        reference_record, reference_source = select(reference_resources, state.session_id, origin, choice)
+    completed = _completed(origin, source, interaction, choice, arguments,
                            sessions._application.registry, reference_record, reference_source)
     if reference_resources is not None:
         from .shared_resources import check_choice
-        check_choice(reference_resources, state.session_id, decision.choice)
+        check_choice(reference_resources, state.session_id, choice)
     if 'registered_input' in completed:
         owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
         owner.validate_binding(LocalResourceAdmission._submission_binding(completed))
@@ -375,10 +329,9 @@ def answer(sessions, interaction, decision, input_sets, *, reference_resources=N
         inputs=completed['execution_inputs'],
         **({'context': origin.admitted['context']} if 'context' in origin.admitted else {}),
         **({'registered_input': completed['registered_input']} if 'registered_input' in completed else {}),
-        arguments=[asdict(d) for d in decision.arguments], resource_handle=decision.choice,
+        arguments=[asdict(d) for d in arguments], resource_handle=choice,
         **({'reference_record': reference_record.to_dict(), 'reference_source': reference_source.to_dict()}
-           if reference_record is not None else {}),
-        continuation={k: reference[k] for k in ('origin_turn_id', 'binding_turn_id', 'field')})
+           if reference_record is not None else {}))
 
 
 def validate(interaction, preceding):
@@ -389,15 +342,21 @@ def validate(interaction, preceding):
     admitted = interaction.admitted or {}
     reference = interaction.snapshot.get('prerequisite')
     pending = interaction.prerequisite
+    from .preparation_state import intake_task, intake_context
+    canonical = (interaction.preparation is not None and
+        intake_task((*preceding, interaction), interaction.preparation) == 'resources')
     try:
+        if canonical and (pending is not None or reference is not None or 'continuation' in admitted):
+            raise ValueError('Canonical resource admission has competing state.')
         if 'context' in admitted and (admitted['context'] != 'current'
                 or interaction.base_revision_id is None
                 or interaction.snapshot['relations'].get('current') != interaction.base_revision_id):
             raise ValueError('Invalid captured resource execution context.')
-        expected = capture_prerequisite(preceding, interaction.base_revision_id,
+        expected = None if canonical else capture_prerequisite(preceding, interaction.base_revision_id,
             interaction.base_generation, interaction.submission,
             interaction.snapshot.get('dialogue', {}).get('requested_predecessor'),
-            canonical_sources='source_view' in interaction.snapshot.get('dialogue', {}))
+            canonical_sources='source_view' in interaction.snapshot.get('dialogue', {}),
+            utterance=interaction.utterance if interaction.snapshot.get('dialogue', {}).get('prerequisite_capture_version') == 2 else None)
         if reference != expected:
             raise ValueError('Resource prerequisite capture changed.')
         if (admitted.get('kind') == 'request_resources' or
@@ -406,7 +365,7 @@ def validate(interaction, preceding):
             rows = admitted['resource_catalog']
             if catalog(tuple(ScientificInputSet(**_serialize(r)) for r in rows)) != _serialize(rows):
                 raise ValueError('Invalid captured InputSets.')
-            if pending != dict(origin_turn_id=interaction.turn_id, binding_turn_id=interaction.turn_id,
+            if not canonical and pending != dict(origin_turn_id=interaction.turn_id, binding_turn_id=interaction.turn_id,
                 field='resources', tool=admitted['tool'], resource_context_sha256=digest(_serialize(rows))):
                 raise ValueError('Changed resource request.')
             registry = build_default_tool_registry()
@@ -426,7 +385,7 @@ def validate(interaction, preceding):
             if values != _serialize(admitted['inputs']):
                 raise ValueError('Changed resource request inputs.')
             return
-        if reference is None:
+        if reference is None and not canonical:
             raise ValueError('Missing resource origin.')
         if admitted.get('kind') == 'clarify':
             if pending != {k: v for k, v in reference.items() if k != 'predecessor_turn_id'}:
@@ -434,11 +393,13 @@ def validate(interaction, preceding):
             return
         if not admitted:  # captured, before interpretation
             return
-        if admitted.get('continuation', {}).get('field') != 'resources':
+        if not canonical and admitted.get('continuation', {}).get('field') != 'resources':
             if pending is not None:
                 raise ValueError('Unexpected resource pending state.')
             return  # an unrelated ordinary decision does not answer this request
-        origin, source = _source(reference, preceding)
+        origin, source = intake_context(interaction, preceding) if canonical else _source(reference, preceding)
+        if canonical and admitted['resource_handle'] != interaction.preparation['answers'][0]['value']['handle']:
+            raise ValueError('Resource selection differs from the canonical answer.')
         from .local_resources import LocalResourceRecord
         completed = _completed(origin, source, interaction, admitted['resource_handle'],
             _scientific_arguments(_serialize(admitted['arguments'])), build_default_tool_registry(),
@@ -450,7 +411,7 @@ def validate(interaction, preceding):
                 or _serialize(admitted['inputs']) != completed['execution_inputs']
                 or _serialize(admitted.get('registered_input')) != completed.get('registered_input')
                 or admitted.get('context') != origin.admitted.get('context')
-                or admitted['continuation'] != {k: reference[k] for k in ('origin_turn_id', 'binding_turn_id', 'field')}):
+                or not canonical and admitted['continuation'] != {k: reference[k] for k in ('origin_turn_id', 'binding_turn_id', 'field')}):
             raise ValueError('Changed resource continuation.')
     except (ValueError, TypeError, KeyError, StopIteration, AttributeError) as exc:
         raise SessionError('Invalid pending scientific resources.') from exc

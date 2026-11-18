@@ -1401,7 +1401,9 @@ function renderHistory() {
           button.dataset.actionKey = `clarification-choice:${option.handle}`;
           button.disabled = state.posting || Boolean(state.activeTurn && !terminal(state.activeTurn));
           button.addEventListener("click", () => {
-            if (option.action === "parameter") {
+            if (option.action === "upload_source") {
+              element("attachment-dialog").showModal();
+            } else if (option.action === "parameter") {
               openRequestedParameter(option, turn.turn_id);
             } else submitRequest(option.handle.startsWith("annotation-umap:") ? option.label : "", null,
               {question_turn_id: turn.turn_id, handle: option.handle});
@@ -1411,6 +1413,19 @@ function renderHistory() {
         response.append(choices);
       }
 
+      if (turn.preparation_recheck) {
+        const recheck = document.createElement('button');
+        recheck.type = 'button'; recheck.textContent = 'Recheck preparation';
+        recheck.disabled = state.posting || Boolean(state.activeTurn && !terminal(state.activeTurn));
+        recheck.addEventListener('click', () => {
+          const body = {turn_id:newTurnId(),expected_generation:state.session.generation,
+            utterance:'',profile_id:element('model-choice').value,resume_task_id:turn.preparation_task_id};
+          const uploaded=state.attachments.filter((a)=>a.status==='uploaded').map((a)=>a.resource.resource_id);
+          if(uploaded.length)body.attachment_ids=uploaded;
+          startSubmission(body);
+        });
+        response.append(recheck);
+      }
       loadRequestedArtifacts(turn);
     }
     const status = document.createElement("p");
@@ -2396,7 +2411,7 @@ async function openRequestedParameter(option, questionTurnId) {
     if (!specs.length) throw new Error("The requested parameter scope is unavailable. Specify the scientific operation in your reply.");
     showParameters({sessionId: state.session.session_id, generation: state.session.generation,
       question: {question_turn_id: questionTurnId, handle: option.handle},
-      steps: [{tool: option.tool, native_function: option.native_function, functions: tool.functions,
+      steps: [{step_id: option.step_id, tool: option.tool, native_function: option.native_function, functions: tool.functions,
         port: option.port, source: option.source, parameters: specs.map((spec) => {
           let previous = spec.kwarg && !option.member ? option.previous_value?.[spec.argument] : option.previous_value;
           const matches = (recorded?.steps || []).filter((step) => step.tool === option.tool &&

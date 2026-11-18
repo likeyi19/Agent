@@ -13,6 +13,8 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Mapping, TypeAlias
+from enum import Enum
+from agent.schemas.orchestration import freeze_json_mapping, _serialize, _freeze_plan_arguments
 
 from agent.schemas import AgentPlan, AgentRequest, PlanStep, StepOutputRef
 
@@ -166,6 +168,92 @@ class SemanticPlanCandidate:
         step_ids = tuple(step.step_id for step in self.steps)
         if len(set(step_ids)) != len(step_ids):
             raise ValueError("Semantic plan step IDs must be unique.")
+
+
+class AnalysisDisposition(str, Enum):
+    COMPLETE = 'COMPLETE'  # Compiler completeness, never application READY.
+    NEEDS_INPUT = 'NEEDS_INPUT'
+    INVALID = 'INVALID'
+
+
+from .scientific_inputs import ScientificInputRequirement, ScientificInputRequired
+
+
+@dataclass(frozen=True)
+class ScientificRequirement:
+    candidate_id: str
+    step_id: str
+    tool_name: str
+    native_function: str | None
+    port: str
+    argument: str
+    kind: str
+    member: str | None = None
+    dependencies: tuple[str, ...] = ()
+    choices: tuple = ()
+    source_dependencies: tuple[str, ...] = ()
+    source_steps: tuple[str, ...] = ()
+
+    @property
+    def requirement_id(self):
+        identity = [self.candidate_id, self.step_id, self.tool_name,
+                    self.native_function, self.port, self.argument, self.member, self.kind]
+        return hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
+
+    def to_dict(self):
+        from dataclasses import asdict
+        return dict(asdict(self), requirement_id=self.requirement_id)
+
+
+@dataclass(frozen=True)
+class AnalyzedOperation:
+    """Bound symbolic operands, without executable-plan authority."""
+    step_id: str
+    tool_name: str
+    arguments: Mapping
+    dependencies: tuple[str, ...]
+
+    def __post_init__(self):
+        object.__setattr__(self, 'arguments', _freeze_plan_arguments(self.arguments))
+
+
+@dataclass(frozen=True)
+class CandidateAnalysis:
+    candidate: SemanticPlanCandidate
+    disposition: AnalysisDisposition
+    operations: tuple[AnalyzedOperation, ...] = ()
+    requirements: tuple[ScientificRequirement, ...] = ()
+    blocked_checks: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    error: SemanticPlanCompileError | None = None
+
+    @property
+    def candidate_id(self):
+        return candidate_identity(self.candidate)
+
+
+def candidate_record(candidate):
+    """One normalized, provider-independent graph representation."""
+    from dataclasses import asdict
+    return dict(version=1, steps=[dict(step_id=step.step_id, tool_name=step.tool_name,
+        sources=[dict(kind=type(source).__name__, **asdict(source)) for source in step.sources],
+        control_dependencies=list(step.control_dependencies)) for step in candidate.steps])
+
+
+def candidate_from_record(record):
+    if set(record) != {'version', 'steps'} or type(record['version']) is not int or record['version'] != 1:
+        raise ValueError('Unsupported semantic candidate record.')
+    if any(set(row) != {'step_id','tool_name','sources','control_dependencies'} for row in record['steps']):
+        raise ValueError('Invalid canonical candidate step.')
+    kinds = {kind.__name__: kind for kind in (SemanticRequestInputSource,
+        SemanticStepOutputSource, SemanticContextSource, SemanticRegisteredChoiceSource)}
+    return SemanticPlanCandidate(tuple(SemanticPlanStep(row['step_id'], row['tool_name'],
+        tuple(kinds[source['kind']](**{k: v for k, v in source.items() if k != 'kind'})
+              for source in row['sources']), tuple(row['control_dependencies'])) for row in record['steps']))
+
+
+def candidate_identity(candidate):
+    return hashlib.sha256(json.dumps(candidate_record(candidate), sort_keys=True,
+        separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -620,15 +708,17 @@ def _semantic_order(
     return tuple(ordered)
 
 
-def compile_semantic_plan(
+def _analyze_candidate(
     request: AgentRequest,
     candidate: SemanticPlanCandidate,
     registry: ToolRegistry,
     contract: PlanningCompilerContract,
     *,
     planner_name: str = "semantic-compiler-contract",
-) -> AgentPlan:
-    """Compile explicit semantic choices without executing or inferring science."""
+    bindings: Mapping[str, Mapping[str, object]] | None = None,
+    prepare_inputs=None,
+) -> CandidateAnalysis:
+    """The shared source, graph, operand and requirement passes."""
     from .native_parameters import request_source_applies
 
     if not isinstance(request, AgentRequest):
@@ -645,6 +735,7 @@ def compile_semantic_plan(
     from .active_context import current_context
     context = current_context()
     settings = () if context is None else context.task.get('parameter_overrides', ())
+    canonical_candidate = candidate
     original_inputs = request.inputs
     owned_inputs = {row['input_name'] for row in settings}
     if settings:
@@ -953,130 +1044,7 @@ def compile_semantic_plan(
                     diagnostic_fields={'step_id': step.step_id, 'tool_name': step.tool_name,
                                        'input_name': name})
 
-    from .native_parameters import bind_structured_parameters
-    selected, explicit_arguments, deferred_preparation = bind_structured_parameters(
-        {step.step_id: (step.tool_name, states[step.step_id].arguments) for step in candidate.steps},
-        settings, registry, original_inputs)
-    for step_id, (_, arguments) in selected.items():
-        states[step_id].arguments = arguments
-    # This policy belongs to AI semantic planning, after exact researcher binding.
-    # Native Functions builds its own explicit plan and never enters this compiler.
-    from agent.tools.analysis.native_clustering import ELIGIBLE
-    for step in candidate.steps:
-        arguments = states[step.step_id].arguments
-        if (step.tool_name.removeprefix('run_'), arguments.get('function_name')) in ELIGIBLE:
-            arguments.setdefault('parameter_selection', 'asw')
-    from agent.schemas import RunMode
-    if deferred_preparation and request.mode is not RunMode.PLAN_ONLY:
-        raise SemanticPlanCompileError('AMBIGUOUS_PARAMETER_SCOPE',
-            'Select one actual operation for the explicit parameter before execution.')
-
-    selected_argument_names = {
-        argument_name
-        for step in candidate.steps
-        for argument_name in (
-            *registry.get(step.tool_name).required_arguments,
-            *registry.get(step.tool_name).optional_arguments,
-        )
-    }
-    bound_request_inputs = {
-        input_name
-        for state in states.values()
-        for input_name in state.request_inputs
-    }
-    unauthorized = sorted(
-        input_name
-        for input_name in request.inputs
-        if input_name in selected_argument_names
-        and input_name not in bound_request_inputs
-    )
-    if unauthorized:
-        _raise_compile(
-            "UNUSED_REQUEST_INPUT",
-            "Selected tools have no explicit compiler use for matching request "
-            f"inputs {unauthorized}.",
-            diagnostic_fields={"input_name": unauthorized[0]},
-        )
-
-    for step in candidate.steps:
-        tool = registry.get(step.tool_name)
-        state = states[step.step_id]
-        from .active_context import prepare_selected_inputs
-        if not deferred_preparation:
-            state.arguments = prepare_selected_inputs(tool, state.arguments,
-                {selected.step_id: (selected.tool_name, dict(states[selected.step_id].arguments))
-                 for selected in candidate.steps})
-        if tool.native_functions is not None:
-            # Check after request binding so source order cannot hide explicit
-            # native function intent or kwargs. Omitted native defaults stay
-            # omitted when the researcher selected the function itself.
-            choices = {
-                next(port.members[0].field_name for port in tool.semantic_planning.consumer_ports
-                     if port.name == source.target_port): source.choice
-                for source in step.sources if isinstance(source, SemanticRegisteredChoiceSource)
-            }
-            for name, value in choices.items():
-                if name == 'function_name' or name in explicit_arguments.get(step.step_id, ()) or name not in state.arguments:
-                    continue
-                if 'function_name' not in choices:
-                    _raise_compile('EXPLICIT_PARAMETER_CONFLICT',
-                        'An explicit native function retains omitted native defaults; use supplied parameter sources.')
-                kwargs = state.arguments.get('kwargs', {})
-                if name in kwargs and kwargs[name] != value:
-                    _raise_compile('EXPLICIT_PARAMETER_CONFLICT',
-                        'A registered native choice conflicts with supplied native kwargs.')
-        missing = sorted(set(tool.required_arguments).difference(state.arguments))
-        if deferred_preparation:
-            missing = [name for name in missing if name not in tool.application_inputs]
-        if missing:
-            port_arguments: dict[str, set[str]] = defaultdict(set)
-            for rule in contract.request_bindings:
-                if rule.tool_name == step.tool_name:
-                    port_arguments[rule.target_port].add(rule.argument_name)
-            for channel in contract.step_output_channels:
-                if channel.consumer_tool_name == step.tool_name:
-                    port_arguments[channel.target_port].update(
-                        member.argument_name for member in channel.members
-                    )
-            missing_ports = sorted(
-                port
-                for port, arguments in port_arguments.items()
-                if arguments.intersection(missing)
-                and port not in state.target_ports
-            )
-            code = (
-                "MISSING_REQUIRED_SOURCE"
-                if missing_ports
-                else "MISSING_REQUIRED_BINDING"
-            )
-            _raise_compile(
-                code,
-                f"Semantic step {step.step_id!r} has no authorized binding for "
-                f"required arguments {missing}; missing source ports "
-                f"{missing_ports}.",
-                diagnostic_fields={
-                    "step_id": step.step_id,
-                    "tool_name": step.tool_name,
-                    "target_port": missing_ports[0] if missing_ports else None,
-                    "argument_names": missing,
-                },
-            )
-        try:
-            if deferred_preparation and set(tool.required_arguments) - set(state.arguments) <= tool.application_inputs:
-                for name, value in state.arguments.items():
-                    (tool.required_arguments.get(name) or tool.optional_arguments[name]).validate(name, value)
-            else:
-                registry.validate_arguments(step.tool_name, state.arguments)
-        except ValueError as exc:
-            raise SemanticPlanCompileError(
-                "INVALID_COMPILED_ARGUMENTS",
-                f"Compiled arguments are invalid for {step.tool_name!r}.",
-                diagnostic_fields={
-                    "step_id": step.step_id,
-                    "tool_name": step.tool_name,
-                },
-            ) from exc
-
+    blocked_lineages = []
     for step in _semantic_order(candidate):
         state = states[step.step_id]
         for producer_step_id, channel in state.channel_sources:
@@ -1085,6 +1053,14 @@ def compile_semantic_plan(
                 lineage = states[producer_step_id].lineages.get(
                     channel.producer_lineage_port
                 )
+            if lineage is None and channel.producer_lineage_port is not None:
+                producer_state = states[producer_step_id]
+                dependencies = [(origin, port) for consumer, target, origin, port in blocked_lineages
+                                if consumer == producer_step_id and target == channel.producer_lineage_port]
+                if dependencies or channel.producer_lineage_port not in producer_state.target_ports:
+                    blocked_lineages.extend((step.step_id, channel.target_port, origin, port) for origin, port in
+                        (dependencies or [(producer_step_id, channel.producer_lineage_port)]))
+                    continue
             if (
                 channel.required_lineage is not None
                 and lineage is not channel.required_lineage
@@ -1118,24 +1094,234 @@ def compile_semantic_plan(
                     )
                 state.lineages[channel.target_port] = lineage
 
-    compiled_steps = isolate_output_directories(tuple(
-        PlanStep(
-            step_id=step.step_id,
-            tool_name=step.tool_name,
-            arguments=states[step.step_id].arguments,
-            depends_on=tuple(
-                dict.fromkeys(
-                    (
-                        *states[step.step_id].dependencies,
-                        *step.control_dependencies,
-                        *(value.step_id for value in states[step.step_id].arguments.values()
-                          if isinstance(value, StepOutputRef)),
-                    )
-                )
-            ),
-        )
+    if bindings:
+        for step_id, values in bindings.items():
+            if step_id not in states:
+                raise SemanticPlanCompileError('UNKNOWN_DEPENDENCY', 'Binding names an unknown step.')
+            tool = registry.get(semantic_steps[step_id].tool_name)
+            for name, value in values.items():
+                argument = tool.required_arguments.get(name, tool.optional_arguments.get(name))
+                if (argument is None or argument.planning is None or not argument.planning.scientific_parameter
+                        or argument.planning.accepted_artifact_kinds or name in tool.application_inputs and name!='kwargs'
+                        or name == 'function_name' and name in states[step_id].arguments):
+                    raise SemanticPlanCompileError('INVALID_REQUEST_BINDING',
+                        'Answer overlay cannot replace source identity or a selected method.')
+                try:
+                    argument.validate(name, value)
+                except ValueError as exc:
+                    raise SemanticPlanCompileError('INVALID_REQUEST_BINDING', 'Invalid typed requirement answer.',
+                        diagnostic_fields=dict(step_id=step_id, tool_name=tool.name, argument_name=name)) from exc
+                states[step_id].arguments[name] = value
+
+    from .native_parameters import bind_structured_parameters
+    try:
+        selected, explicit_arguments, deferred_preparation = bind_structured_parameters(
+            {step.step_id: (step.tool_name, states[step.step_id].arguments) for step in candidate.steps},
+            settings, registry, original_inputs)
+    except SemanticPlanCompileError:
+        raise
+    except ValueError as exc:
+        raise SemanticPlanCompileError('INVALID_REQUEST_BINDING', 'Invalid explicit parameter binding.') from exc
+    for step_id, (_, arguments) in selected.items():
+        states[step_id].arguments = arguments
+    # This policy belongs to AI semantic planning, after exact researcher binding.
+    # Native Functions builds its own explicit plan and never enters this compiler.
+    from agent.tools.analysis.native_clustering import ELIGIBLE
+    for step in candidate.steps:
+        arguments = states[step.step_id].arguments
+        if (step.tool_name.removeprefix('run_'), arguments.get('function_name')) in ELIGIBLE:
+            arguments.setdefault('parameter_selection', 'asw')
+    selected_argument_names = {
+        argument_name
         for step in candidate.steps
-    ))
+        for argument_name in (
+            *registry.get(step.tool_name).required_arguments,
+            *registry.get(step.tool_name).optional_arguments,
+        )
+    }
+    bound_request_inputs = {
+        input_name
+        for state in states.values()
+        for input_name in state.request_inputs
+    }
+    unauthorized = sorted(
+        input_name
+        for input_name in request.inputs
+        if input_name in selected_argument_names
+        and input_name not in bound_request_inputs
+    )
+    if unauthorized:
+        _raise_compile(
+            "UNUSED_REQUEST_INPUT",
+            "Selected tools have no explicit compiler use for matching request "
+            f"inputs {unauthorized}.",
+            diagnostic_fields={"input_name": unauthorized[0]},
+        )
+
+    requirements = []
+    blocked_checks = []
+    candidate_id = candidate_identity(canonical_candidate)
+    # Supplied values and function output availability are independently checkable
+    # even if another operation has absent scalars or owner-managed inputs.
+    for step in candidate.steps:
+        try:
+            registry.validate_arguments(step.tool_name, states[step.step_id].arguments, require_complete=False)
+        except ValueError as exc:
+            raise SemanticPlanCompileError('INVALID_COMPILED_ARGUMENTS', 'Invalid supplied arguments.',
+                diagnostic_fields=dict(step_id=step.step_id, tool_name=step.tool_name)) from exc
+        tool = registry.get(step.tool_name)
+        arguments = states[step.step_id].arguments
+        if tool.native_functions is not None and arguments.get('function_name') is not None:
+            functions = dict(tool.native_functions.functions)
+            function = arguments['function_name']
+            kwargs = arguments.get('kwargs', {})
+            if function not in functions or not isinstance(kwargs, Mapping) or set(kwargs) - set(functions[function]):
+                raise SemanticPlanCompileError('INVALID_COMPILED_ARGUMENTS', 'Unregistered native function or keyword.',
+                    diagnostic_fields=dict(step_id=step.step_id, tool_name=step.tool_name))
+        for producer_id, channel in states[step.step_id].channel_sources:
+            producer = semantic_steps[producer_id]
+            catalog = registry.get(producer.tool_name).native_functions
+            arguments = states[producer_id].arguments
+            if catalog and catalog.output_available and arguments.get('function_name') is not None:
+                if any(not catalog.output_available(arguments, member.output_key) for member in channel.members):
+                    raise SemanticPlanCompileError('WRONG_SOURCE_PORT', 'The selected native function cannot publish this source.',
+                        diagnostic_fields=dict(step_id=step.step_id, tool_name=step.tool_name,
+                            producer_step_id=producer_id, source_port=channel.source_port, target_port=channel.target_port))
+    for step in candidate.steps:
+        tool = registry.get(step.tool_name)
+        state = states[step.step_id]
+        if prepare_inputs is not None and not deferred_preparation:
+            prepared = prepare_inputs(tool, dict(state.arguments),
+                {selected.step_id: (selected.tool_name, dict(states[selected.step_id].arguments))
+                 for selected in candidate.steps}, step_id=step.step_id)
+            changed = {key for key in set(state.arguments) | set(prepared)
+                       if (key in state.arguments) != (key in prepared) or state.arguments.get(key) != prepared.get(key)}
+            if not changed <= tool.application_inputs:
+                raise SemanticPlanCompileError('INVALID_REQUEST_BINDING', 'Preparation changed a non-owned scientific operand.')
+            for name in changed:
+                value = prepared.get(name)
+                if not isinstance(value, StepOutputRef):
+                    continue
+                producer = semantic_steps.get(value.step_id)
+                channels = [ch for ch in contract.step_output_channels if producer is not None
+                    and ch.producer_tool_name == producer.tool_name and ch.consumer_tool_name == step.tool_name
+                    and any(m.argument_name == name and m.output_key == value.output_key for m in ch.members)]
+                if not channels:
+                    raise SemanticPlanCompileError('WRONG_SOURCE_PORT', 'Materialized dependency has no authoritative source channel.')
+                catalog = registry.get(producer.tool_name).native_functions
+                producer_args = states[producer.step_id].arguments
+                if catalog and catalog.output_available and producer_args.get('function_name') is not None:
+                    if not catalog.output_available(producer_args, value.output_key):
+                        raise SemanticPlanCompileError('WRONG_SOURCE_PORT', 'Materialized dependency cannot be published by this function.')
+            state.arguments = prepared
+        if tool.native_functions is not None:
+            # Check after request binding so source order cannot hide explicit
+            # native function intent or kwargs. Omitted native defaults stay
+            # omitted when the researcher selected the function itself.
+            choices = {
+                next(port.members[0].field_name for port in tool.semantic_planning.consumer_ports
+                     if port.name == source.target_port): source.choice
+                for source in step.sources if isinstance(source, SemanticRegisteredChoiceSource)
+            }
+            for name, value in choices.items():
+                if name == 'function_name' or name in explicit_arguments.get(step.step_id, ()) or name not in state.arguments:
+                    continue
+                if 'function_name' not in choices:
+                    _raise_compile('EXPLICIT_PARAMETER_CONFLICT',
+                        'An explicit native function retains omitted native defaults; use supplied parameter sources.')
+                kwargs = state.arguments.get('kwargs', {})
+                if name in kwargs and kwargs[name] != value:
+                    _raise_compile('EXPLICIT_PARAMETER_CONFLICT',
+                        'A registered native choice conflicts with supplied native kwargs.')
+        missing = sorted(set(tool.required_arguments).difference(state.arguments))
+        for name in missing:
+            argument = tool.required_arguments.get(name, tool.optional_arguments.get(name))
+            port = next((p.name for p in tool.semantic_planning.consumer_ports
+                         if any(m.field_name == name for m in p.members)), name) if tool.semantic_planning else name
+            kind = ('application' if name in tool.application_inputs or name == 'output_dir' else
+                    'scalar' if argument and argument.planning and argument.planning.scientific_parameter else 'external_input')
+            requirements.append(ScientificRequirement(candidate_id, step.step_id, step.tool_name,
+                state.arguments.get('function_name'), port, name, kind,
+                choices=tuple(argument.choices) if argument else ()))
+        try:
+            registry.validate_arguments(step.tool_name, state.arguments, require_complete=False)
+        except ValueError as exc:
+            raise SemanticPlanCompileError('INVALID_COMPILED_ARGUMENTS',
+                f'Compiled arguments are invalid for {step.tool_name!r}.',
+                diagnostic_fields={'step_id': step.step_id, 'tool_name': step.tool_name}) from exc
+        from .native_parameters import missing_clustering_parameters
+        for condition in missing_clustering_parameters(tool, state.arguments):
+            requirements.append(ScientificRequirement(candidate_id, step.step_id, step.tool_name,
+                condition['native_function'], condition['argument'], condition['argument'], 'scalar', member=condition['member']))
+        step_requirements = tuple(r.requirement_id for r in requirements if r.step_id == step.step_id)
+        if step_requirements:
+            blocked_checks.append((step.step_id + ':complete_arguments', step_requirements))
+    if deferred_preparation:
+        for index, row in enumerate(settings):
+            from .native_parameters import parameter_matches
+            matches = parameter_matches(tuple(AnalyzedOperation(step.step_id, step.tool_name,
+                states[step.step_id].arguments, ()) for step in candidate.steps), row, registry,
+                {} if context is None else context.task.get('parameter_sources', {}))
+            if len(matches) > 1:
+                requirements.append(ScientificRequirement(candidate_id, '@scope:' + str(index), row['tool'],
+                    row.get('native_function'), row['argument'], row['argument'], 'scope',
+                    choices=tuple(step.step_id for step in matches)))
+    for consumer, target, producer, port in blocked_lineages:
+        dependencies = tuple(r.requirement_id for r in requirements if r.step_id == producer and r.port == port)
+        if not dependencies:
+            raise SemanticPlanCompileError('BROKEN_BRANCH_LINEAGE', 'Required source lineage is unavailable.')
+        blocked_checks.append((consumer + ':lineage:' + target, dependencies))
+    operations = tuple(AnalyzedOperation(step.step_id, step.tool_name, states[step.step_id].arguments,
+        tuple(dict.fromkeys((*states[step.step_id].dependencies, *step.control_dependencies,
+            *(v.step_id for v in states[step.step_id].arguments.values() if isinstance(v, StepOutputRef))))))
+        for step in candidate.steps)
+    # Preparation hooks may add exact dependencies. Check these without making a plan.
+    _semantic_order(SemanticPlanCandidate(tuple(SemanticPlanStep(op.step_id, op.tool_name,
+        control_dependencies=op.dependencies) for op in operations)))
+    from .preparation_dependencies import operation_sources, operation_dependencies
+    requirements = [replace(r,
+        source_dependencies=tuple(operation_sources(r.step_id, operations, registry)),
+        source_steps=tuple(operation_dependencies(r.step_id, operations)))
+        for r in requirements]
+    return CandidateAnalysis(canonical_candidate, AnalysisDisposition.NEEDS_INPUT if requirements else AnalysisDisposition.COMPLETE,
+        operations, tuple(requirements), tuple(blocked_checks))
+
+
+def analyze_candidate(request, candidate, registry, contract=None, *, bindings=None, prepare_inputs=None):
+    """Analyze a candidate without ever constructing an executable AgentPlan."""
+    try:
+        return _analyze_candidate(request, candidate, registry,
+            contract or build_semantic_compiler_contract(registry), bindings=bindings, prepare_inputs=prepare_inputs)
+    except SemanticPlanCompileError as exc:
+        return CandidateAnalysis(candidate, AnalysisDisposition.INVALID, error=exc)
+
+
+def compile_semantic_plan(request, candidate, registry, contract, *,
+                          planner_name='semantic-compiler-contract', bindings=None, prepare_inputs=None):
+    """Strict materialization uses exactly the same analysis as preparation."""
+    if prepare_inputs is None:
+        from .active_context import prepare_selected_inputs
+        prepare_inputs = prepare_selected_inputs
+    analysis = analyze_candidate(request, candidate, registry, contract,
+                                 bindings=bindings, prepare_inputs=prepare_inputs)
+    return compile_analysis(request, analysis, registry, planner_name=planner_name)
+
+
+def compile_analysis(request, analysis, registry, *, planner_name='semantic-compiler-contract'):
+    if analysis.error is not None:
+        raise analysis.error
+    if analysis.disposition is not AnalysisDisposition.COMPLETE:
+        first = analysis.requirements[0]
+        missing = [r.argument for r in analysis.requirements if r.step_id == first.step_id]
+        raise SemanticPlanCompileError('MISSING_REQUIRED_SOURCE',
+            f'Semantic step {first.step_id!r} has unresolved required arguments {missing}.',
+            diagnostic_fields=dict(step_id=first.step_id, tool_name=first.tool_name,
+                                   target_port=first.port, argument_names=missing))
+    for operation in analysis.operations:
+        registry.validate_arguments(operation.tool_name, operation.arguments)
+    compiled_steps = isolate_output_directories(tuple(PlanStep(
+        step_id=op.step_id, tool_name=op.tool_name, arguments=op.arguments,
+        depends_on=op.dependencies) for op in analysis.operations))
     try:
         return AgentPlan(
             plan_id=_plan_id(request, planner_name, compiled_steps),
@@ -1250,16 +1436,6 @@ def build_semantic_compiler_contract(
     return contract
 
 
-def build_m92_semantic_compiler_contract(
-    registry: ToolRegistry | None = None,
-) -> PlanningCompilerContract:
-    """Build accepted M9.2 authority from registry-attached metadata."""
-
-    return build_semantic_compiler_contract(
-        build_default_tool_registry() if registry is None else registry
-    )
-
-
 __all__ = [
     "ChannelMember",
     "PlanningCompilerContract",
@@ -1272,7 +1448,6 @@ __all__ = [
     "SemanticSourceSelection",
     "SemanticStepOutputSource",
     "StepOutputChannelRule",
-    "build_m92_semantic_compiler_contract",
     "build_semantic_compiler_contract",
     "compile_semantic_plan",
 ]

@@ -11,7 +11,7 @@ from agent.orchestration import build_default_tool_registry
 from agent.orchestration.llm_planner import LLMPlanner, PlanningWireMode
 from agent.orchestration.semantic_compiler import (
     SemanticPlanCandidate, SemanticPlanStep, SemanticStepOutputSource,
-    build_m92_semantic_compiler_contract, compile_semantic_plan,
+    build_semantic_compiler_contract, compile_semantic_plan,
 )
 from agent.schemas import AgentRequest
 from agent.schemas.orchestration import AgentPlan, PlanStep, StepOutputRef, _serialize
@@ -47,8 +47,7 @@ def plan(*steps):
 
 def test_composition_preserves_source_identity_and_scoped_registry_inputs(registered, tmp_path):
     owner, record, _ = registered
-    declarations = companions(tmp_path) | dict(resolution=0.7, neighbors_random_seed=9,
-                                               cluster_random_seed=7, umap_random_seed=6)
+    declarations = companions(tmp_path) | dict(matrix_semantics='fragment_counts',device='cpu')
     binding = owner.compose_h5ad(record.resource_id, declarations)
     assert binding.resource_id == record.resource_id and binding.record_sha256 == record.record_sha256
     assert binding.execution_inputs['input_path'] == record.source_path
@@ -81,6 +80,26 @@ def test_companion_can_declare_target_assembly_without_claiming_qualification(re
                                    {'umap_overwrite': True}, {'embedding_overwrite': True}])
 def test_invalid_declarations_and_scoped_overwrite_bypass_are_rejected(registered, values):
     owner, record, _ = registered
+    if values=={'species':'zebrafish'}:
+        binding=owner.compose_h5ad(record.resource_id,values)
+        assert binding.execution_inputs['species']=='zebrafish'
+        # Broad intake permits adaptation species; native embedding keeps its
+        # own human/mouse contract and cannot gain source/model qualification.
+        with pytest.raises(ResourceAdmissionError):
+            owner.validate_plan(submission(binding),plan(PlanStep('embed','epizoo_embed_cells',
+                dict(input_path=record.source_path,species='zebrafish'))))
+        return
+    if values=={'embedding_overwrite':True}:
+        from agent.application.service import ResearchAgentApplication, ApplicationServiceError
+        binding=owner.compose_h5ad(record.resource_id,values)
+        app=ResearchAgentApplication(owner._workspace.root)
+        prepared,run=app._prepare_request(AgentRequest('managed','Embed.',dict(binding.execution_inputs)))
+        assert prepared.inputs['output_dir']==str(run.scientific)
+        assert prepared.inputs['input_path']==record.source_path
+        for override in ({'output_dir':record.source_path},{'overwrite':True}):
+            with pytest.raises(ApplicationServiceError):
+                app._prepare_request(AgentRequest('managed','Embed.',dict(binding.execution_inputs)|override))
+        return
     with pytest.raises(ResourceAdmissionError):
         owner.compose_h5ad(record.resource_id, values)
 
@@ -111,7 +130,7 @@ def test_existing_compiler_supports_exact_direct_and_same_plan_consumption(regis
     request = AgentRequest('request', 'Embed selected cells.',
                            _serialize(binding.execution_inputs) | dict(output_dir=str(tmp_path / 'new-output')))
     compiled = compile_semantic_plan(request, SemanticPlanCandidate(tuple(steps)), registry,
-                                    build_m92_semantic_compiler_contract(registry))
+                                    build_semantic_compiler_contract(registry))
     owner.validate_plan(submission(binding), compiled)
 
 
@@ -161,8 +180,8 @@ def test_resource_prerequisites_only_apply_to_actual_embedding(registered, code)
 def test_unrelated_operations_are_not_assigned_the_selected_source(registered):
     owner, record, _ = registered
     binding = owner.compose_h5ad(record.resource_id)
-    owner.validate_plan(submission(binding), plan(PlanStep('unrelated', 'cluster_cells',
-                                                        dict(analysis_path='/explicit/graph.h5ad'))))
+    owner.validate_plan(submission(binding), plan(PlanStep('unrelated', 'run_scanpy',
+        dict(input_path='/explicit/graph.h5ad',function_name='tl.leiden',kwargs={'resolution':0.7}))))
 
 
 def test_legacy_source_only_binding_cannot_authorize_invented_embedding_context(registered):
@@ -217,11 +236,11 @@ def reviewed_resource(**changes):
 def test_application_resource_policy_resolves_completed_declaration_and_preserves_companions(registered):
     owner, record, _ = registered
     resource = reviewed_resource()
-    values, error = select_epizoo_resource({'species': 'mouse', 'resolution': 0.7}, None, (resource,))
+    values, error = select_epizoo_resource({'species': 'mouse', 'device': 'cpu'}, None, (resource,))
     assert error is None
     binding = owner.compose_h5ad(record.resource_id, values)
     assert binding.resource_id == record.resource_id and binding.record_sha256 == record.record_sha256
-    assert binding.execution_inputs['resolution'] == 0.7
+    assert binding.execution_inputs['device'] == 'cpu'
     assert binding.execution_inputs['expected_resource_identity'] == pins()
     assert binding.execution_inputs['input_path'] == record.source_path
 
@@ -232,7 +251,7 @@ def test_application_resource_policy_resolves_completed_declaration_and_preserve
     ('mouse', (reviewed_resource(), reviewed_resource(resource_id='second')), 'EPIZOO_RESOURCE_AMBIGUOUS'),
 ])
 def test_application_resource_policy_never_falls_back_across_species_or_ambiguity(species, resources, code):
-    original = {'species': species, 'resolution': 0.7}
+    original = {'species': species, 'device': 'cpu'}
     values, error = select_epizoo_resource(original, None, resources)
     assert values == original and error == code
     assert 'checkpoint_path' not in values
@@ -251,9 +270,9 @@ def test_application_resource_policy_rejects_invalid_explicit_selection(values, 
 def test_explicit_qualified_choice_preserves_pins_without_declaring_species(registered):
     owner, record, _ = registered
     selected = reviewed_resource(default=False)
-    values, error = select_epizoo_resource({'resolution': 0.7}, selected.resource_id, (selected,))
+    values, error = select_epizoo_resource({'device': 'cpu'}, selected.resource_id, (selected,))
     assert error is None and 'species' not in values
-    assert values == {'resolution': 0.7} | selected.inputs()
+    assert values == {'device': 'cpu'} | selected.inputs()
     binding = owner.compose_h5ad(record.resource_id, values)
     owner.validate_plan(submission(binding), plan(PlanStep('inspect', 'inspect_scATAC',
         dict(path=record.source_path))))

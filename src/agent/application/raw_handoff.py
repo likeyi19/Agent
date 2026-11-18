@@ -644,6 +644,12 @@ def requirements(binding, declared, input_sets, *, evidence=None, pinned=None):
 def _captured(interaction, preceding):
     from .dialogue_execution import _role_source
     admitted = interaction.admitted or {}
+    from .preparation_state import source_context, captured_owner, intake_task
+    if (interaction.preparation is not None and intake_task((*preceding, interaction), interaction.preparation)
+            in {'fastq','bam','fragments','annotation','epizoo'}):
+        return source_context(interaction, preceding)
+    if not admitted and captured_owner(interaction, preceding) in {'fastq','bam','fragments','annotation','epizoo'}:
+        return source_context(interaction, preceding)
     if ('source_view' in interaction.snapshot.get('dialogue', {})
             and 'continuation' not in admitted
             and any(field in admitted for field in ('fastq', 'bam', 'fragments', 'annotation', 'epizoo'))):
@@ -662,6 +668,40 @@ def _extend_catalog(previous, current):
     if any(offered.get(row['input_set_id']) != row for row in previous):
         raise ValueError('Captured scientific resource definitions cannot be replaced.')
     return current
+
+
+def declared_components(selected, evidence):
+    """Initial configuration semantics; scoped answers belong to preparation."""
+    if selected is None:
+        return {}
+    return {port:selected.input_set_id for port in evidence[selected.input_set_id]['components']}
+
+
+def _native_component_selections(source, selected, evidence, field, addition, unknown_fields=(), *, preceding=()):
+    """Read-only replay of pre-canonical component-choice receipts."""
+    previous = source
+    context = {}
+    while previous is not None:
+        context = previous.admitted.get(field + '_context', {})
+        if context.get('component_selections') or not previous.admitted.get('continuation'):
+            break
+        previous = next(i for i in preceding
+            if i.turn_id == previous.admitted['continuation']['binding_turn_id'])
+    choices = _serialize(context.get('component_selections', {}))
+    option = next((row for row in (() if source is None else source.admitted.get('resource_options', ()))
+        if selected is not None and row['handle'] == 'resource.' + selected.input_set_id), {})
+    if ('resource' in unknown_fields
+            or addition.resource_preference is not None and 'port' not in option):
+        choices.clear()
+    if selected is not None and (source is None or addition.resource is not None or addition.resource_preference is not None):
+        key = selected.input_set_id
+        ports = evidence[key]['components']
+        if 'port' in option:
+            if option['port'] not in ports:
+                raise ValueError('Selected native reference does not supply the requested component.')
+            ports = (option['port'],)
+        choices.update({port: key for port in ports})
+    return choices
 
 
 def _completion(interaction, origin, source, addition, arguments, rows, registry, field='fastq', evidence=None, source_evidence=None, resource_observation=None, *, unknown_fields=(), declared=None, native=False):
@@ -720,9 +760,13 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
     from .turn_decisions import RequestRoles, IntentError
     from .resource_continuation import catalog
     from .local_resources import LocalResourceAdmission
+    from .preparation_state import captured_owner
+    state = sessions.load(sessions._interaction_session_id)
+    captured_field = (None if isinstance(decision, RequestRoles) else
+                      captured_owner(interaction, state.interactions[:-1]))
     field = ('epizoo' if decision.epizoo is not None else 'fragments' if decision.fragments is not None
              else 'bam' if decision.bam is not None else 'fastq' if decision.fastq is not None
-             else (interaction.snapshot.get('prerequisite') or {}).get('field')
+             else captured_field
              or ('annotation' if decision.annotation is not None else 'fastq'))
     if field == 'annotation':
         from .annotation_preparation import admit as admit_annotation
@@ -742,12 +786,10 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
         origin, source = replace(interaction, admitted=intent), None
         rows = catalog(input_sets)
     else:
-        if decision.pending != '@roles' or reference is None or reference['field'] != field:
+        if decision.pending != '@roles' or captured_field != field:
             raise IntentError('invalid_prerequisite')
         origin, source = _captured(interaction, state.interactions[:-1])
         previous_rows = _serialize(source.admitted['resource_catalog'])
-        if digest(previous_rows) != reference['resource_context_sha256']:
-            raise IntentError('invalid_prerequisite')
         rows = _extend_catalog(previous_rows, catalog(input_sets))
     native = field in ('fastq', 'fragments', 'bam')
     if native:
@@ -822,14 +864,10 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
     if field == 'epizoo':
         admitted['epizoo_source_evidence'] = source_evidence
     if not initial:
-        admitted['continuation'] = {k: reference[k] for k in ('origin_turn_id', 'binding_turn_id', 'field')}
         if decision.unknown_fields:
             admitted['unknown_fields'] = list(decision.unknown_fields)
-    pending = None
     if missing:
-        admitted.update(reason='missing_' + field + '_declarations', choices=missing, value_required=True)
-        pending = dict(origin_turn_id=origin.turn_id, binding_turn_id=interaction.turn_id,
-            field=field, tool=target(field, declared), resource_context_sha256=digest(rows))
+        admitted.update(reason='missing_' + field + '_declarations')
     else:
         if field == 'epizoo':
             from .epizoo_handoff import prepare as prepare_epizoo, EpiZooResourcePrerequisite
@@ -840,19 +878,19 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
                         input_sets=input_sets, resource_owner=reference_resources, origin_turn_id=origin.turn_id)
             except EpiZooResourcePrerequisite as exc:
                 source_evidence['transfer_resource_problem']=str(exc)
-                admitted.update(kind='clarify',reason='missing_epizoo_declarations',choices=[str(exc)],value_required=True)
-                pending=dict(origin_turn_id=origin.turn_id,binding_turn_id=interaction.turn_id,
-                    field=field,tool=target(field,declared),resource_context_sha256=digest(rows))
-                return admitted,pending
+                admitted.update(kind='clarify',reason='missing_epizoo_declarations')
+                return admitted, declaration_need(field, admitted['tool'], [str(exc)])
         else:
+            component_selections = (declared_components(selected, evidence) if native else None)
             binding, receipt = prepare(owner, state.session_id, binding, declared, selected, values,
                 resource_evidence=evidence if native else None,
+                component_selections=component_selections,
                 accepted_contexts=tuple(i.admitted[field + '_context'] for i in state.interactions[:-1]
                     if i.admitted and field + '_context' in i.admitted))
         admitted.update(inputs=_serialize(binding.execution_inputs), registered_input=binding.attribution(),
             **{field + '_context': receipt}, operation='plan',
             request_id='turn-' + digest(dict(session=state.session_id, turn=interaction.turn_id)))
-    return admitted, pending
+    return admitted, declaration_need(field, admitted['tool'], missing)
 
 
 def _context_identity(candidates, declared, selected, *, mode='original', scope=None):
@@ -869,9 +907,10 @@ def _context_identity(candidates, declared, selected, *, mode='original', scope=
                        resource=None if selected is None else selected.resource_choice(), **({'source_mode': mode} if mode else {})))
 
 
-def prepare(owner, session_id, candidates, declared, selected, arguments, *, accepted_contexts=(), resource_evidence=None):
+def prepare(owner, session_id, candidates, declared, selected, arguments, *, accepted_contexts=(), resource_evidence=None, component_selections=None):
     from .native_raw_handoff import prepare as native_prepare
-    return native_prepare(owner, session_id, candidates, declared, selected, arguments, resource_evidence=resource_evidence)
+    return native_prepare(owner, session_id, candidates, declared, selected, arguments,
+        resource_evidence=resource_evidence, component_selections=component_selections)
 
 
 def _fragments_identity(candidates, declared, selected):
@@ -959,14 +998,17 @@ def validate(interaction, preceding):
     from .input_sets import ScientificInputSet
     from agent.orchestration.registry import build_default_tool_registry
     field = _field(interaction)
+    from .preparation_state import intake_task, observation
+    canonical = interaction.preparation is not None and intake_task((*preceding, interaction), interaction.preparation) == field
     if (interaction.admitted or {}).get('annotation_preparation') in ('selected-method.v1', 'selected-method.v2', 'selected-method.v3'):
         from .annotation_preparation import validate as validate_annotation
         return validate_annotation(interaction, preceding)
     try:
         captured = _serialize(interaction.snapshot)
-        expected = capture_prerequisite(preceding, interaction.base_revision_id,
+        expected = None if canonical else capture_prerequisite(preceding, interaction.base_revision_id,
             interaction.base_generation, interaction.submission, captured.get('dialogue', {}).get('requested_predecessor'),
-            canonical_sources='source_view' in captured.get('dialogue', {}))
+            canonical_sources='source_view' in captured.get('dialogue', {}),
+            utterance=interaction.utterance if captured.get('dialogue', {}).get('prerequisite_capture_version') == 2 else None)
         if captured.get('prerequisite') != expected:
             raise ValueError('FASTQ prerequisite capture changed.')
         admitted = _serialize(interaction.admitted or {})
@@ -992,7 +1034,7 @@ def validate(interaction, preceding):
             raise ValueError('Invalid resource admission observations.')
         previous_rows = None if source is None else _serialize(source.admitted['resource_catalog'])
         if (catalog(tuple(ScientificInputSet(**r) for r in rows)) != rows
-                or previous_rows is not None and (digest(previous_rows) != expected['resource_context_sha256']
+                or previous_rows is not None and (not canonical and digest(previous_rows) != expected['resource_context_sha256']
                     or (rows != previous_rows if evidence is None else _extend_catalog(previous_rows, rows) != rows))):
             raise ValueError('FASTQ resource catalog changed.')
         registry = build_default_tool_registry()
@@ -1010,7 +1052,7 @@ def validate(interaction, preceding):
                 or admitted[field + '_arguments'] != values or admitted['tool'] != target(field, declared)
                 or admitted['revision_id'] != interaction.base_revision_id or admitted['roles']):
             raise ValueError('FASTQ declarations changed.')
-        if source is not None and admitted.get('continuation') != {
+        if not canonical and source is not None and admitted.get('continuation') != {
                 k: expected[k] for k in ('origin_turn_id', 'binding_turn_id', 'field')}:
             raise ValueError('FASTQ continuation changed.')
         if missing or admitted['kind'] == 'clarify':
@@ -1020,11 +1062,12 @@ def validate(interaction, preceding):
             # authority. Recompute whether prerequisites are missing and check
             # all typed bindings below, without requiring historical wording to
             # equal the current renderer (or keeping legacy message adapters).
-            choices = admitted['choices']
+            choices = ([m for r in (observation(interaction) or {}).get('requirements', ()) for m in r.get('messages', ())]
+                       if canonical else admitted['choices'])
             if (admitted['kind'] != 'clarify' or not isinstance(choices, list) or not choices
                     or any(type(x) is not str or not x.strip() for x in choices)
                     or admitted['inputs'] != values or admitted['registered_input'] != binding.attribution()
-                    or _serialize(interaction.prerequisite) != pending or field + '_context' in admitted):
+                    or _serialize(interaction.prerequisite) != (None if canonical else pending) or field + '_context' in admitted):
                 raise ValueError('FASTQ missing requirements changed.')
         elif field == 'epizoo':
             from .epizoo_handoff import validate_completion
@@ -1033,7 +1076,13 @@ def validate(interaction, preceding):
             raise ValueError('Annotation uses its current selected production preparation owner.')
         elif (admitted.get(field + '_context') or {}).get('adapter') in ('native-files.v1', 'native-inputs.v1'):
             from .native_raw_handoff import validate as validate_native
-            validate_native(admitted, binding, declared, selected, values, field)
+            selections = (declared_components(selected, evidence) if canonical else
+                _native_component_selections(source, selected, evidence, field,
+                    declaration(admitted[field + '_addition'], field), tuple(admitted.get('unknown_fields', ())), preceding=preceding)
+                if ('component_selections' in admitted[field + '_context']
+                    or captured.get('dialogue', {}).get('prerequisite_capture_version') == 2) else None)
+            validate_native(admitted, binding, declared, selected, values, field,
+                component_selections=selections)
         elif field == 'fragments':
             _validate_fragments_completion(interaction, admitted, binding, declared, selected, values)
         else:
@@ -1130,3 +1179,16 @@ def _candidate_view(interaction):
             or any(original[k] != bound.members[0][k] for k in ('resource_id', 'record_sha256'))):
         raise ValueError('Candidate view changed the selected source.')
     return replace(interaction, submission=dict(submission, execution_inputs={}, registered_input=metadata))
+
+
+def declaration_need(field, tool, messages, offers=()):
+    """A typed task-scoped scientific declaration, before consumer selection.
+
+    The declaration dataclass owns its members and legality. This observation
+    grants no candidate or binding authority and contains no lifecycle pointers.
+    """
+    if not messages:
+        return ()
+    from agent.orchestration.semantic_compiler import ScientificRequirement
+    need = ScientificRequirement('', '@task', tool, None, 'source_declaration', field, 'declaration').to_dict()
+    return (dict(need, messages=list(messages), offers=list(offers)),)

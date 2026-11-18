@@ -178,7 +178,7 @@ def test_new_raw_request_after_pending_keeps_new_source_and_objective(tmp_path, 
     assert result.status == 'clarification' and not executor.plans, result.to_dict()
     interaction = app._application.sessions.load('session').interactions[-1]
     assert interaction.admitted['annotation']['source'] == 'source.1'
-    assert interaction.prerequisite['origin_turn_id'] == 'annotation'
+    assert interaction.preparation['task_origin'] == 'annotation'
     assert interaction.admitted['annotation_source_evidence']['source_sha256'] == records[1].source_sha256
     assert interaction.admitted['annotation_arguments'] == {}
     assert 'continuation' not in interaction.admitted
@@ -191,8 +191,8 @@ def test_new_generic_role_request_after_raw_pending_does_not_continue_annotation
     result = submit(app, records[1], 'new-request', NEW)
     assert result.status == 'clarification' and not executor.plans, result.to_dict()
     interaction = app._application.sessions.load('session').interactions[-1]
-    assert interaction.prerequisite['field'] == 'roles'
-    assert interaction.prerequisite['origin_turn_id'] == 'new-request'
+    assert interaction.preparation['task']['context']['intake_owner'] == 'roles'
+    assert interaction.preparation['task_origin'] == 'new-request'
     assert interaction.admitted['tool'] == 'mock_embed_cells'
     assert interaction.admitted['inputs'] == {'n_components': 3}
     assert not interaction.admitted['roles'] and 'annotation' not in interaction.admitted

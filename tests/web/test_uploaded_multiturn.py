@@ -315,7 +315,9 @@ def test_uploaded_h5ad_does_not_substitute_inspection_for_other_scientific_inten
         result = submit(client, body(resource['resource_id'], utterance='Compute EpiZoo embeddings.'))
         assert result['status'] == 'clarification' and result['revision_id'] is None, result
         assert result['error'] is None
-        assert result['response']['clarification']['reason'] == 'missing_species'
+        assert result['response']['clarification']['reason'] == 'missing_parameter_value'
+        state=backend.service._application.sessions.load('session')
+        assert [r['argument'] for r in state.interactions[-1].admitted['preparation_result']['requirements']]==['species']
         assert not backend.science_calls and len(backend.models) == 1
         assert all(step['tool_name'] != 'inspect_scATAC' for step in result['steps'])
         state = backend.service._application.sessions.load('session')

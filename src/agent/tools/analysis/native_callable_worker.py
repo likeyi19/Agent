@@ -50,7 +50,7 @@ def signature_metadata(fn):
     except (NameError, TypeError, AttributeError):
         annotations = {}
     for key, parameter in inspect.signature(fn).parameters.items():
-        item = {}
+        item = dict(required=parameter.default is inspect.Parameter.empty and parameter.kind not in (parameter.VAR_POSITIONAL,parameter.VAR_KEYWORD))
         annotation = annotations.get(key, parameter.annotation)
         if isinstance(annotation, str):
             if annotation in ('bool', 'int', 'float', 'str'):

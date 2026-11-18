@@ -197,7 +197,7 @@ def context(sessions, session_id, interaction):
     resources = getattr(sessions, '_reference_resources', None)
     if resources is not None and resources.library is not None:
         public['sequence_models'] = resources.library.sequence_models()
-    if interaction.snapshot.get('prerequisite') is not None:
+    if interaction.snapshot.get('prerequisite') is not None or interaction.snapshot.get('preparation') is not None:
         from .dialogue_execution import prerequisite_public
         state = sessions.load(session_id)
         public['pending_prerequisite'] = dict(

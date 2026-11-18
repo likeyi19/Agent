@@ -119,7 +119,9 @@ def test_qwen_uses_normal_web_selection_interpretation_and_saved_history(tmp_pat
             assert view['status'] == 'clarification' and view['profile_id'] == QWEN_PROFILE['profile_id']
         history = client.get('/api/v1/sessions/qwen-selection').json()
         assert history['generation'] == 0 and history['active_revision_id'] is None
-        assert len(history['turns']) == len(initialized) == len(requests) == 2
+        assert len(history['turns']) == len(initialized) == 2
+        # Each turn interprets intent and then prepares clarification prose.
+        assert len(requests) == 4
         assert all(item['model'] == 'qwen3.8-max' and item['extra_body'] == {'enable_thinking': False}
                    and item['response_format']['json_schema']['strict'] for _, item in requests)
         assert all(item['base_url'].startswith('https://workspace.ap-southeast-1.maas.') for item in initialized)
@@ -144,9 +146,9 @@ def test_selected_profiles_use_real_default_transport_factories_without_fallback
             view = wait_turn(client, body['turn_id'], session='selection')
             assert view['status'] == 'clarification' and view['profile_id'] == profile['profile_id']
             assert view['revision_id'] is None
-        assert [kind for kind, _ in requests] == ['chat', 'responses', 'chat']
-        assert [request['model'] for _, request in requests] == [profile['model_id'] for profile in PROFILES[:3]]
-        assert [request['timeout'] for _, request in requests] == [90, 60, 60]
+        assert [kind for kind, _ in requests] == ['chat', 'chat', 'responses', 'responses', 'chat', 'chat']
+        assert [request['model'] for _, request in requests] == [profile['model_id'] for profile in PROFILES[:3] for phase in range(2)]
+        assert [request['timeout'] for _, request in requests] == [90, 90, 60, 60, 60, 60]
         assert [item['base_url'] for item in initialized] == [
             'https://openrouter.ai/api/v1', 'https://api.groq.com/openai/v1', 'https://openrouter.ai/api/v1']
         assert all(item['max_retries'] == 0 for item in initialized)
@@ -170,10 +172,9 @@ def test_provider_failure_keeps_selected_model_and_sanitizes_error(tmp_path, mon
             profile_id='openrouter-primary'))
         assert response.status_code == 202
         view = wait_turn(client, 'failed', session='selection', terminal_status='failed')
-        # Existing interpretation admission renders provider failure as a safe
-        # invalid-decision clarification; adding a transport must preserve it.
-        assert view['status'] == 'clarification' and view['profile_id'] == 'openrouter-primary'
-        assert view['response']['clarification']['reason'] == 'invalid_decision'
+        # A transport failure remains a failed interpretation, not missing intent.
+        assert view['status'] == 'failed' and view['profile_id'] == 'openrouter-primary'
+        assert view['error']['code'] == 'PLANNING_PROVIDER_ERROR'
         assert 'provider-secret-sentinel' not in json.dumps(view)
         assert '/private/operator' not in json.dumps(view)
         assert len(initialized) == len(requests) == 1

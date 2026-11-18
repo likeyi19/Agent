@@ -18,6 +18,21 @@ FACT_FIELDS = ('species','assembly','reference_identity_sha256','ordered_feature
 RESULT_FIELDS = (*BASE_FIELDS, *FACT_FIELDS)
 
 
+def check_matrix_spec(value, spec):
+    """Exact manifest applicability, shared by preparation and expansion."""
+    if (value['species']!=spec['species'] or value['assembly']!=spec['assembly']
+            or spec['reference_identity_sha256'] is not None and
+            reference_binding(value)['identity_sha256']!=spec['reference_identity_sha256']):
+        raise ValueError('Adaptation matrix/reference/species/assembly mismatch.')
+
+
+def read_specification(path, sha):
+    spec=c.read_json(path,sha)
+    matrix.shape(spec,('contract_version','reference_identity_sha256','species','assembly',
+        'source_bundle','seam_bundle','mapping','execution_profile'))
+    return spec
+
+
 def expand(args):
     args = dict(args)
     args.setdefault('strategy','auto')
@@ -26,18 +41,14 @@ def expand(args):
     for key in ARGUMENTS:
         if key.endswith('_sha256'): matrix.sha(args[key])
         elif key.endswith('_path') or key == 'output_dir': matrix.absolute_path(str(args[key]))
-    spec = c.read_json(args['adaptation_spec_path'], args['adaptation_spec_sha256'])
-    matrix.shape(spec, ('contract_version','reference_identity_sha256','species','assembly',
-                        'source_bundle','seam_bundle','mapping','execution_profile'))
+    spec=read_specification(args['adaptation_spec_path'],args['adaptation_spec_sha256'])
     lifecycle = spec['contract_version'] == 'epizoo-adaptation-inputs.v3'
     if lifecycle:
         from .native_posttraining import lifecycle_profile
         value = matrix.load_manifest_bytes(Path(args['matrix_manifest_path']).read_bytes())
         profile=lifecycle_profile(matrix_semantics=matrix_semantics(value),operation='initialization',**overrides)
-        if (spec['execution_profile']!='lifecycle.v3' or value['species']!=spec['species']
-                or value['assembly']!=spec['assembly'] or
-                spec['reference_identity_sha256'] is not None and
-                reference_binding(value)['identity_sha256']!=spec['reference_identity_sha256']):
+        check_matrix_spec(value,spec)
+        if spec['execution_profile']!='lifecycle.v3':
             raise ValueError('Initialization matrix/reference identity differs.')
         return backend.arguments(dict(matrices=[dict(manifest_path=str(args['matrix_manifest_path']),
             manifest_sha256=args['matrix_manifest_sha256'])],source_bundle=spec['source_bundle'],
@@ -90,10 +101,9 @@ def expand(args):
     # Metadata-only checks precede all model loading/SEAM/training. The owner
     # subsequently verifies the matrix owner scope and scientific compatibility.
     value = matrix.load_manifest_bytes(Path(args['matrix_manifest_path']).read_bytes())
+    check_matrix_spec(value,spec)
     if (c.file_record(args['matrix_manifest_path'])['sha256'] != args['matrix_manifest_sha256'] or
-        matrix_semantics(value) != profile['matrix_semantics'] or
-        value['species'] != spec['species'] or value['assembly'] != spec['assembly'] or
-        (spec['reference_identity_sha256'] is not None and reference_binding(value)['identity_sha256'] != spec['reference_identity_sha256'])):
+        matrix_semantics(value) != profile['matrix_semantics']):
         raise ValueError('Adaptation matrix/reference/species/assembly/semantics mismatch.')
     return expanded
 
@@ -151,3 +161,17 @@ def recover(arguments, execution_identity):
 def adapt_epizoo_species(matrix_manifest_path, matrix_manifest_sha256, adaptation_spec_path,
         adaptation_spec_sha256, output_dir, strategy='auto', max_steps=None, learning_rate=None, training_batch_size=None):
     return execute({k: v for k, v in locals().items() if k not in OPTIONAL_ARGUMENTS or v is not None})
+
+
+def prepare_operation(arguments, context):
+    """Known exact manifests are preparable; future native outputs stay symbolic."""
+    from agent.orchestration.scientific_inputs import ScientificDiagnostic
+    dataset=context.existing(arguments.get('matrix_manifest_path'));specification=context.existing(arguments.get('adaptation_spec_path'))
+    if dataset is None or specification is None:return arguments
+    if not dataset.matches_sha256(arguments.get('matrix_manifest_sha256'),context.registry) or not specification.matches_sha256(arguments.get('adaptation_spec_sha256'),context.registry):
+        raise ScientificDiagnostic('SPECIES_PREREQUISITE_INVALID','Selected manifest differs from its exact declared identity.')
+    try:
+        value=matrix.load_manifest_bytes(dataset.read_bytes(max_bytes=matrix.MAX_MANIFEST_BYTES));spec=read_specification(specification.path,specification.sha256)
+        check_matrix_spec(value,spec)
+    except ValueError as exc:raise ScientificDiagnostic('SPECIES_PREREQUISITE_INVALID',str(exc)) from exc
+    return arguments

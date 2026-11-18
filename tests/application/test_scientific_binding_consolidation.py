@@ -21,10 +21,11 @@ def decision(text, arguments):
     ('Use resolution 2.4.', '0.4', 'resolution 2.4', 2.4),
 ])
 def test_original_numeric_value_owns_the_binding(text,literal,evidence,want):
-    row = dict(tool='cluster_cells',argument='resolution',literal=literal,evidence=evidence)
+    row = dict(tool='run_snapatac2',argument='kwargs',native_function='tl.leiden',
+        members=[dict(name='resolution',kind='number',literal=literal,evidence=evidence)])
     parsed = decision(text,[row])
     values = _bind_arguments(build_default_tool_registry(),text,{},parsed.arguments)
-    assert list(values.values()) == [want]
+    assert list(values.values()) == [{'resolution':want}]
     assert parsed.arguments[0].literal == text[parsed.arguments[0].start:parsed.arguments[0].end]
 
 
@@ -32,7 +33,7 @@ def test_original_numeric_value_owns_the_binding(text,literal,evidence,want):
     ('resolution 0.8; resolution 0.8','resolution 0.8')])
 def test_recovery_does_not_guess_among_grounded_alternatives(text,evidence):
     with pytest.raises(IntentError, match='ambiguous_parameter'):
-        decision(text,[dict(tool='cluster_cells',argument='resolution',literal='2.4',evidence=evidence)])
+        decision(text,[dict(tool='run_snapatac2',argument='kwargs',native_function='tl.leiden',members=[dict(name='resolution',kind='number',literal='2.4',evidence=evidence)])])
 
 
 def test_same_named_parameters_in_different_functions_keep_distinct_values():
@@ -77,7 +78,7 @@ def test_bad_member_clarification_preserves_sibling_and_task_after_reload(tmp_pa
     assert not executor.plans
     model.interpret=False
     second=app.submit_turn('session','answer','',expected_generation=0,
-        parameter_overrides=[setting('kwargs',{'max_value':4})],
+        parameter_overrides=[dict(setting('kwargs',{'max_value':4}),step_id=option['step_id'])],
         clarification_choice=dict(question_turn_id='task',handle=option['handle']))
     assert second.error.code=='TEST_SCIENCE_WITHHELD',second.to_dict()
     assert _serialize(executor.plans[0].steps[0].arguments['kwargs'])=={'zero_center':False,'max_value':4}
@@ -94,8 +95,11 @@ def test_qualitative_field_and_omitted_optional_have_different_behavior(tmp_path
     assert not executor.plans
     assert first.clarification_choices[0]['member']=='max_value'
     model.interpret=False
-    bad=app.submit_turn('session','bad','',expected_generation=0,parameter_overrides=[setting('kwargs',{'base':2},'pp.log1p')])
-    assert bad.status=='failed' and not executor.plans
+    rejected=app.submit_turn('session','bad','',expected_generation=0,
+        clarification_choice=dict(question_turn_id='task',handle=first.clarification_choices[0]['handle']),
+        parameter_overrides=[dict(setting('kwargs',{'base':2},'pp.log1p'),step_id='scale')])
+    assert rejected.status=='failed' and rejected.error.code=='INTERACTIVE_TURN_CONFLICT'
+    assert not executor.plans
 
 
 def test_structured_authority_removes_bad_model_duplicate_before_grounding(tmp_path):
@@ -111,7 +115,7 @@ def test_structured_authority_removes_bad_model_duplicate_before_grounding(tmp_p
 def test_two_values_are_unresolved_even_if_candidate_chooses_one():
     text='Set resolution to 0.8 or 1.2.'
     with pytest.raises(IntentError, match='ambiguous_parameter'):
-        decision(text,[dict(tool='cluster_cells',argument='resolution',literal='0.8',evidence='resolution to 0.8 or 1.2')])
+        decision(text,[dict(tool='run_snapatac2',argument='kwargs',native_function='tl.leiden',members=[dict(name='resolution',kind='number',literal='0.8',evidence='resolution to 0.8 or 1.2')])])
 
 
 def test_rejected_members_of_distinct_functions_have_independent_questions(tmp_path):
@@ -122,10 +126,16 @@ def test_rejected_members_of_distinct_functions_have_independent_questions(tmp_p
     assert first.status=='clarification',first.to_dict()
     assert {row['native_function'] for row in first.clarification_choices}=={'pp.scale','pp.log1p'}
     model.interpret=False
-    second=app.submit_turn('session','scale','',expected_generation=0,parameter_overrides=[setting('kwargs',{'max_value':4})])
+    choice=next(c for c in first.clarification_choices if c['native_function']=='pp.scale')
+    second=app.submit_turn('session','scale','',expected_generation=0,
+        clarification_choice=dict(question_turn_id='task',handle=choice['handle']),
+        parameter_overrides=[dict(setting('kwargs',{'max_value':4}),step_id=choice['step_id'])])
     assert second.status=='clarification',second.to_dict()
     assert len(second.clarification_choices)==1 and second.clarification_choices[0]['member']=='base'
-    final=app.submit_turn('session','log','',expected_generation=0,parameter_overrides=[setting('kwargs',{'base':2},'pp.log1p')])
+    choice=second.clarification_choices[0]
+    final=app.submit_turn('session','log','',expected_generation=0,
+        clarification_choice=dict(question_turn_id='scale',handle=choice['handle']),
+        parameter_overrides=[dict(setting('kwargs',{'base':2},'pp.log1p'),step_id=choice['step_id'])])
     assert final.error.code=='TEST_SCIENCE_WITHHELD',final.to_dict()
     assert dict(executor.plans[0].steps[0].arguments['kwargs'])=={'max_value':4}
     assert dict(executor.plans[0].steps[1].arguments['kwargs'])=={'base':2}
@@ -139,11 +149,12 @@ def test_natural_value_for_repeated_operation_uses_existing_plan_selection(tmp_p
     app,executor,model,inputs=setup(tmp_path,declaration=row,repeated=True)
     first=app.submit_turn('session','task',text,expected_generation=0,execution_inputs=inputs)
     assert first.status=='clarification',first.to_dict()
-    assert [c['handle'] for c in first.clarification_choices]==['step:scale','step:again']
+    assert [c['choice_identity'] for c in first.clarification_choices]==['scale','again']
+    assert len({c['requirement_id'] for c in first.clarification_choices})==1
     model.interpret=False
     count=len(model.calls)
     final=app.submit_turn('session','chosen','',expected_generation=0,
-        clarification_choice=dict(question_turn_id='task',handle='step:again'))
+        clarification_choice=dict(question_turn_id='task',handle=first.clarification_choices[1]['handle']))
     assert final.error.code=='TEST_SCIENCE_WITHHELD',final.to_dict()
     assert 'kwargs' not in executor.plans[0].steps[0].arguments
     assert dict(executor.plans[0].steps[1].arguments['kwargs'])=={'max_value':5}

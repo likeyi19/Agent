@@ -110,7 +110,7 @@ def test_ordinary_single_upload_cannot_redirect_raw_request_to_companion(
             initial = submit(client, body(companion.resource_id, utterance='Start with B.'))
             assert initial['status'] == 'clarification', initial
             previous = no_science(backend).interactions[-1]
-            assert previous.prerequisite['field'] == ('roles' if pending_kind == 'generic' else field)
+            assert previous.preparation['task']['context']['intake_owner'] == ('roles' if pending_kind == 'generic' else field)
         before = list(observations)
         result = submit(client, body(selected.resource_id, turn='wrong-primary',
             utterance='Use the selected A.', attachment_ids=[companion.resource_id]))
@@ -146,11 +146,11 @@ def test_new_single_upload_raw_request_uses_exact_current_primary_after_pending_
         initial = submit(client, body(first.resource_id, utterance='Begin with A.'))
         assert initial['status'] == 'clarification', initial
         original = no_science(backend).interactions[-1]
-        assert original.prerequisite['field'] == ('roles' if pending_kind == 'generic' else field)
+        assert original.preparation['task']['context']['intake_owner'] == ('roles' if pending_kind == 'generic' else field)
         request = body(current.resource_id, turn='new-b', utterance='Start a new task on B.')
         outcome = submit(client, request)
         assert outcome['status'] == 'clarification', outcome
-        assert outcome['response']['clarification']['reason'] == 'missing_' + field + '_declarations'
+        assert outcome['response']['clarification']['reason'] == 'missing_parameter_value'
         state = no_science(backend)
         assert state.interactions[0] == original
         interaction = state.interactions[-1]
@@ -160,9 +160,9 @@ def test_new_single_upload_raw_request_uses_exact_current_primary_after_pending_
         assert [m['resource_id'] for m in members] == [first.resource_id, current.resource_id]
         assert interaction.admitted[field]['source'] == 'source.1'
         assert interaction.admitted[field + '_source_evidence']['source_sha256'] == current.source_sha256
-        assert interaction.prerequisite['origin_turn_id'] == 'new-b'
-        assert interaction.prerequisite['binding_turn_id'] == 'new-b'
-        assert interaction.prerequisite['field'] == field
+        assert interaction.preparation['task_origin'] == 'new-b'
+        assert interaction.preparation['task_origin'] == 'new-b'
+        assert interaction.preparation['task']['context']['intake_owner'] == field
         assert 'continuation' not in interaction.admitted
         expected = [(first.source_path, first.source_sha256)] if pending_kind == 'raw' else []
         assert observations == expected + [(current.source_path, current.source_sha256)]
@@ -189,12 +189,12 @@ def test_same_single_primary_raw_reply_retains_exact_pending_source(tmp_path, mo
         state = no_science(backend)
         assert state.interactions[0] == original
         continued = state.interactions[-1]
-        assert continued.snapshot['prerequisite']['origin_turn_id'] == 'first'
-        assert continued.prerequisite['origin_turn_id'] == 'first'
-        assert continued.prerequisite['field'] == field
+        assert continued.snapshot['preparation']['binding_turn_id'] == 'first'
+        assert continued.preparation['task_origin'] == 'first'
+        assert original.preparation['task']['context']['intake_owner'] == field
         assert continued.admitted[field] == original.admitted[field]
-        assert continued.admitted['continuation']['origin_turn_id'] == 'first'
-        assert continued.admitted['continuation']['binding_turn_id'] == 'first'
+        assert continued.preparation['task_origin'] == 'first'
+        assert continued.preparation['previous'] == 'first'
         assert continued.admitted['registered_input'] == original.admitted['registered_input']
         assert continued.submission['registered_input']['resource_id'] == selected.resource_id
         assert continued.submission['registered_input']['record_sha256'] == selected.record_sha256

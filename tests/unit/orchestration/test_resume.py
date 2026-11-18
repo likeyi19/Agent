@@ -541,6 +541,8 @@ def _embedding_result(
         "input_path": str(input_path.resolve()),
         "embedding_path": str(embedding_path),
         "cell_ids_path": str(cell_ids_path),
+        "analysis_path": str(embedding_path.with_suffix(".h5ad")),
+        "analysis_sha256": __import__("hashlib").sha256(embedding_path.with_suffix(".h5ad").read_bytes()).hexdigest(),
         "n_cells": 2,
         "embedding_dim": 512,
         "embedding_dtype": "float32",
@@ -558,7 +560,14 @@ def test_missing_prior_artifact_fails_resume_revalidation(tmp_path: Path) -> Non
     input_path.write_bytes(b"input")
     embedding_path = tmp_path / "embedding.npy"
     cell_ids_path = tmp_path / "ids.txt"
-    embedding_path.write_bytes(b"embedding")
+    import anndata as ad
+    import numpy as np
+    import pandas as pd
+    values=np.arange(1024,dtype=np.float32).reshape(2,512)
+    np.save(embedding_path,values)
+    compact=ad.AnnData(obs=pd.DataFrame(index=['cell-1','cell-2']))
+    compact.obsm['X_epizoo']=values
+    compact.write_h5ad(embedding_path.with_suffix('.h5ad'))
     cell_ids_path.write_text("cell-1\ncell-2\n", encoding="utf-8")
     embed = Mock(
         return_value=_embedding_result(input_path, embedding_path, cell_ids_path)

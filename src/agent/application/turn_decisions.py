@@ -414,7 +414,8 @@ def _normalize_research_intent(decision):
             or any(type(h) is not str or re.fullmatch(r'g[0-9]+', h) is None for h in decision.references)
             or len(set(decision.references)) != len(decision.references)
             or type(decision.delivery) is not tuple or len(set(decision.delivery)) != len(decision.delivery)
-            or any(k not in ('explanation', 'comparison', 'visualization') for k in decision.delivery)
+            or any(k not in ('explanation', 'comparison', 'visualization', 'files_only') for k in decision.delivery)
+            or 'files_only' in decision.delivery and len(decision.delivery) != 1
             or type(decision.unfulfilled) is not tuple or len(decision.unfulfilled) > 8
             or any(type(t) is not str or not t.strip() or len(t) > 512 for t in decision.unfulfilled)
             or len(set(decision.unfulfilled)) != len(decision.unfulfilled)
@@ -682,7 +683,7 @@ class ResourceAnswer:
     arguments: tuple[ScopedArgument, ...] = ()
 
     def __post_init__(self):
-        if self.pending != '@resources' or type(self.choice) is not str or not self.choice.startswith('resource.'):
+        if self.pending != '@resources' or type(self.choice) is not str or not self.choice.startswith(('resource.', 'spp.')):
             raise ValueError('Invalid resource choice answer.')
         _validate_arguments(self.arguments)
 
@@ -1217,11 +1218,11 @@ def _object(properties):
     return dict(type='object', properties=properties, required=list(properties), additionalProperties=False)
 
 
-def decision_schema():
-    """One stable proposal grammar; Registry/context admission owns identities.
+def decision_schema(public=None, *, utterance=None):
+    """Shared proposal grammar, specialized to current captured offers.
 
-    Definitions describe declaration types, never a cross product of the current
-    scientific inventory. Adding tools, kwargs or sources does not change it.
+    With no context this remains the historical structural grammar. Live calls
+    always supply context; independent admission still owns scope and freshness.
     """
     def text(limit=128):
         return dict(type='string', minLength=1, maxLength=limit)
@@ -1235,13 +1236,15 @@ def decision_schema():
         return {'$ref': '#/$defs/' + name}
     definitions = {}
     identity = dict(tool=text(), argument=text())
-    quote = dict(literal=text(4096), evidence=text(4096))
+    quote = dict(
+        literal=dict(text(4096), description='Verbatim substring of the current utterance, even for a normalized API choice.'),
+        evidence=dict(text(4096), description='Unique verbatim utterance clause containing literal once.'))
     definitions['member'] = _object(dict(name=text(), kind=enum(('string', 'number', 'boolean', 'json')), **quote))
     forms = [identity | quote, identity | quote | dict(value=text(80)),
              identity | dict(members=array(ref('member'), 32, 1))]
     variants = []
     for form in forms:
-        form = form | dict(native_function=optional(text()))
+        form = form | dict(native_function=dict(optional(text()), description='Registered function scope; function_name uses the same canonical value. Null only without a function.'))
         variants.extend((_object(form), _object(form | dict(source=text(), port=text()))))
     variants.append(_object(identity | quote | dict(source=text(), mode=enum(('offered', 'literal')), value=text(80))))
     definitions['declaration'] = {'anyOf': variants}
@@ -1262,7 +1265,7 @@ def decision_schema():
                                         representations=array(ref('export_field'), 32)))
     definitions['retained'] = _object(dict(result=text(), argument=text()))
     delivery = dict(input_results=array(text(), 32), references=array(text(), 32),
-        delivery=array(enum(('explanation', 'comparison', 'visualization')), 3),
+        delivery=array(enum(('explanation', 'comparison', 'visualization', 'files_only')), 3),
         unfulfilled=array(text(512), 8), visualization=optional(ref('visualization')),
         comparison=optional(ref('comparison')), retain_parameters=array(ref('retained'), 8))
     execution = dict(target=text(), arguments=declarations, roles=array(ref('role'), 8),
@@ -1280,7 +1283,7 @@ def decision_schema():
         _object(dict(kind=enum(('execute_plan',)), **execution, missing_parameters=array({'anyOf': [text(),
             _object(dict(tool=text(), argument=text(), native_function=optional(text()),
                 member=optional(text()), source=optional(text()), port=optional(text()), evidence=optional(text(4096))))]}, 8))),
-        _object(dict(kind=enum(('request_roles',)), **execution, required_roles=array(ref('requirement'), 8, 1))),
+        _object(dict(kind=enum(('request_roles',)), **execution, required_roles=dict(array(ref('requirement'), 8, 1), description='Complete required role set, including already supplied roles; roles contains its supplied strict subset. Prefer execute_plan for an objective with missing inputs so Preparation derives selected-operation requirements.'))),
         _object(dict(kind=enum(('answer_roles',)), pending=text(), roles=array(ref('role'), 8), arguments=declarations)),
         _object(dict(kind=enum(('execute_candidate',)), candidate=text(), evidence=text(4096))),
         _object(dict(kind=enum(('request_resources',)), target=text(), arguments=declarations,
@@ -1288,8 +1291,7 @@ def decision_schema():
                      input_results=array(text(), 32),
                      reference_category=optional(enum(('peak_set', 'regulatory_regions'))))),
         _object(dict(kind=enum(('answer_resources',)), pending=enum(('@resources',)),
-                     choice=dict(text(), pattern=r'^resource\.'), arguments=declarations)),
-        _object(dict(kind=enum(('answer_prerequisite',)), pending=text(), species=enum(('human', 'mouse')), arguments=declarations)),
+                     choice=dict(text(), pattern=r'^(resource|spp)\.'), arguments=declarations)),
         _object(dict(kind=enum(('answer_parameters',)), pending=text(), arguments=array(ref('declaration'), MAX_SCIENTIFIC_ARGUMENTS, 1))),
     ]
     from .raw_handoff import schema as raw_schema, empty, scientific_metadata_fields
@@ -1302,7 +1304,310 @@ def decision_schema():
         variants.append(_object(dict(kind=enum(('answer_roles',)), pending=text(), roles=roles,
             arguments=declarations, **{field: ref(field)}, **downstream,
             unknown_fields=array(enum(scientific_metadata_fields(empty(field))), 16))))
-    return _object(dict(turn_schema_version=dict(type='integer', enum=[1]), decision={'anyOf': variants})) | {'$defs': definitions}
+    result = _object(dict(turn_schema_version=dict(type='integer', enum=[1]), decision={'anyOf': variants})) | {'$defs': definitions}
+    return result if public is None else _offered_schema(result, public, utterance=utterance)
+
+
+def parameter_choice_offers(public):
+    """Only a captured pending question offers parameter clarification identities."""
+    pending = public.get('dialogue', {}).get('pending_prerequisite') or {}
+    if pending.get('field') != 'parameters':
+        return ()
+    offered = []
+    for row in pending.get('missing', ()):
+        if isinstance(row, Mapping):
+            tool, argument = row.get('tool_name'), row.get('argument')
+            if tool and argument:
+                offered.append(tool + '.' + argument)
+        elif isinstance(row, str) and ('.' in row or pending.get('tool')):
+            offered.append(row if '.' in row else pending['tool'] + '.' + row)
+    return tuple(dict.fromkeys(offered))
+
+
+def _offered_schema(schema, public, *, utterance=None):
+    """Specialize shared definitions, not a Registry parameter cross product.
+
+    Empty arrays/nulls express absence; unavailable decisions are removed. Shared
+    enum definitions avoid multiplying provider enum budgets across references.
+    Association, source integrity, task/version and literal grounding stay with
+    admission, including when a provider ignores this schema.
+    """
+    d = public.get('dialogue', {})
+    defs = schema['$defs']
+    projection = _interpretation_public(public, utterance or '').get('dialogue', {})
+    metadata = projection.get('capabilities', {})
+    d = d | {key: projection.get(key, []) for key in d if key.endswith('_resources')}
+    def finite(values, *, enum=True):
+        if enum and len(values) <= 200:
+            return dict(type='string', enum=values)
+        # Equal-length groups make $ strict even for a final newline, without
+        # lookarounds outside common provider regex grammars. No offer is lost.
+        return {'anyOf': [dict(type='string', minLength=n, maxLength=n,
+            pattern=r'^(?:' + '|'.join(re.escape(v) for v in values if len(v) == n) + r')$')
+            for n in sorted({len(v) for v in values})]}
+    def exact(name, values):
+        values = list(dict.fromkeys(values))
+        if not values:
+            return {'type': 'null'}
+        defs[name] = finite(values)
+        return {'$ref': '#/$defs/' + name}
+    def nullable(value):
+        return value if value == {'type': 'null'} else {'anyOf': [value, {'type': 'null'}]}
+    def items(value, limit):
+        return dict(type='array', items=value, maxItems=0 if value == {'type': 'null'} else limit)
+    sources = [r['source'] for r in d.get('selected_sources', ())]
+    source = exact('offered_source', sources)
+    tools = list(d.get('tools', d.get('capabilities', {})))
+    tool = exact('offered_tool', tools)
+    ports = exact('offered_port', [r['port'] for r in d.get('input_roles', ())])
+    parameter_rows = [row | {'argument': name} for cap in metadata.values()
+                      for name, row in cap.get('parameters', {}).items()]
+    argument = exact('offered_argument', [r['argument'] for r in parameter_rows])
+    functions = exact('offered_function', [fn for cap in metadata.values()
+                      for fn in cap.get('functions', {})])
+    expanded_functions = exact('offered_parameter_function', [fn for cap in metadata.values()
+                      for fn in cap.get('function_parameters', {})])
+    member = exact('offered_member', [name for row in parameter_rows for name in row.get('members', {})])
+    value = exact('offered_value', [v for row in parameter_rows for v in row.get('choices', ())])
+    defs['member']['properties']['name'] = member
+    outputs = [r['handle'] for r in d.get('outputs', ())]
+    groups = [r['handle'] for r in d.get('result_groups', ())]
+    targets = outputs + groups + [k for k,v in d.get('result_referents', {}).items() if len(v.get('targets', ())) == 1]
+    predecessor = d.get('predecessor') or {}
+    if predecessor.get('target'):
+        targets.append('@focus')
+    if predecessor.get('previous'):
+        targets.append('@previous')
+    target = exact('offered_target', targets)
+    result = exact('offered_result', groups)
+    measurement = exact('offered_measurement', groups + sources)
+    subject_values = [v for row in d.get('outputs', ())
+                      for candidate in row.get('subjects', {}).get('candidates', ())
+                      for v in [candidate.get('id'), *candidate.get('references', ())] if isinstance(v, str)]
+    if (predecessor.get('target') or {}).get('subject') is not None:
+        subject_values.extend(('@focus', '@other'))
+    defs['target']['properties'].update(output=target, subject=nullable(exact('offered_subject', subject_values)))
+    for name in ('role', 'requirement'):
+        defs[name]['properties'].update(tool=tool, port=ports)
+    defs['role']['properties']['source'] = source
+    # Scoped declarations still admit arbitrary *grounded* values and member
+    # names. Exact tool/source selections cannot name absent context entities.
+    declaration_forms = []
+    for form in defs['declaration']['anyOf']:
+        props = form['properties']
+        props['tool'] = tool
+        props['argument'] = argument
+        if 'native_function' in props:
+            props['native_function'] = dict(nullable(functions), description=props['native_function']['description'])
+        if 'members' in props and member == {'type': 'null'}:
+            continue
+        if 'value' in props and 'mode' not in props:
+            if value == {'type': 'null'}:
+                continue
+            props['value'] = value
+        if 'source' in props:
+            if not sources:
+                continue
+            props['source'] = source
+        if 'port' in props:
+            if ports == {'type': 'null'}:
+                continue
+            props['port'] = ports
+        if 'mode' in props:
+            from copy import deepcopy
+            axes = {p.get('observation_axis', 'obs') for p in parameter_rows if p.get('observation_source')}
+            offered_fields = [f for row in d.get('source_fields', ()) for axis in axes
+                for f in (row.get('fields', ()) if axis == 'obs' else row.get('axes', {}).get(axis, {}).get('fields', ()))]
+            if offered_fields:
+                offered = deepcopy(form)
+                offered['properties']['mode'] = dict(type='string', enum=['offered'])
+                offered['properties']['value'] = exact('offered_field', offered_fields)
+                declaration_forms.append(offered)
+            props['mode'] = dict(type='string', enum=['literal'])
+        declaration_forms.append(form)
+    defs['declaration']['anyOf'] = declaration_forms
+    for field in ('fastq', 'bam', 'fragments', 'annotation', 'epizoo'):
+        props = defs[field]['properties']
+        for key in props:
+            if key == 'source' or key.endswith('_source'):
+                props[key] = nullable(source)
+        if 'members' in props:
+            props['members']['items']['properties']['source'] = source
+            if not sources:
+                props['members']['maxItems'] = 0
+        if 'groups_result' in props:
+            props['groups_result'] = nullable(exact('offered_annotation_group',
+                [r['handle'] for r in d.get('annotation_group_results', ())]))
+        if 'genome_resource' in props:
+            props['genome_resource'] = nullable(exact('offered_genome_resource',
+                [r['handle'] for r in d.get('epizoo_resources', ()) if 'handle' in r]))
+        if 'resource' in props:
+            props['resource'] = nullable(exact('offered_' + field + '_resource',
+                [r['handle'] for r in d.get(field + '_resources', ()) if 'handle' in r]))
+    defs['retained']['properties']['result'] = result
+    defs['export']['properties']['measurement'] = measurement
+    defs['export_field']['properties']['output'] = result
+    defs['comparison']['properties'].update(left=exact('offered_comparison', groups + ['new']),
+                                           right={'$ref': '#/$defs/offered_comparison'})
+    for form in defs['visualization']['anyOf']:
+        props = form['properties']
+        if 'labels' in props:
+            props['coordinates'] = exact('offered_coordinates', groups + ['new'])
+            props['labels'] = exact('offered_labels', groups + sources + ['new'])
+        else:
+            for key in ('source', 'coordinates', 'activity'):
+                if key in props:
+                    props[key] = result
+    from copy import deepcopy
+    defs['accepted_visualization'] = deepcopy(defs['visualization'])
+    for form in defs['accepted_visualization']['anyOf']:
+        props = form['properties']
+        if 'labels' in props:
+            props['coordinates'] = result
+            props['labels'] = measurement
+    pending = d.get('pending_prerequisite') or {}
+    candidates = [r['candidate'] for r in d.get('execution_candidates', ())]
+    candidate = exact('offered_candidate', candidates)
+    guidance = [v for r in d.get('guidance_predecessor', ()) for v in r.get('references', ())]
+    if len(d.get('guidance_predecessor', ())) == 1:
+        guidance.append('@candidate')
+    guidance_candidate = nullable(exact('offered_guidance', guidance))
+    resource_rows = (pending.get('resource_answer_choices', ()) if pending.get('task_id')
+                     else pending.get('choices', ()) if pending.get('field') == 'resources' else ())
+    resources = [r['handle'] for r in resource_rows if isinstance(r, Mapping) and 'handle' in r]
+    resource = exact('offered_resource_answer', resources)
+    parameters = parameter_choice_offers(public)
+    parameter = exact('offered_parameter_choice', parameters)
+    variants = []
+    for variant in schema['properties']['decision']['anyOf']:
+        p = variant['properties']
+        kind = p['kind']['enum'][0]
+        if kind == 'request_resources':
+            continue  # Ordinary resource Requirements follow Candidate acquisition.
+        if kind == 'clarify' and p['reason']['enum'][0] in PARAMETER_CLARIFICATION_REASONS:
+            if not parameters:
+                continue
+            p['choices'] = dict(items(parameter, 8), minItems=1)
+        if kind == 'navigate':
+            relations = [r for r in public.get('relations', ()) if r in RELATIONS]
+            if not groups and not outputs and not public.get('bases'):
+                relations = []
+            if not relations:
+                continue
+            p['relation'] = exact('offered_relation', relations)
+        if kind == 'answer_scientific':
+            if not targets:
+                continue
+            p['visualization'] = nullable({'$ref': '#/$defs/accepted_visualization'})
+        if kind == 'answer_guidance':
+            p['targets'] = items({'$ref': '#/$defs/target'}, 4) if targets else items({'type': 'null'}, 0)
+            p['candidate'] = guidance_candidate
+        if kind == 'execute_candidate':
+            if not candidates:
+                continue
+            p['candidate'] = candidate
+        if kind.startswith('answer_') and 'pending' in p:
+            expected = {'answer_parameters': '@parameters', 'answer_roles': '@roles', 'answer_resources': '@resources'}[kind]
+            # Canonical spp resource choices can belong to an intake question.
+            if kind == 'answer_resources':
+                if not resources:
+                    continue
+                p['choice'] = resource
+            elif pending.get('handle') != expected:
+                continue
+            p['pending'] = dict(type='string', enum=[expected])
+        if 'target' in p and kind in ('execute_plan', 'request_roles', 'request_resources'):
+            if not tools:
+                continue
+            p['target'] = tool
+        if kind == 'request_roles' and p.get('required_roles', {}).get('minItems', 0):
+            # Ordinary identified objectives acquire a Candidate first. Keep the
+            # complete-role wire readable, but do not offer pre-plan role intake.
+            continue
+        if 'roles' in p and (not sources or ports == {'type': 'null'}):
+            p['roles']['maxItems'] = 0
+        if 'arguments' in p and argument == {'type': 'null'}:
+            if p['arguments'].get('minItems', 0):
+                continue
+            p['arguments']['maxItems'] = 0
+        for key in ('input_results', 'references'):
+            if key in p:
+                p[key] = items(result, 32)
+        if 'missing_parameters' in p:
+            # Current proposals use scoped fields; historical shorthand strings
+            # remain accepted by the unchanged reader, not generated here.
+            missing = p['missing_parameters']['items']['anyOf'][1]
+            missing['properties'].update(tool=tool, argument=argument,
+                native_function=nullable(expanded_functions), member=nullable(member),
+                source=nullable(source), port=nullable(ports))
+            p['missing_parameters'] = items(missing, 8)
+            if argument == {'type': 'null'}:
+                p['missing_parameters']['maxItems'] = 0
+        if 'retain_parameters' in p and not groups:
+            p['retain_parameters']['maxItems'] = 0
+        if 'context' in p and not d.get('planning_context'):
+            p['context'] = dict(type='string', enum=['none'])
+        variants.append(variant)
+    schema['properties']['decision']['anyOf'] = variants
+    # Remove unused definitions, including raw/answer-only types whose branches
+    # are unavailable. Never leave dangling references or empty anyOf/enum.
+    used = set()
+    def collect(node):
+        if isinstance(node, dict):
+            if '$ref' in node:
+                name = node['$ref'].rsplit('/', 1)[1]
+                if name not in used:
+                    used.add(name)
+                    collect(defs[name])
+            for key, value in node.items():
+                if key != '$defs':
+                    collect(value)
+        elif isinstance(node, list):
+            for value in node:
+                collect(value)
+    collect(schema)
+    schema['$defs'] = {k:v for k,v in defs.items() if k in used}
+    def enum_count(node):
+        if isinstance(node, dict):
+            return len(node.get('enum', ())) + sum(enum_count(v) for v in node.values())
+        if isinstance(node, list):
+            return sum(enum_count(v) for v in node)
+        return 0
+    # Structured Outputs counts enum values globally, including repeated sets.
+    # Preserve every identity while reducing only the encoding of large sets.
+    for name, definition in sorted(schema['$defs'].items(),
+            key=lambda row: len(row[1].get('enum', ())), reverse=True):
+        if enum_count(schema) <= 1000:
+            break
+        if name.startswith('offered_') and 'enum' in definition:
+            schema['$defs'][name] = finite(definition['enum'], enum=False)
+    return schema
+
+
+def _intent_instructions():
+    """Interpreter intent/grounding contract; scientific recipes belong downstream."""
+    return [
+        'Classify researcher intent and capture explicit grounded declarations. dialogue.capabilities is the complete Registry-derived inventory: concise purposes, input roles and every native function name. Detailed metadata expands explicit tool/package/function/parameter references or a captured pending question. The Planner composes methods; canonical Preparation resolves requirements; Registry, compiler and native owners decide scientific legality. No package has priority. Preserve named methods and the whole objective; never invent preprocessing, biological identity, defaults or a workflow.',
+        'An unclear operation is clarify/ambiguous_subject with choices=[]. A number alone does not request an operation. Do not turn unspecified processing into a parameter question. Parameter clarification choices must be actual current pending offers, never Registry-wide possibilities or prose encoded as identifiers. Unsupported named implementations use unsupported_intent, never a substitute.',
+        'dialogue.ordinary_clarification is bounded prior conversation, not a scientific predecessor, evidence or execution authority. Use its researcher objective and actual prior question only when the current utterance continues it. A new unrelated objective starts independently. Prior generated prose supplies no declarations, sources or results. Literal/evidence grounding always quotes the current utterance; exact current sources remain independently captured.',
+        'Read-only questions about accepted results, parameters, methods, execution, provenance, verification and existing downloads use answer_scientific with exact offered targets. General methodological advice, requirements, applicability and possible new work use answer_guidance; targets=[] is valid. Missing evidence stays unknown. Questions never authorize computation.',
+        'Use execute_plan for a clear supported scientific objective even when a required file, resource, parameter or existing field is absent or awaits researcher selection. Bind only known source roles and explicit declarations; Planner selects operations and Preparation derives their actual missing requirements and exact controls. Missing input is not an unclear objective. Ordinary objectives use execute_plan, including missing external inputs. request_roles is only the offered specialized raw/annotation/model declaration intake, never an ordinary missing-file alternative. Do not use request_resources for an ordinary objective; Preparation obtains applicable reference requirements after planning. Never require optional resource uploads merely because a port is offered.',
+        'Bind source.N only from selected_sources to its actual requested tool/port. current_turn_sources marks newly selected files; other sources are available Session candidates, not automatically selected inputs. Labels, order, filenames, counts and input_type hints establish no scientific eligibility or biological role. Explicit positional references may identify the captured selection positions. Unused sources remain unused; new tasks inherit no prior roles.',
+        'Raw/composed declarations use their existing request_roles variant with empty required_roles/roles and explicit metadata in the corresponding declaration, not duplicated scientific arguments. Missing fields remain null; unknown_fields retracts only offered declaration metadata explicitly made unknown, never source/role/resource identities. Exact resource handles must be offered; a named reference preference requires verbatim resource_preference literal/evidence. Declared species/assembly is not a named-reference selection. File membership and biological history cannot be inferred.',
+        'A package alone is not a single-function request. Capture only explicitly requested methods, never internal workflow decisions. Every explicit native function_name declaration uses value=<registered function> AND native_function=<same registered function>, with verbatim researcher literal/evidence. Scope each native parameter and kwargs member to its explicit function. Example: PCA then neighbors uses separate pp.pca and pp.neighbors scopes, not two unscoped function_name values. The Planner assigns step IDs and dependencies; do not attach original-file scope to downstream consumers of derived outputs.',
+        'arguments contains only explicit tool/argument declarations. Copy literal verbatim and quote a uniquely locating exact current-utterance evidence clause containing it once. Numeric literal is the numeric token alone; preserve exact decimal/rational text. Values and members keep their explicit types, including invalid scientific values; never repair them or manufacture defaults. Repeated numeric values require distinct evidence clauses. Conflicting values require clarification unless explicitly corrected.',
+        'For structured parameters, verbatim explicit JSON is one literal; prose assignments use members with canonical name, kind and separate literal/evidence. Do not fabricate JSON or combine conflicting JSON/prose. kind=string excludes quote delimiters and preserves Unicode/case/whitespace; number preserves tokens; boolean quotes explicit true/false, yes/no or equivalent; json quotes an actual JSON value.',
+        'For normalized offered choices value is canonical, while literal and evidence remain verbatim researcher text: Chinese “用 Scanpy 构建邻居图” can use literal=构建邻居图, value=pp.neighbors, native_function=pp.neighbors; it cannot use literal=pp.neighbors unless those bytes occur in the utterance. Exact field/representation strings such as X_pca remain exact literals. observation_source mode=offered associates a clearly selected field with its captured source; mode=literal requires the explicitly named column. If the researcher asks to choose an existing field through the interface, omit its declaration and let Preparation inspect the selected consumer source and offer actual fields. Do not clarify before planning or select a field on their behalf. Agent-produced fields are Planner/Preparation dependencies, never researcher declarations. Roles and field source must agree; never borrow another source’s field or change mode after refusal.',
+        'Qualitative or ambiguous requested values remain local in execute_plan.missing_parameters, using exact tool, argument, native_function/member and applicable source/port, plus the exact evidence clause. Omitted optional values are not missing requests. A request to keep native defaults ordinarily leaves remaining kwargs omitted; it does not declare the clustering-only parameter_selection selector on unrelated functions. Use that selector only for the offered applicable clustering policy explicitly requested. Do not invent numeric alternatives, optimizer scans or additional operations. Explanatory parameter questions stay read-only.',
+        'Pending answers continue only the offered question and original objective. Use the exact pending handle and offered source/parameter/resource identities; partial explicit answers are allowed. Unrelated messages, new objectives, cancellation and uncertainty never answer a pending request. Canonical spp resource choices select only their captured consumer requirement, not biological source metadata. No stale or cross-task identity is valid.',
+        'Execute an offered execution_candidate only with its exact candidate ID and a complete explicit command clause as evidence. Interest or agreement alone is not authorization. Do not reconstruct its workflow. A rationale question uses answer_guidance with a quoted guidance_predecessor reference (or @candidate if unique); new objectives use candidate=null.',
+        'Accepted outputs/groups and result_referents have distinct exact identities. Select a referent only when unique. @focus and @previous require the scientific predecessor, never ordinary clarification. subject=null asserts no new subject and preserves an existing resolved subject; @other requires unambiguous offered context. Categorical labels are detail fields, not annotation subjects. No recency/order/filename guessing.',
+        'context=current only for explicit use or modification of captured accepted analysis; context=none for independent input/work. input_results selects offered accepted groups, never source.N. references select exact accepted results. retain_parameters selects requested exact result/argument settings of the same tool/input; never turn old defaults or generated prose into current explicit declarations. Current explicit changes override their own fields only.',
+        'Preserve requested explanation/comparison/visualization delivery. Include explanation for ordinary scientific requests, including requests for a result file. Use delivery=["files_only"] only when the researcher explicitly requests files only or literal outputs without explanation; empty delivery is not files-only authorization. unfulfilled may quote only independently separable unsupported clauses whose omission the researcher permits; never drop essential science or resolvable prerequisites. No hidden fallback or retry plan.',
+        'Read-only visualization selects exact accepted operands; planned new operands use new only for explicitly requested new computation. Categorical plots select coordinates, labels and exact source:/result: field. marker_activity_umap selects accepted coordinates/activity; qc selects an accepted result with recorded QC. Reusing saved figures is not new scientific computation; missing or unrelated evidence stays unavailable.',
+        'Read-only export selects exact measurement (accepted group or offered source), observations/representations with exact offered result fields and requested destination names. Preserve source lineage and distinct destinations; never invent a field, overwrite an original field or imply download transfer has happened. Scientific owners qualify alignment and prepare bytes.',
+        'Scientific comparison requires explicit targets and a meaningful requested dimension; do not infer cross-result cell/cluster correspondence or rank importance without a criterion. focus=continue preserves only the scientific predecessor question. Navigation uses offered relations; previous is ambiguous if parent and previous-active differ; parent requires an explicit parent reference.',
+    ]
 
 
 def _interpretation_public(public, utterance):
@@ -1329,145 +1634,97 @@ def _interpretation_public(public, utterance):
             member['evidence_from'] = canonical['handle']
     capabilities = {name: dict(dialogue.get('capabilities', {}).get(name, {}))
                     for name in dialogue.get('tools', ())}
-    mentions = set()
-    for tool, item in capabilities.items():
-        for function in item.get('functions', {}):
-            names = (function, item['package'] + '.' + function, item['package'] + '::' + function)
-            if any(re.search(r'(?<![\w.:])' + re.escape(name) + r'(?!\w|\.[A-Za-z_])', utterance) for name in names):
-                mentions.add((tool, function))
+    def named(name):
+        return bool(re.search(r'(?<![\w.:])' + re.escape(name) + r'(?!\w|\.[A-Za-z_])', utterance, re.I))
+    def parameter_named(name):
+        # Plain short kwargs (e.g. an English article) are not explicit parameter
+        # references. Expand identifier/syntax references, never language aliases.
+        return (('_' in name and named(name)) or named('kwargs.' + name)
+                or bool(re.search(r'(?<![\w.])' + re.escape(name) +
+                    r'\s*(?:=|:|\bis\b|\bto\b)?\s*(?:[-+]?\d|true\b|false\b|[\"\'])', utterance, re.I))
+                or bool(re.search(r'\bparameter\s+' + re.escape(name) + r'(?!\w)', utterance, re.I)))
     pending = dialogue.get('pending_prerequisite') or {}
-    contextual = {g['tool'] for g in dialogue.get('result_groups', ()) if g.get('is_active')}
-    if pending.get('tool'):
-        contextual.add(pending['tool'])
+    pending_tools = {pending.get('tool')} | {
+        row.get('tool_name') for row in pending.get('missing', ()) if isinstance(row, Mapping)}
     for tool, item in capabilities.items():
-        named_package = bool(item.get('package') and re.search(
-            r'(?<![\w.:])' + re.escape(item['package']) + r'(?![\w.:])', utterance, re.I))
-        named_tool = bool(re.search(r'(?<![\w.])' + re.escape(tool) + r'(?![\w.])', utterance))
-        detailed = named_package or named_tool or tool in contextual
-        if not detailed and not any(t == tool for t, _ in mentions):
-            item.pop('notes', None)
+        functions = item.get('functions', {})
+        package = item.get('package', '')
+        named_package = bool(package and re.search(
+            r'(?<![\w.:])' + re.escape(package) + r'(?![\w.:])', utterance, re.I))
+        detailed = named(tool) or named_package or tool in pending_tools
+        explicit_functions = {fn for fn in functions if named(fn) or named(fn.rsplit('.', 1)[-1])
+                              or named(package + '.' + fn) or named(package + '::' + fn)}
+        pending_functions = {row.get('native_function') for row in pending.get('missing', ())
+                             if isinstance(row, Mapping) and row.get('tool_name') == tool}
+        predecessor = dialogue.get('predecessor') or {}
+        focus_outputs = {target['output'] for key in ('target', 'previous')
+                         if (target := predecessor.get(key)) is not None}
+        result_functions = {row.get('native_function', row.get('value') if row.get('argument') == 'function_name' else None)
+            for group in dialogue.get('result_groups', ()) if group.get('tool') == tool
+            and (group.get('is_active') or named(group['handle'])
+                 or bool({group['handle'], *group.get('outputs', ())} & focus_outputs))
+            for row in group.get('parameters', ())}
+        selected = explicit_functions | (set(functions) & (pending_functions | result_functions))
+        selected.update(fn for fn, members in functions.items() if any(parameter_named(k) for k in members))
+        if detailed and not selected:
+            selected = set(functions)
+        item.pop('notes', None)
+        # Purpose and every exact function remain discoverable, without all kwargs.
+        item['description'] = item.get('description', '').split('. ')[0]
         item['inputs'] = [{k: v for k, v in role.items() if k != 'tool'}
                           for role in dialogue.get('input_roles', ()) if role['tool'] == tool]
+        if functions:
+            item['functions'] = list(functions)
+            if selected:
+                item['function_parameters'] = {fn: list(functions[fn]) for fn in functions if fn in selected}
         parameters = {}
         for row in dialogue.get('scientific_parameters', ()):
             if row['tool'] != tool:
                 continue
+            members = row.get('members', {})
+            expanded = detailed or selected or named(row['argument']) or any(parameter_named(k) for k in members)
+            if not expanded and row['argument'] in ('kwargs', 'function_name'):
+                continue
             value = {k: v for k, v in row.items() if k not in ('tool', 'argument')}
-            if item.get('functions') and 'members' in value and not detailed:
-                needed = {name for fn, names in item['functions'].items() if (tool, fn) in mentions for name in names}
-                # Full names/signatures support open task discovery. Only exact
-                # API names and captured context expand the explanatory detail.
-                value['member_names'] = list(value['members'])
-                value['members'] = {k: v for k, v in value['members'].items() if k in needed}
+            if not expanded:
+                value.pop('default_when_omitted', None)
+                value['description'] = value.get('description', '').split('. ')[0]
+            if functions and 'members' in value:
+                needed = {name for fn in selected for name in functions[fn]}
+                value['members'] = {k: v for k, v in members.items() if k in needed or parameter_named(k)}
             parameters[row['argument']] = value
-        item['parameters'] = parameters
+        if parameters:
+            item['parameters'] = parameters
     projected = {k: v for k, v in dialogue.items() if k not in ('tools', 'input_roles', 'scientific_parameters', 'capabilities')}
+    # Libraries remain available to their scientific/guidance owners. Ordinary
+    # intent classification sees only explicitly referenced entries or the
+    # current declaration question's catalog, not unrelated model conditions.
+    def referenced(row, keys):
+        return any(named(value) for key in keys for value in (
+            row.get(key, ()) if isinstance(row.get(key), (list, tuple)) else (row.get(key),))
+            if isinstance(value, str) and value)
+    for key in tuple(projected):
+        if key.endswith('_resources'):
+            field = key[:-len('_resources')]
+            projected[key] = [row for row in projected[key]
+                if pending.get('field') == field or named(field)
+                or referenced(row, ('handle', 'label', 'assembly'))]
+    if 'sequence_models' in projected:
+        projected['sequence_models'] = [row for row in projected['sequence_models']
+            if referenced(row, ('family', 'conditions'))]
+    supplied = projected.get('supplied_inputs')
+    if supplied is not None:
+        projected['supplied_inputs'] = dict(supplied, fields=[dict(row, consumers=[
+            {k:v for k,v in consumer.items() if k not in ('description', 'expected_artifact_kinds')}
+            for consumer in row.get('consumers', ())]) for row in supplied.get('fields', ())])
     return public | {'dialogue': projected | {'outputs': list(outputs.values()), 'capabilities': capabilities}}
 
 
 def interpret(model, utterance, public, *, diagnostic_context=None, authoritative=()):
-    groups = public.get('dialogue', {}).get('result_groups', ())
-    prompt = json.dumps({'turn_schema_version': 1, 'utterance': utterance, **_interpretation_public(public, utterance),
-        'instructions': [
-            'dialogue.capabilities is the complete Registry overview, keyed by canonical tool. Each entry gives its purpose, input ports, parameters and, for native packages, exact functions and supported kwargs. Parameter defaults describe native omission behavior, never user declarations. Exact API/package names, pending tasks and active results expand relevant kwarg descriptions; all other names and function signatures remain available for task discovery. The fixed response schema describes proposals only: use exact canonical identities from this context. Existing admission rejects unregistered tools, functions, parameters, sources, ports and associations. The Planner receives complete method details and composes science; you select intent and grounded declarations, never DAG steps. Preserve named implementations, source measurement and native omission defaults. Do not infer preprocessing, biological validity or extra analyses.',
-            'For read-only questions about registered tool requirements, installed model applicability or metadata, methodological advice and useful analyses, choose answer_guidance. Tool/resource requirements are context, not accepted empirical evidence; explain limits without inferring biological equivalence. An unsupported model condition can be explained through guidance without executing or substituting a condition. Select up to four relevant exact evidence targets; an empty set is allowed and means no result evidence selected, not scientific absence.',
-            'Guidance co-presents evidence; it does not compare measurements or infer common populations/cluster correspondence. Explicit subjects and historical targets obey the same exact reference rules as scientific answers.',
-            'For a guidance-option rationale follow-up, targets=[] and candidate is an offered guidance_predecessor reference quoted in the utterance, or @candidate only when a unique candidate exists. For a new objective use candidate=null. No prior generated rationale is evidence.',
-            'For explicit execution of an offered execution_candidate use execute_candidate with its exact candidate ID and an exact complete command clause from this utterance as evidence. Never translate an option into execute_plan or construct a workflow here.',
-            'Resolve ordinal or named candidate references against the offered stable options and objective. Clarify ambiguous other/that references, stale references, conflicting subject/revision refinements, or missing execution intent. Interest or agreement alone is not execution authorization. Why/evidence questions remain answer_guidance.',
-            'Current-turn refinements remain user planning intent, not edits to the original candidate. Keep its captured subjects/revision fixed; an additional comparison may refine the objective but must not silently replace its subject.',
-            'Distinguish read-only discussion of accepted work from a request for new computation.',
-            'Read-only questions about accepted results, methods, recorded parameters, versions, execution, reuse, provenance and verification use answer_scientific with exact accepted targets. The response owner reads their scientific evidence and Session/Revision/RunStore records; missing recorded values remain unknown.',
-            'Questions about the purpose, contents or available variants of downloads for already accepted results use answer_scientific with exact accepted result targets. Existing export descriptors describe available contents and preparation status. Use answer_guidance when the researcher asks about possible new scientific operations, rather than diverting an existing-download question into inspection or readiness advice.',
-            *(['For a reusable H5AD composed only from existing accepted results, choose answer_scientific.export. Select measurement as the exact accepted result g whose original measurements are requested, an accepted matrix g, or an explicitly offered source.N. Select observations and representations individually with their exact accepted output g, field and intended destination name. Observation fields use the exact result:/source: names offered in that result group\'s export_fields or categorical.fields; representations select the exact obsm: field in that group\'s export_fields, describing its actual accepted embedding representation or X_umap. Select 1 to 32 fields in total; include only requested fields, never every retained result. Destinations must be distinct within each slot and must not overwrite existing original fields; clarify missing or ambiguous destination choices. No new output, arbitrary obsm field, recency choice or scientific computation is authorized. Exact source lineage and ordered cells remain required at the export owner; an eligible figure or equal cell counts do not qualify original measurements. When sources or fields are unresolved, clarify rather than substituting a result or creating a scientific plan. Inventory describes a preparation recipe; it does not mean downloadable bytes have already been prepared or delivered.'] if groups else []),
-            'dialogue.outputs is the accepted-result inventory. is_active identifies current results; semantics reuses registered descriptions/roles. evidence_status=available means a bounded accepted summary is readable. available_fields and subjects describe coverage, not factual values. evidence_from references the exact cooutput carrying identical available_fields, fields_omitted and subjects; all output handles retain their own identities.',
-            *(['dialogue.result_groups groups exact cooutputs of the same accepted scientific step. Select a group handle for its whole scientific result, without copying a member or guessing a workflow. Independent groups are distinct results; clarify unresolved ambiguity.'] if groups else []),
-            'dialogue.result_referents offers captured @current_result, @most_recently_created and @previous_turn_result scopes. They are different: navigation changes the active result without creating a result, and an immediately preceding answered scientific turn may discuss an existing subject. Select the semantic handle only when its target is unique; otherwise choose the relevant offered group/subject or clarify. No scanning backward or defaulting to another scope.',
-            'dialogue.supplied_inputs describes current-turn structured input presence, shallow JSON types and registered consumer expectations only. It exposes no values and establishes neither scientific format, qualification nor execution readiness. Distinguish no supplied inputs from omitted unregistered fields. Input presence can inform intent selection; Planner/compiler/tools still own binding and validation.',
-            'Pending scientific declarations are user intent, not accepted evidence. In answer_roles, explicitly stated corrections may update scientific metadata while preserving captured files, source roles, namespace and operation. A null declaration field means no addition. If the user explicitly says a previously recorded scientific claim is unknown or cannot be confirmed, name that offered metadata field in unknown_fields and leave its addition null; do not silently retain it as known. Never retract sources, roles, operation or resource identities through unknown_fields. When the user asks which prerequisites or evidence are needed rather than supplying declarations, choose answer_guidance; the captured pending task can inform conditional advice without scientific execution.',
-            'Ordinary conversational research tasks expect a concise explanation of the resulting accepted facts in the researcher language: include explanation in delivery unless the researcher explicitly requests files only or literal native outputs without an explanation. This is presentation intent, not a scientific parameter or new operation.',
-            'For scientific tasks starting with external fragments use request_roles with target run_snapatac2, fragments and empty required_roles/roles. Bind source and optional feature_source only to explicitly selected attachments; source assembly/species are declarations. Declaring the source species and assembly alone does not select a named reference: leave resource_preference null unless the user actually chooses or requires a particular reference identity. For raw task mode these declarations belong only in the raw declaration, not duplicated in arguments; the existing application binds native function-scoped species/assembly inputs. Namespace and source_profile may remain null: native import does not require internal profiles or certified barcode-correction history. Index is optional and is not used by native import. Existing fragments_resources supply chromosome sizes, exact regions and available GTF/GFF annotation. Missing biological history stays unknown. For uploaded custom BED preserve its source coordinates and feature_category; it directly supplies the requested regions without a reference-bundle qualification. genome_index_source supplies chromosome sizes; an explicitly supplied genome_source pins the exact FASTA association. Agent resolves the actual native inputs after function selection. For an explicit unambiguous selection of an offered reference, bind resource to its offered handle and resource_preference to the supporting verbatim literal/evidence. This can be a natural description, not an exact label. For genuinely ambiguous reference descriptions, keep resource null and quote the stated preference so the existing resource owner can return the actual choices. For a pending raw reference question use answer_roles with that declaration, not a scientific-parameter clarification. Quote an explicitly requested unavailable reference in the same way; use null when there is no preference. Do not treat a combined genome/TSS description as a single literal resource name. A broad request may compose native import, QC, filtering, a feature matrix and downstream analysis through ordinary planning. Do not ask the researcher to split internal steps or know Registry IDs. Pending fragments use answer_roles and explicit additions. A reference release name is not a correction of the source assembly. Retain existing source declarations unless the user explicitly changes them; a reference-only answer adds the resource selection without rewriting species or assembly.',
-            'For EpiZoo target-species inference or native post-training with uploaded H5AD, use request_roles with epizoo and empty roles/required_roles. Set operation initialization with target adapt_epizoo_species for transfer without training, inference with target epizoo_embed_cells, or posttraining_initialized with target posttrain_epizoo_model to train the accepted initialized model; never train merely to obtain embeddings. Bind source from selected_sources. Declare scientific_name, taxonomy_id, assembly and fragment_counts/binary_accessibility only from explicit processing context; unknown fields remain null. For initialization leave strategy null for automatic qualified mapping assessment unless the user explicitly chooses de_novo or mapped_reference. Declare peak_set/regulatory_regions feature_category from the data context. Initialization has zero optimizer updates. For posttraining_initialized reuse the exact initialized model; no new genome or strategy is needed. Inference needs the exact accepted model vocabulary, not a new genome. Initialization may bind genome_source and optional genome_index_source attachments, or a qualified genome_resource. epizoo_resources are scientific models/references, distinct from the conversational LLM. resource and genome_resource express explicit preferences only; otherwise leave null for compatible unique selection. checkpoint_source may identify an uploaded exact qualified checkpoint; weights alone do not establish vocabulary or provenance. Missing mapping/resources must clarify, never invent coordinate correspondence. Use offered scientific arguments for explicit native settings; omit absent settings for owner defaults. Pending epizoo uses answer_roles, @roles and only additions; preserve the original inputs, operation and explicit settings. Never ask the researcher to build manifests, hashes, InputSets or authority records.',
-            'When a raw task also requests annotation, retain the raw declaration and any user-supported annotation species/assembly/context. Leave downstream source and grouping handles null; ordinary planning selects their exact produced ports. The coordinator uses installed CellMarker evidence and the selected native Gene Activity reference.',
-            'For scATAC cell-type annotation use request_roles with annotation and empty roles/required_roles. Bind source only to explicitly selected attachments; for accepted scientific inputs select input_results and let ordinary planning bind original accessibility and compatible accepted native grouping. Reuse an offered annotation_group_results handle through groups_result. Missing grouping belongs to ordinary native prerequisite planning. grouping_strategy=reuse_only means the researcher prohibits recomputation; unresolved compatible grouping then needs a scoped question. Species, assembly and context are user declarations, never inferred from filenames or resource availability. Installed CellMarker 3.0 and native gene annotation references are bound after method selection. Do not request internal IDs, manifests, hashes or JSON. Native Gene Activity requires its actual accepted source: fragment/insertion data for default SnapATAC2, selected X for explicit use_x=True, or peak counts for epiScanpy. Compatible accepted Gene Activity is reused. No per-iteration LLM planning. An explicitly selected original H5AD obs group_column is reused as user-supplied initial grouping; bind it through the offered source field argument, without requiring accepted native grouping authority. groups_source is only a distinct uploaded cell_id/group TSV and must be null for original obs grouping. All annotation declaration fields, including grouping_strategy, species, assembly, measurement, context and resource selection, belong only in annotation, never duplicated in arguments. grouping_strategy is not a registered annotate_scATAC_cell_types parameter. Only registered scientific parameters such as the explicit group_column belong in arguments. Pending annotation uses answer_roles with exact additions or corrections.',
-            'For scientific BAM preprocessing use request_roles with target run_snapatac2, bam and empty required_roles/roles. Preserve the selected file, source assembly, assay and known barcode history. source_profile and namespace can stay null; the native BAM method owns filtering, duplicate flags, endpoints and shifts. It differs from historical Agent policies. Existing bam_resources supply compatible reference files. Ask intelligible questions only about actual missing scientific inputs; do not request FASTQs, sorting, a BAI, an internal profile or retained duplicate pairs merely for native BAM admission. For pending bam use answer_roles with @roles and explicit additions. For raw tasks, resource_preference quotes only an explicitly requested reference name with literal/evidence; omit it otherwise. Agent resolves concrete components after native function selection. Never emit a resource handle.',
-            *(['dialogue.selected_sources lists captured original-file candidates, not accepted result inputs. current_turn_sources identifies files selected in this turn; other entries are earlier Session attachments. dialogue.capabilities[tool].inputs offers reviewed Registry consumers. For execute_plan, associate only the original files requested as inputs through roles={tool,port,source} entries using only these offers. Each consumer may have one source; preserve explicit source associations and the declared scientific role. When dialogue.attachment_candidates is true, these are captured candidate attachments: bind only the files explicitly relevant to the requested task; unused files remain staged. Their stored input_type is a representation hint, never proof of scientific eligibility. For scientific FASTQ preprocessing use request_roles with target run_chromap and the bounded fastq variant with empty required_roles and roles. Interpret explicit assay, layout, single-library namespace/grouping, species, raw barcode whitelist policy and member source/read-role/lane/chunk associations. Missing declarations remain null or absent members. Compression is inspected from bytes. FASTQ species belongs only in fastq.species; arguments may contain only the offered FASTQ scientific consumers, never an EpiZoo species argument. Offered fastq_resources handles select reusable configured references and whitelists, never source-bound contexts. For an explicit unambiguous reference selection, use its offered resource handle together with the supporting resource_preference literal/evidence; ambiguous selections remain unresolved. Agent resolves applicable native components. Never invent values or thresholds. Do not invent FASTQ read membership, barcode history, or unsupported consumers. A single missing role may require clarification. A label-column declaration belongs to its offered operation and reference/ground-truth role. First/second may identify these exact selection positions only when the user explicitly associates them; order, filenames and metadata never imply biological roles. When the requested registered operation is unambiguous but source associations are missing, choose request_roles with target, required_roles={tool,port} from these offers, only the explicitly admitted roles, and original explicit scientific arguments. The required consumers must describe the requested objective, include the target tool and have one exact source binding each; the same source may be explicitly assigned to multiple supported consumers. This captures a question, never a scientific plan or invented workflow. If the operation itself is ambiguous, or explicit associations conflict, use clarify/ambiguous_subject without capturing a task. This selection grants no scientific qualification. An unrelated new task receives no prior input roles. Pending parameter answers retain the exact original selection and roles; they cannot switch datasets.']
-              if public.get('dialogue', {}).get('selected_sources') else []),
-            'Original-file candidates and accepted results are separate source offers. Select a historical file companion through roles only when the requested consumer actually reads it. Multiple unresolved files require clarification; never select by order or transfer old scientific declarations. For operations on accepted current results, use planning_context and omit file roles; do not recompute from an upload just because it is offered. Questions remain read-only. selected_primary_source, when present, identifies the exact explicitly selected H5AD for a new direct annotation/EpiZoo request; companion candidates cannot replace it. A pending task retains its own captured source. When session_source_candidates_overflow is true, only current explicit files remain offered; ask the user to select required historical files in the input controls. No historical subset has been silently selected.',
-            'Select supported native methods by scientific capabilities and researcher intent, with no package priority. Scanpy and epiScanpy neighbors/Leiden/UMAP and SnapATAC2 KNN/Leiden/UMAP are distinct supported APIs; preserve each selected compatible graph and representation. Processed peak-count H5AD requires no raw import or cell calling. Reuse the selected representation and exact accepted native results for downstream clustering/annotation and across turns. EpiZoo remains a separate model-based capability; explicit EpiZoo never switches methods after failure. Explicit PCA uses the native run_scanpy pp.pca or run_episcanpy tl.pca interface. For uncalled raw fragments select qc_thresholds=otsu on import and filter_cells, preserving explicit thresholds. Do not recalculate cell identities for already called/processed inputs or stack OrdMag with Otsu. No new scientific declarations are inferred.',
-            'Resolve explicit result names or semantic roles against this inventory, preferring current results unless history is requested. Multiple unresolved candidates require ambiguous_subject, never a first match.',
-            'A single current result or a unique dialogue.predecessor resolves this result. For short why, value-source or certainty follow-ups, retain that scientific target with @focus (and its subject); do not switch to operational provenance or a different output.',
-            'The predecessor contains the exact target, previous target/comparison and prior question, not generated prose. No predecessor means no prior-discussion focus; captured result groups and result_referents remain available. Clarify unresolved short references instead of inventing a topic.',
-            'Use unavailable_context only when the requested target is missing or its evidence unavailable. Missing rationale or scientific certainty within an available summary is for the scientific answer stage to explain as insufficient evidence, not a reason to reject the target.',
-            'You select intent and exact references, not the scientific conclusion. You need not see factual values to select answer_scientific for an available result. Detailed accepted evidence is loaded after admission.',
-            *(['Use answer_scientific.detail section=categorical_fields to discover eligible field names; field=null and offset/limit page field names, independently of category-record pages. A named field can be requested by its exact source:/result: handle even beyond the displayed page: Agent resolves it against the actual authorized source. Copy the exact field name, never guess, rename or supply an HDF5 path. Clarify genuinely ambiguous field/source choices. The predecessor records a prior selected page.'] if any('categorical' in g for g in groups) else []),
-            *(['Use section=category_counts for distributions. field belongs to target; to request independent distributions from two accepted results, select comparison and its exact other_field. These are separate cited statistics, requiring no attempted association. With other_field=null only the target distribution is requested. Use section=category_association only for a requested contingency table: other_field belongs to comparison when selected, otherwise target. Counts and association have category-record offset/limit. Missing correspondence limits association, not independent facts. Source observations are not biological ground truth; method questions need no categorical detail.'] if any('categorical' in g for g in groups) else []),
-            'Choose execute, navigate, clarify, or answer. Preserve existing operational answer intents.',
-            'Comparisons select exact offered accepted result handles, including explicitly identified historical versions or branches. history_complete=false means older results may be omitted from this bounded inventory; ask for navigation to an unavailable version, never substitute another result.',
-            'For questions about scientific results, use kind=answer_scientific with offered output handles. It can return insufficient evidence.',
-            'For a new scientific command use kind=execute_plan, target=one requested registered tool; the Planner composes the entire supported task across multiple operations, including repeated package tools. Agent binds the plan to the captured scientific context. Never answer a computation request as if it was already computed.',
-            *(['For execute_plan, references selects relevant captured result_groups for reading, comparison or presentation; it grants no execution permission. input_results separately selects exact captured result_groups for new scientific computation. Its qualified planning_context ports may supply executable inputs independently of context. context=current supplies broad captured-current reuse only when no exact scientific inputs are selected. A presentation reference alone grants no scientific input selection. Group relations describe the captured base, not a later active pointer. Recorded derived_from describes actual dependencies, not scientific correspondence inferred from equal sizes.'] if groups else []),
-            'execute_plan and request_roles retain requested downstream outcomes alongside scientific computation. Use delivery=explanation for requested scientific interpretation. An exact comparison selects comparison.left and comparison.right from captured g handles or new for one explicitly selected planned result. Selecting the same result twice, including new/new, requires two distinct exact fields such as result:leiden and source:cell_type. detail=null requests recorded summary/method comparison of distinct results; category_counts requests independent distributions with exact field and other_field, while category_association requests a source-qualified contingency table. Use existing detail offset/limit bounds. Missing correspondence limits association, not independent facts. Precise comparison and visualization operands already declare those delivery intentions; redundant flags or references are unnecessary. Coarse flags without exact operands do not establish completed outcomes. Original-versus-candidate comparisons that are intrinsic outputs of a scientific tool are its result facts: request explanation for their interpretation, not a separate comparison with missing operands. Native tool figures may use delivery visualization with visualization=null. Do not invent Registry tools or promise fulfillment. A visualization requiring new scientific calculation must still be planned as science. Preserve the same precise operands in request_roles when files or declarations are missing.',
-            'For representative marker activity on accepted UMAP, use answer_scientific with visualization={kind:marker_activity_umap,coordinates:g,activity:g}, selecting the exact accepted UMAP and native annotate_scATAC_cell_types result. It reads saved per-cell Gene Activity and native marker evidence, aligns exact cell identities within the qualified original source, and plots log1p(Gene Activity) without additional normalization. Gene Activity is accessibility-derived activity, not measured RNA expression or independent validation. No UMAP refit, marker testing or reannotation is needed; unavailable or unrelated sources cannot supply this figure.',
-            'For numeric QC plots from accepted native QC observations, use answer_scientific with visualization={kind:qc,source:g} selecting the exact offered accepted result. This reads saved depth, TSSe and global profiles with their actual populations and recorded filtering thresholds; it does not rerun QC, refilter cells or fit an embedding. Missing measurements remain unavailable. A new scientific run automatically publishes eligible QC figures; do not invent categorical UMAP operands for numeric QC.',
-            'For a specific categorical figure, visualization selects coordinates from an explicit captured UMAP g handle or new for an explicitly selected planned UMAP result, labels from an accepted g handle, new for an explicitly selected planned label result, or an offered source.N attachment, and field as an exact result: or source: column. Source attachments require source: fields. The existing output selector identifies each planned-new purpose; never choose a step by name, order or tool guess. Reusing accepted coordinates does not require another UMAP fit. Never choose by latest/last/first, equal cell counts or filenames; clarify ambiguous sources or fields. Without new computation choose answer_scientific with accepted-only visualization operands (no new), preserving the exact requested figure even when its publication is unavailable. Do not fabricate a scientific plan for a presentation-only request. The existence of a different or uniformly colored PNG does not satisfy exact requested coloring.',
-            'Preserve the whole scientific objective. Missing essential capabilities, ambiguous associations or incompatible scientific inputs cannot be silently omitted: clarify instead. Missing resolvable files/declarations use existing prerequisites. execute_plan.unfulfilled quotes exact clauses from this utterance for unsupported, independently separable requirements only when the user permits their omission without materially changing the objective. Agent records and discloses them; use [] otherwise. Never use this to skip essential science or resolvable prerequisites. If separability is unclear, clarify. Never add hidden fallback plans or retry a semantic refusal until success.',
-            *(['Use retain_parameters for requested earlier settings of the same tool. Carry established scientific declarations without repetition only when rerunning that tool on the same input. Consuming an accepted output is a different input, even if the same tool consumes it: select its offered references and reusable_inputs, not its producer recipe. Never infer scientific declarations for a different or ambiguous input. Select exact offered result/argument pairs; Agent binds their recorded values and provenance. Never copy accepted values into explicit current arguments or manufacture literal evidence from prior defaults. Explicit current changes override only their own parameter; omitted unrelated parameters stay omitted, and unknown historical settings require clarification when essential.'] if groups else []),
-            'For selected scientific uploads, structured inputs or accepted-result continuations, dialogue.resource_choices lists existing operator-reviewed InputSets by opaque handle and label. If the original requested task needs a missing or ambiguous reference, profile, namespace, explicit biological context/group specification or resource choice, choose request_resources with its registered target and explicit scientific arguments. Set context=current to preserve explicitly requested accepted-result reuse through resource clarification; no re-upload is needed. This preserves the objective and source for a later answer. Resources are configuration declarations, never proof of scientific compatibility. An offered @resources pending request is answered with answer_resources only when the user selects one of its exact choices for that original objective. Never invent paths, digests, resources, provenance or operations. Unrelated new tasks use ordinary decisions. When dialogue.reference_supplementation is available, a missing genome for declared species/assembly and an uploaded regulatory H5AD can use request_resources with explicit reference_category peak_set or regulatory_regions. This asks for plain FASTA (optional FAI) and preserves the objective. Qualified pending reference choices can answer that original request. Otherwise an operator must provision missing resources. Never fabricate resources.',
-            'A supported scientific operation with missing files is not an unsupported capability. Use request_roles with the offered Registry input roles and only exact existing source associations; leave roles empty when no file is available. This captures the original objective for a later upload. Do not construct a workflow or invent source handles. If a required declaration is omitted for a selected input, choose execute_plan and omit that declaration from arguments; the compiler determines its exact prerequisite. Use missing_species only while answering an offered pending species prerequisite. Unsupported capabilities, ambiguous sources, conflicting declarations and incompatible inputs remain distinct.',
-            'A package name alone does not request one function. A scientific objective using a named package may compose its registered functions. Named scientific methods constrain the research plan. Direct package/API invocation belongs to the separate Native Functions form and does not use this Interpreter. Use native_function to scope each declaration to its registered function. This scope is not a function_name value. An explicit research-method selection requires a function_name choice declaration with value equal to the offered canonical function, plus its verbatim literal/evidence. Put native keyword assignments in the kwargs parameter as members; member names are not top-level argument identities. Preserve exact explicit values, never insert unrequested preprocessing. Missing kwargs stay omitted. Ordinary fragments tasks need no sorting declaration: the task handoff supplies unknown input order and native sorting; never fabricate a user sorting flag. If an ordinary fragment-import task explicitly declares barcode grouping, capture the optional fragment_order choice scoped to pp.import_fragments. Never infer it from a filename or ask for it. Use native import/filter/count defaults unless the user requests alternatives. A low-depth/all-barcode inspection request may bind its requested retention through min_num_fragments; do not lower thresholds simply because an input is small. A supported composition is not unsupported_intent merely because it needs several operations. Exact same-function repeated calls still need unambiguous source scope.',
-            'An explicitly named scientific backend, algorithm or implementation constrains the requested operation. Choose an offered registered capability only if it supports that named choice; if unavailable, use clarify/unsupported_intent rather than substitute a similar implementation. For a general operation without a named implementation, select a suitable offered capability. Detailed planning and deterministic validation still enforce compatibility.',
-            'Input-role required flags come from Registry ports. Required user files and optional user-provided resources are distinct. Ask for a missing required dataset; request an optional resource file only when the user explicitly selects that source or the scientific owner identifies a missing resource. Do not turn an offered optional port into a mandatory upload. Compatible installed resources remain available through their existing owners; never invent compatibility or replace an explicitly supplied file.',
-            'Registered default_when_omitted values apply when the user has no special preference. Do not ask for optional scientific parameters merely because no explicit value was supplied. Preserve explicit requested values; defaults do not supply literal evidence for a user declaration.',
-            'execute_plan.arguments contains explicit declarations for canonical tool/argument pairs offered in dialogue.capabilities[tool].parameters. Associate each value with the requested operation; never assign an ambiguous value to an arbitrary step. Copy each literal verbatim. For numeric parameters, literal is only the numeric token, without the parameter name or units: for example literal="2" with evidence="use 2 components". The evidence clause locates the token; do not put the whole clause into literal. In evidence quote an exact uniquely occurring clause from this utterance that associates this parameter with the literal and contains that literal exactly once. Agent computes character offsets. Repeated values need distinct unambiguous evidence; conflicting declarations require clarification unless the user explicitly corrects them. Do not use unrelated mentions as declarations. Different native functions of one package are distinct operations: native_function associates their parameters without requiring source/port. Use source and port only when the user associates a parameter with an operation directly consuming that exact captured original file, especially repeated instances of the same function on different files. Source/port asserts direct original-file consumption, not shared ancestry. In a multi-function workflow, bind its original input through roles and let the Planner compose derived dependencies; do not copy that original source scope onto downstream functions consuming newly produced results. This scopes direct-file values without constructing DAG steps. A value explicitly applying to both files needs one declaration per source; the same evidence clause may support both. Unscoped values never authorize repeated operations. source and port name captured attachments, not accepted result outputs. When consuming an accepted result, do not attach its producer\'s original file as a role or scope scalar choices to that file unless the requested consumer actually reads that file again. Use current accepted context and its exact offered result instead. Do not repeat the same tool/argument/source/port identity.',
-            *(['For a json_object parameter, explicit JSON remains one verbatim literal without members. When reviewed members are offered, ordinary name=value or natural-language assignments use one declaration with members, each with its own exact literal/evidence. Do not supply an enclosing literal or invented JSON text; Agent builds the mapping from the grounded members. Select each canonical member name semantically from its description, never by an alias parser. kind=number preserves numeric tokens; kind=string copies the full string excluding quotation delimiters; kind=boolean copies an explicit true/false, yes/no, 是/否 or 开启/关闭 value; kind=json copies an explicitly supplied JSON value (including arrays, booleans or null). Preserve explicit types, including invalid native values. Do not fabricate, repair or default omitted members. Do not combine contradictory assignments or explicit JSON and prose values that disagree; clarify ambiguous, conflicting or unrepresentable values. Source/port scope remains the same as any other scientific declaration.']
-              if any(item.get('json_object') for item in public.get('dialogue', {}).get('scientific_parameters', ())) else []),
-            *(['For an offered exact_string parameter without observation_source, literal is the explicitly supplied value (observation column, processing namespace or DNA sequence as described by the offered parameter), with surrounding quotation marks excluded from its span. Preserve case, Unicode, punctuation and whitespace exactly; do not normalize or invent reference/query/ground-truth relationships. Associate it with its offered scientific operation and provenance_role; ambiguous or conflicting declarations require clarification.']
-              if any(item.get('exact_string') for item in public.get('dialogue', {}).get('scientific_parameters', ())) else []),
-            'For a parameter with observation_source and an offered H5AD source, declare source, value, mode, literal and evidence. source explicitly selects that tool\'s observation_source dataset port; a matching roles entry is optional and must agree. Other dataset ports still need their own explicit roles. In mode=offered, value is an exact field name from that source\'s source_fields row, while literal/evidence quotes the researcher\'s natural reference to supplied annotations or the field. The researcher need not spell an internal column name. In mode=literal, the researcher explicitly names the column: value must equal the exact verbatim literal, excluding surrounding quotation marks; this may identify a name outside the bounded metadata offer. Never change modes after a rejected binding, omit value, borrow another file\'s field, infer ground truth from field presence, or invent a column from a descriptive phrase. Native owners qualify the selected data and exact axes. With no supported source yet offered, only an explicitly supplied exact column-name literal may be retained in the existing source-free declaration form; otherwise preserve the objective and request its file roles without inventing a name.',
-            'For every offered parameter with choices, use the choice declaration form: value is required and must be an exact offered choice, while literal/evidence quotes the actual user declaration. This applies to native function_name and preprocessing choices as well as biological declarations. A literal-only declaration is not a choice, even when native_function supplies the same name. Never derive a missing choice value from defaults or another declaration. An initial explicit species declaration about the selected cells or dataset belongs in execute_plan.arguments even when the target is a downstream tool. A statement about a model supporting human and mouse is not a declaration of the selected dataset species; omit that argument. Never infer species from filenames, dimensions, features, available resources or checkpoint identity. Unsupported or conflicting explicit dataset declarations require the corresponding clarification; an unresolved declaration in a supported new command uses the compiler-owned handoff above. A user declaration does not establish input compatibility. Pending species answers continue using answer_prerequisite.species, not a choice argument.',
-            'A number alone does not request an operation. Explanatory parameter questions remain answers, never execution or edits to a pending request. Keep unresolved parameter associations or conflicting values local in execute_plan.missing_parameters; do not invent an amount or replace an invalid value with a default.',
-            'Use arguments=[] for omitted scientific parameters. Registered owners and existing compiler/resource contracts decide requirements and defaults; never invent a numeric default, infer scientific input identity, or create arbitrary execution dictionaries. Exact decimal or rational threshold literals stay exact; do not approximate them with floating point values.',
-            'Scientific targets: @focus is the captured predecessor target; @previous is its comparison or previous subject. No predecessor means no implicit focus.',
-            'Target subject selects only an offered annotation-summary group. Clustering labels and other categorical values are not target subjects: select their exact result and categorical fields through detail. The answer stage reads the requested records with their coverage; never invent a category or treat an unavailable table page as absence.',
-            'Subject=null means no new subject is asserted by the model for this turn. '
-            'It does not clear an authoritative subject retained through a resolved captured referent; '
-            'you need not copy or reconstruct that subject identity. Without a retained subject, null selects the whole result. '
-            'Use @focus to retain the predecessor subject, @other only for an unambiguous other subject, '
-            'or an offered subject candidate ID/reference quoted in the question. References resolve only within that result; do not invent aliases.',
-            'Use focus=continue to preserve the predecessor explanatory question on a subject change; otherwise question. For why/provenance/limitations ask the current question.',
-            'Scientific comparison uses two explicit targets; do not infer correspondence between clusters from different results. Ambiguous other/previous requires clarification.',
-            'A biggest/most important difference needs an explicit comparison dimension or reviewed criterion. Clarify when it is missing; do not invent a ranking. New markers, significance tests or reannotation require scientific execution, not interpretation.',
-            'Questions about parameters, methods, versions, changes, execution, reuse, provenance or verification use answer_scientific with exact offered accepted targets, irrespective of the tool or question vocabulary. General advice and questions without accepted results use answer_guidance. Unsupported computation uses clarify/unsupported_intent. Never route scientific questions through historical workflow roles.',
-            'For qualitative adjustments (finer clustering, stricter filtering) or ambiguous values, preserve execute_plan and its valid arguments, source roles and selected results. Put only unresolved fields in missing_parameters, as {tool,argument,native_function,member,port,source,evidence}; use null for irrelevant scope and quote the actual qualitative request in evidence. For native kwargs select the exact function and member. Do not invent a value, numerical alternatives or optimizer. Genuinely omitted optional values stay omitted; missing_parameters=[] needs no question. The existing typed question continues this objective.',
-            'After native method selection, AI Research can select omitted Leiden resolution, epiScanpy Louvain resolution and epiScanpy kmeans/hc num_clusters with shared bounded ASW. Do not invent numeric defaults or plan candidate scans. Explicit researcher values prevail. An explicit request for native defaults binds parameter_selection=native_defaults on the selected native function; epiScanpy kmeans/hc then require an explicit num_clusters through the existing local question. Native Functions mode is unchanged.',
-            'Previous is ambiguous when parent and previous-active differ. Do not choose one silently.',
-            'Use relation previous for earlier/previous version or go back one version; parent requires the word parent.',
-        ] + ([
-            'dialogue.planning_context offers opaque, recorded owner-qualified artifacts from the captured current Revision, not present-day integrity or unrestricted memory. Only scientific execution revalidates their authority and bytes.',
-            'For execute_plan choose context=current only when the requested new computation explicitly uses or modifies that captured analysis. The Planner selects exact compatible offered artifacts; clarify an unresolved historical subject rather than choosing the first item.',
-            'Choose context=none for an independent new task or changed scientific input. Do not transfer prior source-specific declarations or parameters. Questions remain read-only answers, navigation remains navigation, and pending answers continue only their exact captured original request.',
-        ] if public.get('dialogue', {}).get('planning_context') else []) + ([
-            'dialogue.pending_prerequisite describes one captured scientific request awaiting an explicit human/mouse species declaration. Its objective and selected dataset remain fixed; this context is not scientific compatibility evidence.',
-            'Choose answer_prerequisite only when this utterance unambiguously answers that specifically pending species question for the same request and selected dataset. Use its exact offered pending handle and normalize the explicit declaration to the offered human or mouse value. Meaning is yours to interpret; never infer species from filenames, dimensions, features, available checkpoints or unrelated datasets.',
-            'Uncertainty or ambiguous species requires clarify/ambiguous_species; another species requires clarify/unsupported_species; a conflicting declaration requires clarify/conflicting_species. Do not guess or emit arbitrary scientific input dictionaries.',
-            'If the user changes the analysis objective, choose the ordinary decision for that new request, such as execute_plan. Cancellation or an unrelated message must never answer the old prerequisite; use clarify/unsupported_intent when no other supported decision applies. An answer authorizes continuation only of the captured original objective, never additional operations.',
-            'answer_prerequisite.arguments may declare explicit offered scientific parameters in the same reply only for operations already requested by the captured objective. Otherwise use []; original validated scientific parameters remain captured. Do not add operations to answer a species prerequisite.',
-        ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field', 'species') == 'species'
-              and public.get('dialogue', {}).get('pending_prerequisite') is not None else []) + ([
-            'dialogue.pending_prerequisite describes one captured scientific request awaiting the exact required parameters listed there. Its original objective, inputs and operation scope remain fixed; pending context does not establish scientific compatibility or execution authority.',
-            'Choose answer_parameters only when this utterance explicitly supplies or corrects parameters for that same pending request. Use its exact offered pending handle and canonical offered tool/argument pairs with verbatim numeric or exact_string literals and uniquely locating exact evidence quotes. Partial answers are allowed; never invent the remaining values or add operations.',
-            'An answer continues only the original explicit execution request through existing scientific validation. Unrelated messages, explanations, uncertainty, cancellation and new objectives must use the ordinary applicable decision, never answer_parameters. Clarify conflicting or ambiguous parameter associations.',
-        ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field') == 'parameters' else []) + ([
-            'dialogue.pending_prerequisite describes the exact original scientific objective awaiting the offered required_roles. Captured sources retain their exact order and identity. Explicitly selected newly registered files may be appended only to fill the offered missing roles; previously admitted roles and captured files remain fixed. Only the explicitly described declaration corrections and resource choices are allowed; this context grants no scientific qualification.',
-
-            'For a pending fastq declaration use answer_roles with fastq, empty roles and the exact @roles handle. Preserve the original library and members; supply only explicit additions. Missing values stay null.',
-            'Choose answer_roles only when this utterance answers that specific pending question. Use its exact pending handle and offered tool/port/source associations. A partial answer may provide only some missing roles or an exact offered scientific argument; omit unresolved roles instead of assigning by order or guessing. Previously admitted roles cannot be reassigned. Positional references apply only to the captured ordered selection and an explicit role association in this reply.',
-            'Contradictory or ambiguous associations require clarify/ambiguous_subject. Unrelated tasks, explanations, uncertainty and cancellation use their ordinary decisions, never answer_roles. An answer continues only the original task; do not add operations or claim resource authority from conversational assertions.',
-        ] if (public.get('dialogue', {}).get('pending_prerequisite') or {}).get('field') in {'roles', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo'} else [])},
-        sort_keys=True, separators=(',', ':'),
-        ensure_ascii=not bool(public.get('dialogue', {}).get('selected_sources')))
-    response_schema = decision_schema()
+    projected = _interpretation_public(public, utterance)
+    prompt = json.dumps({'turn_schema_version': 1, 'utterance': utterance, **projected,
+        'instructions': _intent_instructions()}, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+    response_schema = decision_schema(public, utterance=utterance)
     log_operation_event(logger, 'interpreter.preparation_completed', context=diagnostic_context,
                         prompt=prompt, schema=response_schema)
     response = model.complete(prompt=prompt, response_schema=response_schema)

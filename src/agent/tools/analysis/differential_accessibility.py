@@ -904,3 +904,31 @@ __all__ = [
     "M82ScientificError",
     "prepare_replicate_differential_accessibility",
 ]
+
+
+def prepare_operation(arguments, context):
+    """Bounded aggregate metadata only; never reopen cell-level ancestry."""
+    from dataclasses import replace
+    from agent.orchestration.scientific_inputs import ScientificInputRequired,ScientificDiagnostic,parameter_requirements
+    observed=context.existing(arguments.get('pseudobulk_path'))
+    if observed is None:return arguments
+    from .categorical import _series
+    from .peak_h5ad import inspect,metadata_item
+    from agent.tools._file_identity import checked_file
+    import h5py
+    checked_file(observed.path,observed.sha256)
+    with h5py.File(observed.path,'r') as handle:
+        inspect(handle,require_matrix=False,metadata_paths=('obs/group','obs/condition'))
+        groups=list(map(str,_series(metadata_item(handle,'obs/group'))))
+        conditions=list(map(str,_series(metadata_item(handle,'obs/condition'))))
+    checked_file(observed.path,observed.sha256)
+    group=arguments.get('group_value');choices={}
+    choices['group_value']=tuple(dict.fromkeys(groups))[:64]
+    available=tuple(dict.fromkeys(c for g,c in zip(groups,conditions) if g==group))[:64] if group is not None else ()
+    choices.update(numerator_condition=available,denominator_condition=available)
+    missing=[name for name in choices if not arguments.get(name)]
+    for name in ('group_value','numerator_condition','denominator_condition'):
+        if arguments.get(name) is not None and (name=='group_value' or group is not None) and arguments[name] not in (set(groups) if name=='group_value' else set(c for g,c in zip(groups,conditions) if g==group)):
+            raise ScientificDiagnostic('DA_METADATA_CHOICE_INVALID','The supplied '+name+' is absent from the selected aggregate population.')
+    if missing:raise ScientificInputRequired(*(replace(req,choices=choices[req.argument]) for req in parameter_requirements(context.tool,missing)))
+    return arguments

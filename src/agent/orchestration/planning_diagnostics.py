@@ -617,6 +617,23 @@ class DiagnosedPlanningAttempt:
             raise TypeError("`diagnostics` must contain PlanningDiagnostic values.")
 
 
+@dataclass(frozen=True)
+class DiagnosedCandidateAttempt:
+    """A parsed scientific candidate; deliberately has no executable plan."""
+    analysis: object
+    context: PlanningDiagnosticContext
+    diagnostics: tuple[PlanningDiagnostic, ...]
+
+    def __post_init__(self):
+        from .semantic_compiler import CandidateAnalysis, AnalysisDisposition
+        if not isinstance(self.analysis, CandidateAnalysis):
+            raise TypeError('Candidate acquisition requires an analyzed candidate.')
+        if not isinstance(self.context, PlanningDiagnosticContext):
+            raise TypeError('Invalid candidate diagnostic context.')
+        if not isinstance(self.diagnostics, tuple) or any(not isinstance(d, PlanningDiagnostic) for d in self.diagnostics):
+            raise TypeError('Invalid candidate diagnostics.')
+
+
 __all__ = [
     "DiagnosedPlanningAttempt",
     "PLANNING_DIAGNOSTIC_SCHEMA_VERSION",

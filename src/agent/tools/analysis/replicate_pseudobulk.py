@@ -1474,3 +1474,55 @@ __all__ = [
     "build_replicate_pseudobulk",
     "validate_scATAC_feature_space",
 ]
+
+
+def prepare_feature_space(arguments, context):
+    """Conditional source/coordinate operands without count validation/replay."""
+    from dataclasses import replace
+    from agent.orchestration.scientific_inputs import ScientificInputRequired,ScientificDiagnostic,parameter_requirements
+    missing=[];coordinates=arguments.get('coordinate_source')
+    if arguments.get('matrix_source')=='layer' and not arguments.get('layer_key'):missing.append('layer_key')
+    if arguments.get('matrix_source')=='X' and arguments.get('layer_key') is not None:
+        raise ScientificDiagnostic('MATRIX_SOURCE_INVALID','layer_key is prohibited for matrix_source X.')
+    if coordinates in ('var_columns','feature_names') and not arguments.get('coordinate_system'):missing.append('coordinate_system')
+    if coordinates=='var_columns':missing.extend(name for name in ('feature_chrom_key','feature_start_key','feature_end_key') if not arguments.get(name))
+    if coordinates=='none' and any(arguments.get(name) is not None for name in ('coordinate_system','feature_chrom_key','feature_start_key','feature_end_key')):
+        raise ScientificDiagnostic('FEATURE_COORDINATES_INVALID','Coordinate operands are prohibited when coordinates are absent.')
+    if missing:
+        observed=context.existing(arguments.get('input_path'))
+        needs=parameter_requirements(context.tool,missing)
+        if observed is not None:
+            fields=observed.fields('var');layers=observed.slots('layers')
+            needs=tuple(replace(req,choices=layers if req.argument=='layer_key' else fields if req.argument.startswith('feature_') else req.choices) for req in needs)
+        raise ScientificInputRequired(*needs)
+    return arguments
+
+
+def prepare_pseudobulk(arguments, context):
+    from agent.orchestration.scientific_inputs import ScientificInputRequired,ScientificInputRequirement,ScientificDiagnostic
+    mode=arguments.get('group_source');annotation=arguments.get('group_annotation_path')
+    if mode=='verified_annotation':
+        if arguments.get('group_key') not in (None,'predicted_label'):
+            raise ScientificDiagnostic('GROUP_ANNOTATION_INVALID','Verified annotation groups require their exact predicted_label key.')
+        if annotation is None:
+            return context.accepted_input('group_annotation',arguments)
+    elif mode=='raw_obs' and annotation is not None:
+        raise ScientificDiagnostic('GROUP_ANNOTATION_INVALID','Annotation input is prohibited for raw observation groups.')
+    missing=[name for name in ('replicate_key','condition_key',*(() if mode=='verified_annotation' else ('group_key',))) if not arguments.get(name)]
+    if missing:
+        from dataclasses import replace
+        from agent.orchestration.scientific_inputs import parameter_requirements
+        observed=context.existing(arguments.get('feature_space_path'))
+        choices=()
+        if observed is not None:
+            observed.read_bytes()  # Enforce the metadata bound before owner parsing.
+            _,manifest,sha=_load_feature_manifest(observed.path)
+            if sha!=observed.sha256:raise ScientificDiagnostic('FEATURE_SPACE_ARTIFACT_INVALID','Feature manifest changed during preparation.')
+            source=manifest['source']
+            from agent.application.source_observations import ExistingObject
+            from agent.tools._file_identity import checked_file
+            checked_file(source['input_path'],source['source_h5ad_sha256'])
+            choices=ExistingObject(source['input_path'],source['source_h5ad_sha256']).fields('obs')
+            checked_file(observed.path,observed.sha256)
+        raise ScientificInputRequired(*(replace(req,choices=choices) for req in parameter_requirements(context.tool,missing)))
+    return arguments

@@ -235,3 +235,17 @@ result = publication.result
 verify_publication = publication.verify_publication
 verify_result = publication.verify_result
 recover = publication.recover
+
+
+def prepare_operation(arguments, context):
+    """Selected scientific owner exposes typed prerequisites on the actual input."""
+    from agent.orchestration.scientific_inputs import parameter_requirements, ScientificInputRequired
+    observed_args = dict(arguments)
+    source = context.existing(arguments.get('input_path'))
+    if source is not None:
+        observed_args['input_path'] = source.path
+    names = parameter_prerequisites(observed_args)
+    needs = parameter_requirements(context.tool, names)
+    if needs:
+        raise ScientificInputRequired(*needs)
+    return arguments

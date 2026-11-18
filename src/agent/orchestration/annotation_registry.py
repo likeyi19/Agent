@@ -75,12 +75,13 @@ def annotation_tool_spec():
     ports.extend(scalar(k, required=k in required) for k in (*required,*optional) if k not in excluded)
     from .native_delivery import delivery_spec
     pub = owner.publication
+    from agent.application.annotation_preparation import prepare_operation
     return ToolSpec(owner.TOOL, coordinator.annotate_scATAC_cell_types, required, optional,
         ResultContract('HierarchicalAnnotation', owner.RESULT_FIELDS,
             planning_fields={k:_planning_result('Accepted hierarchical annotation and complete evidence.',
                 bindable=True,artifact=A.RAW_SCATAC if k=='annotated_h5ad_path' else A.SCATAC_CELL_TYPE_ANNOTATION)
                 for k in owner.RESULT_FIELDS if k.endswith(('_path','_sha256'))}),
-        classify, recovery_policy_version='hierarchical-annotation-v1',
+        classify, preparation_owner=prepare_operation, source_encodings={'source':('h5ad',),'groups':('tsv',)}, source_input_types={'source':('h5ad',), 'groups':('groups',)}, recovery_policy_version='hierarchical-annotation-v1',
         durable_hooks=DurableToolHooks(coordinator.coordinate, owner.recover),
         scientific_authority=ScientificAuthorityHooks(owner.KIND, ('dataset','annotation'), pub.describe,
             pub.publication_record, pub.reuse_result, pub.proof_metadata),
@@ -108,7 +109,7 @@ def annotation_tool_spec():
         application_inputs=frozenset({'cellmarker_id','cellmarker_identity','operation_overrides','previous_annotation_path',
             'species','grouping_path','gene_anno_path','gene_anno_sha256'}),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
-            Producer('annotation','hierarchical_annotation.v1',(member('manifest_path'),member('manifest_sha256'))),
-            Producer('dataset','hierarchical_annotation_h5ad.v1',(member('dataset','annotated_h5ad_path'),member('sha256','annotated_h5ad_sha256'))))),
+            Producer('annotation','hierarchical_annotation.v1',(member('manifest_path'),member('manifest_sha256')), lineage_from_port='source'),
+            Producer('dataset','hierarchical_annotation_h5ad.v1',(member('dataset','annotated_h5ad_path'),member('sha256','annotated_h5ad_sha256')), lineage_from_port='source'))),
         scientific_delivery=delivery_spec(owner, 'scientific_annotation', h5ad_roles=('annotated.h5ad',)),
         annotation_children=coordinator.CHILDREN)

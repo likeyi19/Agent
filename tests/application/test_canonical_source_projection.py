@@ -34,12 +34,17 @@ class ProjectionModel:
 
     def complete(self, *, prompt, response_schema):
         value = json.loads(prompt)
-        assert 'turn_schema_version' in value, 'Projection test must not invoke a Planner or answerer.'
+        if value.get('focus')=='outcome' or 'grounding_review_version' in value:
+            from test_response_contracts import OutcomeModel
+            return OutcomeModel('Please supply the requested input.').complete(prompt=prompt,response_schema=response_schema)
+        if 'semantic_prompt_version' in value:
+            return json.dumps(dict(schema_version=4,decision=dict(kind='plan',steps=[dict(
+                step_id='embedding',tool='mock_embed_cells',sources=[],control_dependencies=[])])))
+        assert 'turn_schema_version' in value
         self.calls.append(dict(prompt=value, schema=response_schema))
         if value['utterance'] == offered.OLD:
             if self.pending_field == 'roles':
-                decision = dict(kind='request_roles', target='mock_embed_cells',
-                    required_roles=[offered.PORT], roles=[],
+                decision = dict(kind='execute_plan', target='mock_embed_cells',roles=[],
                     arguments=[offered.number(offered.OLD, '2')])
             else:
                 field = self.pending_field
@@ -114,25 +119,25 @@ def test_current_single_without_pending_is_primary_before_old_candidates(tmp_pat
 
 
 def test_new_single_cannot_replace_a_fixed_pending_source(tmp_path, monkeypatch):
-    app, records, executor, calls, _ = setup_case(tmp_path, monkeypatch, continue_fixed=True)
-    fixed = app.resources.compose_group([records[0].resource_id], dict(n_components=2))
+    app, records, executor, calls, _ = setup_case(tmp_path, monkeypatch, pending_field='annotation',continue_fixed=True)
+    fixed = app.resources.compose_h5ad(records[0].resource_id)
     first = app.submit_turn('session', 'old', offered.OLD, expected_generation=0, registered_input=fixed)
     assert first.status == 'clarification'
     original = app._application.sessions.load('session').interactions[0]
-    second = app.submit_turn('session', 'attempt', REPLY, expected_generation=0,
-                            registered_input=app.resources.compose_h5ad(records[1].resource_id))
-    assert second.status == 'failed' and second.error.code == 'INTERACTIVE_INTENT_BINDING_INVALID'
-    public = calls[-1]['prompt']['dialogue']
-    assert 'pending_prerequisite' not in public
-    assert public['selected_primary_source'] == 'source.0'
-    assert [row['label'] for row in public['selected_sources']] == [records[1].label]
+    result=app.submit_turn('session', 'attempt', REPLY, expected_generation=0,
+        registered_input=app.resources.compose_h5ad(records[1].resource_id))
+    assert result.status=='clarification'
+    current=app._application.sessions.load('session').interactions[-1]
+    assert current.admitted['annotation']['source']=='source.0'
+    assert current.admitted['annotation_sources']['members'][0]['resource_id']==records[0].resource_id
+    assert len(calls) == 2  # New offers confer no replacement authority after interpretation.
     state = app._application.sessions.load('session')
     assert state.interactions[0] == original
     assert not executor.plans and not state.turns and not state.revisions
 
 
 def test_old_capture_without_source_view_decodes_after_sources_disappear(tmp_path, monkeypatch):
-    app, records, executor, _, _ = setup_case(tmp_path, monkeypatch)
+    app, records, executor, _, _ = setup_case(tmp_path, monkeypatch,pending_field='annotation')
     assert offered.submit(app, records[0], 'old', offered.OLD).status == 'clarification'
     state = app._application.sessions.load('session')
     legacy = _serialize(state.to_dict())
@@ -149,5 +154,6 @@ def test_old_capture_without_source_view_decodes_after_sources_disappear(tmp_pat
     monkeypatch.setattr(LocalResourceAdmission, '_verify_records', forbidden)
     loaded = AnalysisSession.from_dict(legacy)
     assert _serialize(loaded.to_dict()) == legacy
-    assert loaded.interactions[0].prerequisite['origin_turn_id'] == 'old'
+    assert loaded.interactions[0].preparation['task_origin'] == 'old'
+    assert loaded.interactions[0].prerequisite is None
     assert not executor.plans and not loaded.turns and not loaded.revisions

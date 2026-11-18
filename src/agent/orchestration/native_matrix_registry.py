@@ -66,6 +66,8 @@ def tool_spec(owner):
             'Do not pass this selector to graph-consuming functions without use_rep, including Scanpy UMAP.',
             choices=('X_spectral', 'X_epizoo', 'X_pca', 'X_lsi'), scientific_parameter=True,
             conversational_choice=True, planner_choice=True)
+    if owner.package in ('scanpy','episcanpy'):
+        optional['root_cell'] = arg((str,), 'Explicit exact observation ID for DPT; adapted only on the task-local AnnData. Omission retains a valid source uns.iroot. Never infer a root.', scientific_parameter=True, conversational_exact_string=True)
     raw_fields = set()
     if owner.package == 'scanpy':
         optional['group_column'] = arg((str,), 'Explicit source obs grouping for the existing Gene Activity projection; user-supplied, not an accepted clustering claim.', scientific_parameter=True)
@@ -116,7 +118,7 @@ def tool_spec(owner):
             second_count_slot=arg((str,), 'Second input X or selected layer, independently bound.', scientific_parameter=True, conversational_exact_string=True))
     from .native_parameters import scalar_port
     base_scalar = scalar
-    scalar = lambda k, **kw: scalar_port(owner.TOOL, tuple(owner.FUNCTIONS), k, **kw) if ({**required, **optional}[k].planning.scientific_parameter) else base_scalar(k, **kw)
+    scalar = lambda k, **kw: scalar_port(owner.TOOL, ('tl.dpt',) if k=='root_cell' else tuple(owner.FUNCTIONS), k, **kw) if ({**required, **optional}[k].planning.scientific_parameter) else base_scalar(k, **kw)
     ports = [Consumer('dataset', (member('dataset', 'input_path'),), True,
         request_sources=(request('input_path', rm('dataset', 'input_path')),),
         accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1', 'native_matrix_h5ad.v1', 'cell_embedding_h5ad.v1', 'hierarchical_annotation_h5ad.v1')
@@ -210,7 +212,9 @@ def tool_spec(owner):
         'Other matrix functions need no genome. '
     ) if owner.package == 'episcanpy' else 'No genome is required for these matrix functions. '
     notes = tuple(sentence + '.' for sentence in raw_guidance.strip().rstrip('.').split('. '))
-    return ToolSpec(native_functions=NativeFunctionCatalog(owner.package, tuple((name, tuple(members)) for name, members in owner.FUNCTIONS.items()), parameter_metadata=owner.parameter_metadata),name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
+    from agent.application.native_raw_handoff import prepare_operation
+    return ToolSpec(source_encodings={p.name:((('h5ad','bam','fragments') if owner.package=='snapatac2' else ('h5ad',)) if p.name in ('dataset','second') else {'chrom_sizes':('fai','chromosome_sizes_tsv'),'gene_anno':('gtf','gff'),'peaks':('bed',),'whitelist':('barcode_whitelist',)}[p.name]) for p in ports if p.name in ('dataset','second') or any(m.field_name in raw_fields for m in p.members)}, source_input_types={p.name: (('h5ad','bam','external_fragments') if owner.package=='snapatac2' and p.name=='dataset' else ('h5ad',) if p.name in ('dataset','second') else ('attachment','scientific_reference')) for p in ports if p.name in ('dataset','second') or any(m.field_name in raw_fields for m in p.members)}, preparation_owner=prepare_operation, planned_output_properties=owner.planned_output_properties, native_functions=NativeFunctionCatalog(owner.package, tuple((name, tuple(members)) for name, members in owner.FUNCTIONS.items()), parameter_metadata=owner.parameter_metadata, output_available=owner.output_available),name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
+        application_inputs=frozenset({*raw_fields,'kwargs'}),
         scientific_delivery=delivery_spec(owner, 'scientific_native_result', h5ad_roles=('result.h5ad',)),
         result_contract=ResultContract('NativeMatrixResult', owner.RESULT_FIELDS, planning_fields={
             k: _planning_result('Exact native publication/file; null outputs are unavailable for this function.', bindable=True, artifact=A.RAW_SCATAC)
@@ -239,7 +243,7 @@ def tool_spec(owner):
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports), producer_ports=(
             Producer('matrix', owner.CONTRACT, (member('path', 'manifest_path'), member('sha256', 'manifest_sha256'))),
             Producer('dataset', 'native_matrix_h5ad.v1', (member('dataset','matrix_path'),member('sha256','matrix_sha256')), lineage_from_port='dataset'),
-            *((Producer('fragments', 'native_fragments_file.v1', (member('dataset', 'fragments_path'),)),)
+            *((Producer('fragments', 'native_fragments_file.v1', (member('dataset', 'fragments_path'),), lineage_from_port='dataset'),)
                 if owner.package == 'snapatac2' else ()))))
 
 

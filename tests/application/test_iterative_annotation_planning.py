@@ -58,7 +58,8 @@ def test_annotation_grouping_uses_the_actual_cluster_before_a_retaining_umap(mon
 
 @pytest.mark.parametrize('function,kwargs',[('pp.log1p',{}),('tl.leiden',{'inplace':False})])
 def test_annotation_grouping_does_not_invent_a_cluster_from_unqualified_slots(monkeypatch,function,kwargs):
-    from agent.application.annotation_preparation import preparer,AnnotationPrerequisite
+    from agent.application.annotation_preparation import preparer
+    from agent.orchestration.semantic_compiler import ScientificInputRequired
     from agent.application.raw_handoff import AnnotationDeclaration,declaration_dict
     from agent.tools.analysis import sequence_prediction
     from agent.tools.data import cellmarker
@@ -68,7 +69,7 @@ def test_annotation_grouping_does_not_invent_a_cluster_from_unqualified_slots(mo
     ref=StepOutputRef('selected','matrix_path')
     args=dict(input_path=ref,grouping_path=ref,activity_path=StepOutputRef('activity','matrix_path'))
     selected=dict(selected=('run_scanpy',dict(function_name=function,kwargs=kwargs,input_path='/original.h5ad')))
-    with pytest.raises(AnnotationPrerequisite,match='clustering'):
+    with pytest.raises(ScientificInputRequired,match='clustering'):
         preparer(None,None,captured)(build_default_tool_registry().get('annotate_scATAC_cell_types'),args,selected)
 
 
@@ -202,7 +203,7 @@ def test_optional_umap_click_preserves_supplied_groups_and_ordinary_planning(tmp
         assert {row['label'] for row in outcome.clarification_choices} == {'Generate UMAP','Skip UMAP'}
         assert not executor.plans
         outcome=app.submit_turn('session','click','',expected_generation=0,input_sets=inputs,
-            clarification_choice=dict(question_turn_id='request',handle='annotation-umap:'+choice))
+            clarification_choice=dict(question_turn_id='request',handle=next(c['handle'] for c in outcome.clarification_choices if c['choice_identity']=='annotation-umap:'+choice)))
     if invalid_port in {'omit_umap', 'omit_annotation', 'wrong_output', 'wrong_identity'}:
         assert outcome.error.code == 'PLANNER_OUTPUT_INVALID', outcome.to_dict()
         assert not executor.plans
@@ -220,7 +221,8 @@ def test_optional_umap_click_preserves_supplied_groups_and_ordinary_planning(tmp
 
 @pytest.mark.parametrize('selected', [None, 'resource.other'])
 def test_annotation_reference_component_choices_and_exact_selection(monkeypatch, selected):
-    from agent.application.annotation_preparation import preparer, AnnotationPrerequisite
+    from agent.application.annotation_preparation import preparer
+    from agent.orchestration.semantic_compiler import ScientificInputRequired
     from agent.application.raw_handoff import AnnotationDeclaration, declaration_dict
     from agent.tools.analysis import sequence_prediction
     from agent.tools.data import cellmarker
@@ -235,7 +237,7 @@ def test_annotation_reference_component_choices_and_exact_selection(monkeypatch,
     args = dict(group_column='supplied', activity_method='episcanpy.tl.geneactivity')
     tool = build_default_tool_registry().get('annotate_scATAC_cell_types')
     if selected is None:
-        with pytest.raises(AnnotationPrerequisite) as failure:
+        with pytest.raises(ScientificInputRequired) as failure:
             prepare(tool, args, {})
         assert {row['handle'] for row in failure.value.options} == {'resource.genes', 'resource.other'}
     else:
@@ -297,8 +299,9 @@ def test_ordinary_annotation_request_plans_registered_prerequisites(tmp_path, mo
         state=app._application.sessions.load('session')
         pending=state.interactions[-1]
         assert pending.status=='clarification',outcome.to_dict()
-        assert pending.prerequisite['field']=='annotation'
-        assert 'CellMarker' in pending.admitted['choices'][0]
+        assert pending.prerequisite is None
+        assert pending.preparation['task']['context']['intake_owner']=='annotation'
+        assert 'CellMarker' in ' '.join(m for r in pending.admitted['preparation_result']['requirements'] for m in r.get('messages', ()))
         assert not state.turns and not executor.plans
         lib.entries=lambda:[dict(kind='cellmarker',id='installed')]
         continuing.append(True)
@@ -309,26 +312,12 @@ def test_ordinary_annotation_request_plans_registered_prerequisites(tmp_path, mo
         outcome=app.submit_turn('session','continue','Use the now-installed CellMarker resource and continue.',expected_generation=0)
         continued=app._application.sessions.load('session').interactions[-1]
         assert continued.admitted['inputs']['input_path']==str(path)
-        assert continued.admitted['continuation']['origin_turn_id']=='annotation'
+        assert continued.preparation['task_origin']=='annotation'
+        assert 'continuation' not in continued.admitted
         if failure_then_answer:
-            assert outcome.error.code=='UNSUPPORTED_REQUEST'
-            assert continued.status=='failed'
-            assert continued.prerequisite['origin_turn_id']=='annotation'
-            assert not app._application.sessions.load('session').turns and not executor.plans
-            from dataclasses import replace
-            from agent.schemas.orchestration import _serialize
-            from agent.application.session_state import SessionError
-            changed = _serialize(continued.prerequisite)
-            changed['binding_turn_id'] = 'continue'
-            with pytest.raises(SessionError, match='captured scientific prerequisite'):
-                replace(continued, prerequisite=changed)
-            with pytest.raises(SessionError, match='requires a clarification'):
-                replace(continued, admitted=dict(_serialize(continued.admitted), native_plan={}))
-            reject.clear()
-            outcome=app.submit_turn('session','answer','Human, hg38. Continue the original task.',expected_generation=0)
-            continued=app._application.sessions.load('session').interactions[-1]
-            assert continued.admitted['inputs']['input_path']==str(path)
-            assert continued.admitted['continuation']['origin_turn_id']=='annotation'
+            # Changing a deterministic declaration must reuse the candidate.
+            # The provider's queued rejection is deliberately never requested.
+            assert sum('semantic_prompt_version' in value for value in calls)==1
             assert continued.admitted['annotation']['species']=='human'
             assert continued.admitted['annotation']['assembly']=='hg38'
             assert continued.admitted['annotation']['resource']=='resource.genes'
@@ -343,7 +332,8 @@ def test_ordinary_annotation_request_plans_registered_prerequisites(tmp_path, mo
 
 
 def test_unaccepted_activity_and_reuse_only_use_existing_scoped_question(monkeypatch):
-    from agent.application.annotation_preparation import preparer,AnnotationPrerequisite
+    from agent.application.annotation_preparation import preparer
+    from agent.orchestration.semantic_compiler import ScientificInputRequired
     from agent.application.raw_handoff import AnnotationDeclaration,declaration_dict
     from agent.tools.analysis import sequence_prediction
     from agent.tools.data import cellmarker
@@ -352,15 +342,16 @@ def test_unaccepted_activity_and_reuse_only_use_existing_scoped_question(monkeyp
     monkeypatch.setattr(cellmarker,'CellMarkerEvidence',lambda *a:SimpleNamespace(identity={'sha256':'a'*64},metadata={'species':['Human','Mouse']}))
     tool=build_default_tool_registry().get('annotate_scATAC_cell_types')
     prepare=preparer(None,None,{})
-    with pytest.raises(AnnotationPrerequisite,match='file locator alone'):
+    with pytest.raises(ScientificInputRequired,match='file locator alone'):
         prepare(tool,dict(grouping_path=StepOutputRef('groups','matrix_path'),activity_path='/loose/genes.h5ad'),None)
     prepare=preparer(None,None,dict(annotation=declaration_dict(AnnotationDeclaration(grouping_strategy='reuse_only'))))
-    with pytest.raises(AnnotationPrerequisite,match='reuse existing groups'):
+    with pytest.raises(ScientificInputRequired,match='reuse existing groups'):
         prepare(tool,dict(grouping_path=StepOutputRef('groups','matrix_path')),None)
 
 
 def test_selected_gene_reference_binding_preserves_native_activity_source_semantics(monkeypatch):
-    from agent.application.annotation_preparation import preparer,AnnotationPrerequisite
+    from agent.application.annotation_preparation import preparer
+    from agent.orchestration.semantic_compiler import ScientificInputRequired
     from agent.orchestration.active_context import input_preparation,prepare_selected_inputs
     from agent.tools.analysis import sequence_prediction
     from agent.tools.data import cellmarker
@@ -370,7 +361,7 @@ def test_selected_gene_reference_binding_preserves_native_activity_source_semant
     tool=build_default_tool_registry().get('annotate_scATAC_cell_types')
     args=dict(grouping_path=StepOutputRef('groups','matrix_path'),activity_method='snapatac2.pp.make_gene_matrix')
     with input_preparation(preparer(None,None,dict(resource_catalog=gene_catalog()))):
-        with pytest.raises(AnnotationPrerequisite,match='fragment/insertion source'):
+        with pytest.raises(ScientificInputRequired,match='fragment/insertion source'):
             prepare_selected_inputs(tool,args,{})
         explicit=prepare_selected_inputs(tool,dict(args,activity_kwargs={'use_x':True}),{})
         assert explicit['gene_anno_path']=='/references/genes.gtf'
@@ -447,11 +438,14 @@ def test_uploaded_original_column_binding_and_deterministic_choice(tmp_path, mon
         first=app.submit_turn('session','species-choice','',expected_generation=0,
             clarification_choice=dict(question_turn_id='task',handle=choice['handle']),input_sets=inputs)
         state=app._application.sessions.load('session')
-        assert state.interactions[-1].admitted['annotation']['species']=='Human'
+        from agent.application.preparation_state import resource_bindings
+        latest=state.interactions[-1]
+        assert resource_bindings(state.interactions,latest.preparation)['annotation']['species']['value']=='Human'
+        assert latest.admitted['annotation']['species']=='Homo sapiens'
         assert state.interactions[0].admitted['annotation']['species']=='Homo sapiens'
         # This catalog intentionally has no species-qualified gene reference.
         # The next real prerequisite must remain distinct from species binding.
-        assert 'gene annotation resource' in state.interactions[-1].admitted['choices'][0]
+        assert 'gene annotation resource' in ' '.join(m for r in state.interactions[-1].admitted['preparation_result']['requirements'] for m in r.get('messages', ()))
         assert sum('turn_schema_version' in c for c in calls)==1
         assert sum('semantic_prompt_version' in c for c in calls)==planning_calls
         assert not executor.plans
@@ -472,7 +466,8 @@ def test_uploaded_original_column_binding_and_deterministic_choice(tmp_path, mon
 
 
 def test_reuse_only_follows_selected_dependency_semantics(monkeypatch):
-    from agent.application.annotation_preparation import preparer, AnnotationPrerequisite
+    from agent.application.annotation_preparation import preparer
+    from agent.orchestration.semantic_compiler import ScientificInputRequired
     from agent.application.raw_handoff import AnnotationDeclaration, declaration_dict
     from agent.schemas import PriorOutputRef
     from agent.schemas.prior_output import PriorOutputBinding
@@ -489,5 +484,5 @@ def test_reuse_only_follows_selected_dependency_semantics(monkeypatch):
     assert prepare(tool,args,selected)['grouping_path']==ref
     selected['identity'][1]['input_path']=StepOutputRef('new_groups','matrix_path')
     selected['new_groups']=('run_snapatac2',dict(function_name='tl.leiden',input_path=ref))
-    with pytest.raises(AnnotationPrerequisite,match='reuse existing groups'):
+    with pytest.raises(ScientificInputRequired,match='reuse existing groups'):
         prepare(tool,args,selected)

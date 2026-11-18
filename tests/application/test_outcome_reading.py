@@ -19,14 +19,14 @@ def comparison_fixture(app, monkeypatch, *, copies=1):
     output = revision.outputs[0]
     captured = dict(dialogue=dict(outputs=[dict(revision_id=old, output_name=output.name,
         accepted_step_sha256=output.accepted_step_sha256, tool='inspect_scATAC')]))
-    origin = SimpleNamespace(turn_id='request', snapshot=captured, admitted=dict(
+    origin = SimpleNamespace(preparation=None,turn_id='request', snapshot=captured, admitted=dict(
         comparison=dict(left='g0', right='new', detail=dict(section='category_counts',
             field='source:cohort', other_field='result:leiden', offset=0, limit=4))))
     new = accepted(app, 'inspect_scATAC', name='continued', copies=copies)[0]
     saved = app.sessions.load('session')
     turn = saved.turn('continued')
     turn = replace(turn, selections=tuple(replace(s, use=('comparison_result',)) for s in turn.selections))
-    current = SimpleNamespace(turn_id='continued', admitted=dict(continuation=dict(origin_turn_id='request')))
+    current = SimpleNamespace(preparation=None,turn_id='continued', admitted=dict(continuation=dict(origin_turn_id='request')))
     state = SimpleNamespace(revisions=saved.revisions, interactions=(origin, current),
                             turn=lambda turn_id: turn if turn_id == 'continued' else saved.turn(turn_id))
     monkeypatch.setattr(app.sessions, 'load', lambda session_id: state)
@@ -94,7 +94,7 @@ def source_figure(app,tmp_path,monkeypatch,*,coordinates='new',failure=None):
     saved = app.sessions.load('session')
     turn = saved.turn('initial')
     turn = replace(turn,selections=tuple(replace(s,use=('visualization_coordinates',)) for s in turn.selections))
-    origin = SimpleNamespace(turn_id='initial',snapshot=dict(dialogue=dict(outputs=[dict(
+    origin = SimpleNamespace(preparation=None,turn_id='initial',snapshot=dict(dialogue=dict(outputs=[dict(
         revision_id=coordinate['revision_id'],output_name=coordinate['name'],
         accepted_step_sha256=coordinate['accepted_step_sha256'],tool='compute_cell_umap')])),
         submission=dict(registered_input=binding.attribution(),execution_inputs={}),
@@ -182,7 +182,7 @@ def test_new_coordinate_and_label_purposes_resolve_only_after_acceptance(app,tmp
     turn = saved.turn('initial')
     turn = replace(turn,selections=tuple(replace(s,
         use=('visualization_coordinates','visualization_labels')) for s in turn.selections))
-    origin = SimpleNamespace(turn_id='initial',admitted=dict(visualization=dict(
+    origin = SimpleNamespace(preparation=None,turn_id='initial',admitted=dict(visualization=dict(
         coordinates='new',labels='new',field='result:leiden')))
     monkeypatch.setattr(app.sessions,'load',lambda session_id:SimpleNamespace(
         interactions=(origin,),revisions=saved.revisions,turn=lambda turn_id:turn))

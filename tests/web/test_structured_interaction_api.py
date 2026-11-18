@@ -107,7 +107,7 @@ def test_global_parameter_editor_removed_and_candidate_click_is_structured():
     assert 'literal:' not in js and 'start:' not in js
 
 
-def test_reference_click_preserves_identity_without_interpreter(tmp_path, monkeypatch):
+def test_ordinary_preplan_reference_request_is_rejected_without_science(tmp_path, monkeypatch):
     from test_target_resource_continuation import target_choice
     original = helpers.ScriptedModel
     class ReferenceModel(original):
@@ -128,14 +128,11 @@ def test_reference_click_preserves_identity_without_interpreter(tmp_path, monkey
         body = dict(turn_id='task', expected_generation=0, utterance='Inspect with selected reference.', resource_id=source['resource_id'])
         client.post('/api/v1/sessions/session/turns', json=body)
         first = wait_turn(client, 'task')
-        selected, = first['clarification_choices']
-        client.post('/api/v1/sessions/session/turns', json=dict(turn_id='choice', expected_generation=0,
-            utterance=selected['label'], clarification_choice=dict(question_turn_id='task', handle=selected['handle'])))
-        result = wait_turn(client, 'choice')
-        assert result['status'] == 'succeeded', result
-        state = backend.service._application.sessions.load('session')
-        assert state.interactions[-1].admitted['inputs']['target_model_manifest_path'] == choice.inputs()['target_model_manifest_path']
-        assert sum('turn_schema_version' in c for m in backend.models for c in m.calls) == 1
+        assert first['error']['code']=='INTERACTIVE_INTENT_BINDING_INVALID',first
+        assert not backend.science_calls
+        state=backend.service._application.sessions.load('session')
+        assert not state.turns and not state.revisions
+        assert sum('turn_schema_version' in c for m in backend.models for c in m.calls)==1
 
 
 def test_new_file_answers_captured_role_without_interpreter(tmp_path, monkeypatch):
@@ -153,13 +150,21 @@ def test_new_file_answers_captured_role_without_interpreter(tmp_path, monkeypatc
         client.post('/api/v1/sessions/session/turns', json=dict(turn_id='task', expected_generation=0, utterance='Inspect current file.'))
         first = wait_turn(client, 'task')
         assert first['status'] == 'clarification' and not backend.science_calls
-        role, = first['clarification_choices']
-        assert role['sources'] == []
+        state = backend.service._application.sessions.load('session')
+        task = first['preparation_task_id']
+        assert task == state.interactions[-1].preparation['task_id']
+        assert state.interactions[-1].preparation['candidate_id'] is not None
+        assert first['clarification_choices'][0]['action']=='upload_source'
         from test_chat_attachments import upload
         uploaded = upload(client, 'matrix.h5ad', backend.source.read_bytes(), kind='h5ad').json()
+        response = client.post('/api/v1/sessions/session/turns', json=dict(turn_id='recapture', expected_generation=0,
+            utterance='', attachment_ids=[uploaded['resource_id']], resume_task_id=task))
+        assert response.status_code == 202, response.text
+        recaptured = wait_turn(client, 'recapture')
+        role=next(c for c in recaptured['clarification_choices'] if c.get('source_input'))
+        assert not backend.science_calls
         response = client.post('/api/v1/sessions/session/turns', json=dict(turn_id='file', expected_generation=0,
-            utterance=uploaded['label'], attachment_ids=[uploaded['resource_id']],
-            clarification_choice=dict(question_turn_id='task', handle=role['handle'] + ':' + uploaded['resource_id'])))
+            utterance='', clarification_choice=dict(question_turn_id='recapture', handle=role['handle'])))
         assert response.status_code == 202, response.text
         result = wait_turn(client, 'file')
         assert result['status'] == 'succeeded', result

@@ -126,6 +126,14 @@ def test_conflicting_collection_completion_never_rewrites_accepted_catalog(suppl
     dict(unknown='unsupported'), dict(min_qc_fragment_records=True), dict(min_tss_enrichment=1.5)])
 def test_scientific_companion_cannot_replace_typed_source_or_invent_inputs(supplied, values):
     admission, _, collection = supplied
+    if set(values)<= {'raw_assay','fastq_layout'}:
+        original=admission.compose_native(collection.resource_id,{})
+        binding=admission.compose_native(collection.resource_id,values)
+        assert binding.attribution()==original.attribution()
+        assert dict(binding.execution_inputs)==dict(original.execution_inputs)|values
+        for key in ('read1_path','read2_path','barcode_path'):
+            assert binding.execution_inputs[key]==original.execution_inputs[key]
+        return
     with pytest.raises(ResourceAdmissionError) as error:
         admission.compose_native(collection.resource_id, values)
     assert error.value.code == 'LOCAL_RESOURCE_BINDING_INVALID'

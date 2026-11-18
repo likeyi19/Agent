@@ -1,4 +1,4 @@
-"""USI-2 candidate attachments reuse role continuation and genuine inspection."""
+"""Candidate-first attachment Requirements, exact continuation and genuine inspection."""
 import json
 from pathlib import Path
 
@@ -31,11 +31,11 @@ class RoleModel(ScriptedModel):
         if 'turn_schema_version' in value:
             self.calls.append(value)
             if value['utterance'] == OBJECTIVE:
-                decision = dict(kind='request_roles', target='inspect_scATAC',
-                    required_roles=[dict(tool='inspect_scATAC', port='dataset')], roles=[])
+                decision = dict(kind='execute_plan', target='inspect_scATAC',roles=[])
             else:
-                decision = dict(kind='answer_roles', pending='@roles',
-                    roles=[ROLE | dict(source='source.1' if value['utterance'] == 'Use the second file.' else 'source.0')])
+                choices=value['dialogue']['pending_prerequisite']['resource_answer_choices']
+                decision = dict(kind='answer_resources',pending='@resources',arguments=[],
+                    choice=choices[1 if value['utterance']=='Use the second file.' else 0]['handle'])
             return json.dumps(dict(turn_schema_version=1, decision=decision))
         return super().complete(prompt=prompt, response_schema=response_schema)
 
@@ -59,6 +59,24 @@ def role_web(tmp_path, *, model_type=RoleModel):
 def send(client, *, turn='first', text=OBJECTIVE, ids=(), generation=0):
     body = submission(turn=turn, utterance=text, input_set_id=None,
                       attachment_ids=list(ids), generation=generation)
+    if turn!='first' and text in ('Use the first file.','Use the second file.','Here is the file.'):
+        previous=client.get('/api/v1/sessions/session/turns/first').json()
+        question_turn='first'
+        if ids:
+            question_turn=turn+'-recheck'
+            response=client.post('/api/v1/sessions/session/turns',json=dict(turn_id=question_turn,
+                utterance='',expected_generation=generation,resume_task_id=previous['preparation_task_id'],attachment_ids=list(ids)))
+            assert response.status_code==202,response.text
+            previous=wait_turn(client,question_turn)
+        assert previous.get('clarification_choices'),previous
+        options=[c for c in previous['clarification_choices'] if c.get('source_input')]
+        if ids:
+            uploaded=client.get('/api/v1/sessions/session/attachments').json()['choices']
+            label=next(r['label'] for r in uploaded if r['resource_id']==ids[-1])
+            choice=next(c for c in options if c['label']==label)
+        else:choice=options[1 if text=='Use the second file.' else 0]
+        body=submission(turn=turn,utterance='',input_set_id=None,generation=generation,attachment_ids=list(ids))
+        body['clarification_choice']=dict(question_turn_id=question_turn,handle=choice['handle'])
     response = client.post('/api/v1/sessions/session/turns', json=body)
     assert response.status_code == 202, response.text
     return wait_turn(client, turn), body
@@ -74,18 +92,27 @@ def test_missing_file_preserves_objective_without_run_then_upload_continues(tmp_
                 self.calls.append(value)
                 return json.dumps(dict(turn_schema_version=1, decision=dict(
                     kind='execute_plan', target='inspect_scATAC')))
+            if (initial_kind=='request_roles' and 'turn_schema_version' in value and value['utterance']==OBJECTIVE):
+                self.calls.append(value)
+                return json.dumps(dict(turn_schema_version=1,decision=dict(kind='request_roles',target='inspect_scATAC',
+                    required_roles=[dict(tool='inspect_scATAC',port='dataset')],roles=[])))
             return super().complete(prompt=prompt, response_schema=response_schema)
     backend, uploads = role_web(tmp_path, model_type=MissingFileModel)
     with TestClient(create_app(backend.service, uploads=uploads)) as client:
         client.post('/api/v1/sessions', json=dict(session_id='session'))
         pending, original = send(client)
+        if initial_kind=='request_roles':
+            # Strict history/parser remains, but current ordinary role intake is retired.
+            assert pending['error']['code']=='INTERACTIVE_INTENT_BINDING_INVALID',pending
+            assert not backend.science_calls
+            return
         assert pending['status'] == 'clarification', pending
-        assert pending['response']['text'] == 'Input required: missing_input_roles'
+        assert pending['preparation_task_id'] and pending['response']['clarification']['reason']=='missing_parameter_value'
         state = backend.service._application.sessions.load('session')
         assert not state.turns and not state.revisions and not backend.science_calls
         assert not list((tmp_path / 'workspace' / 'runs').glob('**/*.json'))
         assert not list((tmp_path / 'workspace' / 'run_state').glob('**/*.json'))
-        assert state.interactions[0].prerequisite['field'] == 'roles'
+        assert state.interactions[0].preparation['candidate_id'] is not None
         prompt = backend.models[0].calls[0]
         assert prompt['dialogue']['selected_sources'] == []
         assert sum('turn_schema_version' in c for c in backend.models[0].calls) == 1
@@ -96,7 +123,7 @@ def test_missing_file_preserves_objective_without_run_then_upload_continues(tmp_
         run = backend.service._application.run_store.load(accepted['run_id'])
         assert run.request.prompt == OBJECTIVE
         assert run.request.inputs['input_path'] == uploads.resources.load(matrix).source_path
-        assert backend.models[-1].calls[0]['dialogue']['pending_prerequisite']['objective'] == OBJECTIVE
+        assert backend.service._application.sessions.load('session').interactions[-1].preparation['candidate_id']==state.interactions[0].preparation['candidate_id']
         calls = sum(len(m.calls) for m in backend.models)
         assert client.post('/api/v1/sessions/session/turns', json=body).status_code == 202
         assert client.post('/api/v1/sessions/session/turns', json=original).status_code == 202
@@ -142,7 +169,7 @@ def test_empty_source_set_uses_existing_typed_resource_prerequisites(tmp_path, f
         pending, _ = send(client)
         assert pending['status'] == 'clarification', pending
         state = backend.service._application.sessions.load('session')
-        assert state.interactions[0].prerequisite['field'] == field
+        assert state.interactions[0].preparation['task']['context']['intake_owner'] == field
         assert not state.turns and not state.revisions and not backend.science_calls
         assert sum('turn_schema_version' in c for c in backend.models[0].calls) == 1
         assert not list((tmp_path / 'workspace' / 'runs').glob('**/*.json'))
@@ -152,19 +179,19 @@ def test_empty_source_set_uses_existing_typed_resource_prerequisites(tmp_path, f
 @pytest.mark.parametrize('field,target,declarations', [
     ('fastq', 'run_chromap', (
         ('run_snapatac2', 'counting_strategy', 'fragment', 'fragment'),
-        ('build_cell_neighbors', 'n_neighbors', '5', 5))),
+        ('annotate_scATAC_cell_types', 'maximum_levels', '5', 5))),
     ('bam', 'run_snapatac2', (
         ('run_snapatac2', 'counting_strategy', 'fragment', 'fragment'),
-        ('build_cell_neighbors', 'n_neighbors', '5', 5))),
+        ('annotate_scATAC_cell_types', 'maximum_levels', '5', 5))),
     ('fragments', 'run_snapatac2', (
         ('run_snapatac2', 'counting_strategy', 'fragment', 'fragment'),
-        ('build_cell_neighbors', 'n_neighbors', '5', 5))),
+        ('annotate_scATAC_cell_types', 'maximum_levels', '5', 5))),
     ('annotation', 'annotate_scATAC_cell_types', (
         ('annotate_scATAC_cell_types', 'activity_count_slot', 'X', 'X'),
         ('annotate_scATAC_cell_types', 'identity_column', 'gene_name', 'gene_name'))),
     ('epizoo', 'epizoo_embed_cells', (
-        ('cluster_cells', 'resolution', '0.5', .5),
-        ('compute_cell_umap', 'min_dist', '0.1', .1))),
+        ('posttrain_epizoo_model', 'max_steps', '5', 5),
+        ('posttrain_epizoo_model', 'learning_rate', '0.1', .1))),
 ])
 def test_raw_declaration_arguments_continue_without_science(tmp_path, field, target, declarations):
     """Admission retains typed intent and candidates; none are qualified inputs."""
@@ -205,7 +232,8 @@ def test_raw_declaration_arguments_continue_without_science(tmp_path, field, tar
         assert continued['status'] == 'clarification', continued
         state = backend.service._application.sessions.load('session')
         assert state.interactions[0] == original
-        assert state.interactions[-1].prerequisite['field'] == field
+        assert original.preparation['task']['context']['intake_owner'] == field
+        assert state.interactions[-1].preparation['task_id']==original.preparation['task_id']
         admitted = state.interactions[-1].admitted
         assert admitted[field + '_arguments'] == {name: expected for _, name, _, expected in declarations}
         assert admitted['arguments'][0]['argument'] == declarations[1][1]
@@ -216,7 +244,7 @@ def test_raw_declaration_arguments_continue_without_science(tmp_path, field, tar
         state = backend.service._application.sessions.load('session')
         assert state.interactions[:2] == (original, previous)
         assert state.interactions[-1].admitted[field + '_arguments'] == admitted[field + '_arguments']
-        assert state.interactions[-1].admitted['continuation']['binding_turn_id'] == 'answer'
+        assert state.interactions[-1].preparation['previous'] == 'answer'
         assert uploads.resources.load(attachment) == record
         assert not state.turns and not state.revisions and not backend.science_calls
         assert sum('turn_schema_version' in c for model in backend.models for c in model.calls) == 3
@@ -233,7 +261,7 @@ def test_candidate_roles_continue_original_objective_and_only_accept_bound_sourc
         before = {rid: uploads.resources.load(rid).to_dict() for rid in (matrix, notes)}
         pending, original_body = send(client, ids=(matrix, notes))
         assert pending['status'] == 'clarification' and pending['revision_id'] is None, pending
-        assert pending['response']['text'] == 'Input required: missing_input_roles'
+        assert pending['preparation_task_id'] and pending['response']['clarification']['reason']=='missing_parameter_value'
         assert not backend.science_calls
         prompt = backend.models[0].calls[0]
         assert prompt['dialogue']['attachment_candidates'] is True
@@ -282,11 +310,13 @@ def test_followup_upload_appends_without_replacing_captured_attachment(tmp_path)
         matrix = upload(client, 'matrix.h5ad', backend.source.read_bytes(), kind='h5ad').json()['resource_id']
         accepted, _ = send(client, turn='answer', text='Use the second file.', ids=(matrix,))
         assert accepted['status'] == 'succeeded', accepted
-        assert [a['resource_id'] for a in accepted['attachments']] == [notes, matrix]
-        assert [a['use'] for a in accepted['attachments']] == ['staged', 'consumed']
-        prompt = backend.models[-1].calls[0]
-        assert prompt['dialogue']['pending_prerequisite']['objective'] == OBJECTIVE
-        assert [m['source'] for m in prompt['dialogue']['selected_sources']] == ['source.0', 'source.1']
+        assert [a['resource_id'] for a in accepted['attachments']] == [matrix]
+        assert [a['use'] for a in accepted['attachments']] == ['consumed']
+        original=backend.service._application.sessions.load('session').interactions[0]
+        assert original.submission['attachments'][0]['resource_id']==notes
+        state=backend.service._application.sessions.load('session')
+        assert len({i.preparation['candidate_id'] for i in state.interactions})==1
+        assert [m['resource_id'] for m in state.interactions[-1].admitted['registered_input']['members']]==[matrix]
 
 
 def test_llm_role_does_not_qualify_neutral_bytes(tmp_path):
@@ -332,7 +362,7 @@ def test_pending_attachment_references_fail_closed(tmp_path, variant):
             assert result['revision_id'] is None and result['status'] != 'succeeded', result
         assert not backend.science_calls
         state = backend.service._application.sessions.load('session')
-        assert not state.revisions and state.interactions[0].prerequisite['field'] == 'roles'
+        assert not state.revisions and state.interactions[0].preparation['candidate_id'] is not None
 
 
 def test_staged_unused_bytes_do_not_gate_independent_scientific_consumption(tmp_path):

@@ -65,4 +65,4 @@ def test_complete_v4_catalog_roundtrip_preserves_scientific_metadata(case):
                 port[5].extend([None] * (5 - len(port[5])))
     original = build_semantic_planning_catalog(request, registry)['tools']
     assert expanded == json.loads(json.dumps(original))
-    assert set(expanded) == set(registry.names())
+    assert set(expanded) == set(registry.names()) - {'invoke_native_function'}

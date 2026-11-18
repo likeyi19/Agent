@@ -100,10 +100,10 @@ def pending(app, view, *, turn='first', missing=REQUIRED_ROLES):
     assert view['response']['kind'] == 'clarify' and view['revision_id'] is None and not view['steps'], view
     state = app._application.sessions.load('session')
     record = next(item for item in state.interactions if item.turn_id == turn)
-    assert record.prerequisite['field'] == 'roles'
-    assigned = {(role['tool'], role['port']) for role in record.admitted['roles']}
-    assert [role for role in _serialize(record.prerequisite['required_roles'])
-            if (role['tool'], role['port']) not in assigned] == missing
+    assert record.prerequisite is None
+    assert record.preparation['candidate_id'] is None
+    requirements = record.admitted['preparation_result']['requirements']
+    assert [dict(tool=r['tool_name'], port=r['port']) for r in requirements] == missing
     assert not state.revisions and state.generation == 0
     return record
 
@@ -170,7 +170,7 @@ def test_partial_role_answer_is_durable_and_contradiction_cannot_reassign_it(tmp
     assert bad['response']['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID' and bad['revision_id'] is None
     rejected = app._application.sessions.load('session').interactions[-1]
     assert rejected.status == 'failed' and rejected.admitted is None
-    assert rejected.prerequisite['binding_turn_id'] == 'reference'
+    assert rejected.snapshot['preparation']['binding_turn_id'] == 'reference'
     assert not executor.plans and app._application.sessions.load('session').interactions[0] == origin
     done = submit(app, turn='query', utterance=QUERY_ANSWER)
     assert_withheld(done, executor, records, companions)
@@ -184,7 +184,7 @@ def test_initial_explicit_role_is_preserved_while_only_missing_association_is_an
     assert _serialize(origin.admitted['roles']) == [REFERENCE]
     rejected = submit(app, turn='contradictory', utterance=CONTRADICTORY)
     assert rejected['response']['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID' and not executor.plans
-    assert app._application.sessions.load('session').interactions[-1].prerequisite['binding_turn_id'] == 'first'
+    assert app._application.sessions.load('session').interactions[-1].snapshot['preparation']['binding_turn_id'] == 'first'
     result = submit(app, turn='query', utterance=QUERY_ANSWER)
     assert_withheld(result, executor, records, companions)
     assert app._application.sessions.load('session').interactions[0] == origin
@@ -236,6 +236,8 @@ def test_pending_role_answer_preserves_exact_selection_and_resource_choice(tmp_p
         result = submit(app, turn='answer', utterance=ROLE_ANSWER, group=changed)
     except ResourceAdmissionError:
         pass
+    except InteractiveBoundaryError as error:
+        assert error.error.code == 'INTERACTIVE_TURN_CONFLICT'
     else:
         assert result['response']['status'] in ('failed', 'clarification') and result['revision_id'] is None, result
     state = app._application.sessions.load('session')
@@ -266,8 +268,8 @@ def test_unrelated_new_task_does_not_inherit_role_pending_objective_or_sources(t
     assert _serialize(admitted['registered_input']['members']) == group.attribution()['members']
     assert not admitted['registered_input']['roles']
     assert 'continuation' not in admitted
-    assert interaction.prerequisite['origin_turn_id'] == 'unrelated'
-    assert interaction.prerequisite['tool'] == 'inspect_scATAC'
+    assert interaction.preparation['task_origin'] == 'unrelated'
+    assert interaction.admitted['tool'] == 'inspect_scATAC' and interaction.prerequisite is None
 
 
 def test_role_answer_without_any_pending_request_cannot_create_a_task(tmp_path):
@@ -375,7 +377,7 @@ app = InteractiveAgentApplication(root / 'workspace', model_profiles=(PROFILE,),
     registry=registry, executor=executor, approved_source_roots=(root / 'approved',),
     planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted':lambda _:TransferRoleContinuationModel(calls)}))
 state = app._application.sessions.load('session')
-assert state.interactions[-1].prerequisite['field'] == 'roles' and not calls and not executor.plans
+assert state.interactions[-1].preparation['candidate_origin'] is None and state.interactions[-1].prerequisite is None and not calls and not executor.plans
 result = submit(app, turn='fresh-process', utterance=QUERY_ANSWER)
 assert result['error']['code'] == 'TEST_SCIENCE_WITHHELD', result
 assert len(executor.plans) == 1 and not result['revision_id']
@@ -407,9 +409,9 @@ def test_persisted_role_binding_corruption_rejects_during_session_decode(tmp_pat
     value = _serialize(app._application.sessions.load('session').to_dict())
     record = value['interactions'][-1]
     if variant == 'pending_id':
-        record['snapshot']['prerequisite']['binding_turn_id'] = 'not-an-interaction'
+        record['snapshot']['preparation']['binding_turn_id'] = 'not-an-interaction'
     elif variant == 'origin':
-        record['prerequisite']['origin_turn_id'] = 'not-an-interaction'
+        record['preparation']['task_origin'] = 'not-an-interaction'
     elif variant == 'role_source':
         record['admitted']['roles'][0]['source'] = 'source.1'
     else:

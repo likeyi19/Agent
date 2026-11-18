@@ -15,7 +15,7 @@ from agent.orchestration.executor import PlanExecutor
 from agent.orchestration.planning_recovery import PLANNING_RECOVERY_POLICY_VERSION
 from agent.orchestration.registry import build_default_tool_registry
 from agent.orchestration.semantic_compiler import (
-    build_m92_semantic_compiler_contract, compile_semantic_plan,
+    build_semantic_compiler_contract, compile_semantic_plan,
 )
 from agent.orchestration.semantic_prompt import build_semantic_planning_catalog
 from agent.orchestration.semantic_wire_v4 import parse_semantic_wire_v4
@@ -66,6 +66,14 @@ class Witness:
         if 'turn_schema_version' in value:
             return json.dumps(dict(turn_schema_version=1,
                 decision=dict(kind='execute_plan', target=self.tool)))
+        if 'dialogue_schema_version' in value:
+            assert value['evidence']['outcome']['science_started'] is False
+            return json.dumps(dict(support='supported',paragraphs=[dict(
+                text='Planning was rejected; scientific execution has not started.',
+                kind='limitation',citations=[],comparisons=[])]))
+        if 'grounding_review_version' in value:
+            return json.dumps(dict(verdicts={row['id']:dict(verdict='entailed',independent=True)
+                for row in value['paragraphs']}))
         if 'selection_schema_version' in value:
             return json.dumps(dict(selection_schema_version=1,
                 decision=dict(kind='select', capability_ids=[self.family])))
@@ -124,10 +132,13 @@ def test_recorded_failure_and_supported_candidate_have_distinct_authoritative_ou
     view = app.submit_turn('session', 'initial', text, expected_generation=0, **kwargs)
     state = app._application.sessions.load('session')
     interaction = state.interactions[-1]
-    run = app._application.run_store.load(view.run_id)
-    assert len(model.calls) == 2
-    assert not run.steps and not state.revisions and state.generation == 0
-    assert not state.turns and run.plan is None
+    from agent.orchestration.run_store import RunNotFoundError
+    with pytest.raises(RunNotFoundError):
+        app._application.run_store.load(view.run_id)
+    assert sum('turn_schema_version' in call for call in model.calls) == 1
+    assert sum('semantic_prompt_version' in call for call in model.calls) == 1
+    assert not state.revisions and state.generation == 0
+    assert not state.turns
     assert dict(interaction.admitted['inputs']) == inputs
     assert interaction.utterance == text
     catalog = build_semantic_planning_catalog(AgentRequest(case, text, inputs), app._application.registry)
@@ -135,7 +146,7 @@ def test_recorded_failure_and_supported_candidate_have_distinct_authoritative_ou
         specification = catalog['tools'][tool][1][port]
         assert specification[0] is True and specification[1] == 'none_available'
         assert not specification[2]
-    instructions = model.calls[-1]['instructions']
+    instructions = next(call['instructions'] for call in model.calls if 'semantic_prompt_version' in call)
     assert any('required explicit user declarations' in r for r in instructions)
     assert any('no execution permission' in r for r in instructions)
     if decision == 'recorded_unsupported':
@@ -143,18 +154,14 @@ def test_recorded_failure_and_supported_candidate_have_distinct_authoritative_ou
         assert interaction.prerequisite is None
     else:
         assert view.status == 'clarification'
-        error = run.errors[-1]
-        assert error.code == 'MISSING_REQUIRED_SOURCE'
-        assert error.details['tool_name'] == tool
-        assert tuple(error.details['argument_names']) == missing
-        if tool == 'epizoo_embed_cells':
-            assert view.response.clarification['reason'] == 'missing_species'
-            assert interaction.prerequisite['field'] == 'species'
-        else:
-            assert view.response.clarification['reason'] == 'missing_parameter_value'
-            assert tuple(view.response.clarification['choices']) == missing
-            assert tuple(interaction.prerequisite['missing']) == missing
-        assert interaction.prerequisite['origin_turn_id'] == 'initial'
+        result = interaction.admitted['preparation_result']
+        assert result['status'] == 'NEEDS_INPUT'
+        assert interaction.preparation['candidate_id']
+        assert set(missing) <= {r['argument'] for r in result['requirements']}
+        assert all(r['tool_name'] == tool and r['step_id'] == 'requested'
+                   for r in result['requirements'])
+        assert interaction.prerequisite is None
+
 
 
 @pytest.mark.parametrize('case,text,tool,family,missing,reason', CASES)
@@ -164,10 +171,15 @@ def test_missing_required_artifact_is_not_converted_to_user_parameter_clarificat
                                  provide_artifact=False)
     view = app.submit_turn('session', 'initial', text, expected_generation=0, **kwargs)
     state = app._application.sessions.load('session')
-    assert view.status == 'failed'
-    assert state.interactions[-1].prerequisite is None
-    assert not state.revisions
-    assert not app._application.run_store.load(view.run_id).steps
+    assert view.status == 'clarification'
+    assert not state.turns and not state.revisions
+    interaction = state.interactions[-1]
+    assert interaction.preparation['candidate_id']
+    requirements = interaction.admitted['preparation_result']['requirements']
+    assert any(r['port'] == 'dataset' and r['kind'] == 'external_input' for r in requirements)
+    assert not any(c.get('action') == 'parameter' and c['argument'] == 'input_path'
+                   for c in view.clarification_choices)
+
 
 
 @pytest.mark.parametrize('mutation', ['unknown_source', 'invalid_graph'])
@@ -183,7 +195,7 @@ def test_incomplete_candidate_permission_does_not_weaken_source_or_graph_validat
     from agent.orchestration import PlannerError
     with pytest.raises(PlannerError) as caught:
         candidate = parse_semantic_wire_v4(json.dumps(response), request, registry)
-        compile_semantic_plan(request, candidate, registry, build_m92_semantic_compiler_contract(registry))
+        compile_semantic_plan(request, candidate, registry, build_semantic_compiler_contract(registry))
     assert caught.value.code != 'MISSING_REQUIRED_SOURCE'
 
 
@@ -195,7 +207,7 @@ def test_required_reference_resource_absence_is_not_numeric_parameter_pending(tm
         sources=[dict(target='function_name',source=dict(kind='registered_choice',choice='index'))],control_dependencies=[])]))
     with pytest.raises(SemanticPlanCompileError) as caught:
         candidate=parse_semantic_wire_v4(json.dumps(response),request,registry)
-        compile_semantic_plan(request,candidate,registry,build_m92_semantic_compiler_contract(registry))
+        compile_semantic_plan(request,candidate,registry,build_semantic_compiler_contract(registry))
     assert caught.value.code=='MISSING_REQUIRED_SOURCE'
     reference=registry.get('run_chromap').required_arguments['reference_path']
     assert not reference.planning.scientific_parameter
@@ -225,7 +237,7 @@ def test_selection_omission_uses_native_defaults_without_parameter_clarification
         sources=[dict(target='dataset',source=dict(kind='input',input='input_path')),
             dict(target='function_name',source=dict(kind='registered_choice',choice='pp.filter_cells'))],control_dependencies=[])]))
     candidate=parse_semantic_wire_v4(json.dumps(response),request,registry)
-    plan=compile_semantic_plan(request,candidate,registry,build_m92_semantic_compiler_contract(registry))
+    plan=compile_semantic_plan(request,candidate,registry,build_semantic_compiler_contract(registry))
     arguments=plan.steps[0].arguments
     assert arguments['function_name']=='pp.filter_cells'
     assert 'kwargs' not in arguments

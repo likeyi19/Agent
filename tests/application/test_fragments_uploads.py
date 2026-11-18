@@ -183,4 +183,6 @@ def test_fragments_cannot_accept_h5ad_resource_selection_failure(uploads):
     record = receive(uploads, index=None)
     with pytest.raises(ResourceAdmissionError) as error:
         uploads.resolve(record.resource_id, resource_selection_error='EPIZOO_RESOURCE_REQUIRED')
-    assert error.value.code == 'LOCAL_RESOURCE_BINDING_INVALID'
+    assert error.value.code == 'EPIZOO_RESOURCE_REQUIRED'
+    assert uploads.choices() == (record.public(),)
+    assert not tuple(uploads.resources._workspace.runs.iterdir())

@@ -503,3 +503,9 @@ def _publish_compact_embedding(result, *, overwrite):
 
 __all__ = ["EpiZooEmbeddingToolResult", "EpiZooResourceIdentityError", "epizoo_embed_cells",
            "validate_expected_resource_identity", "validate_resource_provenance"]
+
+
+def planned_output_properties(arguments, port, context, *, seen=()):
+    if port in ('embedding','dataset'):
+        return dict(representations=('X_epizoo',),produced_representation='X_epizoo',preserves_counts=False)
+    return {}

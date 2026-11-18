@@ -271,3 +271,23 @@ result=publication.result
 verify_publication=publication.verify_publication
 verify_result=publication.verify_result
 recover=publication.recover
+
+
+def prepare_operation(arguments, context):
+    """Observe only selected native input slots and field names before R."""
+    from dataclasses import replace
+    from agent.orchestration.scientific_inputs import ScientificInputRequired,ScientificDiagnostic,parameter_requirements
+    observed=context.existing(arguments.get('input_path'))
+    if observed is None:return arguments
+    function=arguments.get('function_name')
+    if function in DEVIATION_FUNCTIONS:
+        if arguments.get('count_slot') is not None or arguments.get('matrix_semantics') is not None:
+            raise ScientificDiagnostic('CHROMVAR_DEVIATION_INPUT_INVALID','Deviation functions consume supplied deviations and z_scores, without a count declaration.')
+        if 'z_scores' not in observed.slots('layers'):
+            raise ScientificDiagnostic('CHROMVAR_SCORES_REQUIRED','The selected native function requires supplied deviations X and layers/z_scores. Supply existing scores or include their producer.')
+    if function=='getBackgroundPeaks':
+        fields=observed.fields('var');key=arguments.get('bias_key','bias')
+        if key not in fields:
+            needs=parameter_requirements(context.tool,('bias_key',))
+            raise ScientificInputRequired(*(replace(req,choices=fields,messages=('Select the actual numeric per-peak bias field; no GC bias is inferred.',)) for req in needs))
+    return arguments

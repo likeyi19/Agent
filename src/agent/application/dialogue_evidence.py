@@ -364,9 +364,8 @@ def _explicit_user_parameter_facts(sessions, state, run, step, planned):
     if (admitted.get('kind') != 'execute' or admitted.get('operation') != 'plan'
             or admitted.get('request_id') != run.request_id):
         return ()
-    from .dialogue_execution import _argument_fields, _parameter_input, _check_parameter_plan, _bind_arguments
+    from .dialogue_execution import _argument_fields, _check_parameter_plan, _bind_arguments
     from .turn_decisions import _scientific_arguments, ExplicitArgument
-    from agent.orchestration.native_parameters import declaration_input
     indices = {item.turn_id: n for n, item in enumerate(state.interactions)}
     linked, current = [], interaction
     while current is not None:
@@ -375,66 +374,85 @@ def _explicit_user_parameter_facts(sessions, state, run, step, planned):
         linked.append(current)
         record = current.admitted or {}
         continuation = record.get('parameter_continuation', record.get('continuation'))
-        if continuation is None:
+        canonical = current.preparation
+        if canonical is not None:
+            parent_id = canonical['previous']
+        elif continuation is not None:
+            parent_id = continuation.get('binding_turn_id', continuation.get('origin_turn_id'))
+        else:
+            parent_id = None
+        if parent_id is None:
             break
-        parent_id = continuation.get('binding_turn_id', continuation.get('origin_turn_id'))
         parent = _one([i for i in state.interactions if i.turn_id == parent_id])
         if (indices[parent.turn_id] >= indices[current.turn_id]
-                or parent.base_generation != interaction.base_generation
-                or parent.base_revision_id != interaction.base_revision_id):
+                or (canonical is None and (parent.base_generation != interaction.base_generation
+                    or parent.base_revision_id != interaction.base_revision_id))
+                or (canonical is not None and (parent.preparation is None
+                    or parent.preparation['task_id'] != canonical['task_id']))):
             raise _Unavailable('session_parameter_binding_mismatch')
         current = parent
     linked.reverse()
-    declarations = {}
     structured = False
     scope_origins = []
     try:
+        functions = []
         for current in linked:
             record = current.admitted or {}
             arguments = ([] if record.get('argument') is None else [record['argument']])
             arguments += list(record.get('arguments', ()))
             arguments = _scientific_arguments(_serialize(arguments))
             fields = _argument_fields(sessions._application.registry, current, declarations=arguments)
-            source = current
+            from .preparation_state import argument_origin
+            source = argument_origin(state.interactions, current)
             while (source.admitted or {}).get('scope_selection') is not None:
                 source = _one([i for i in state.interactions if i.turn_id == source.admitted['scope_selection']])
                 if source not in scope_origins:
                     scope_origins.append(source)
-            values = _bind_arguments(sessions._application.registry, source.utterance,
-                _serialize(record.get('inputs', {})), arguments, field_choices=fields)
-            if values != _serialize(record.get('inputs', {})):
-                raise ValueError('Declarations differ from their admitted binding.')
+            # Validate each original declaration without rebinding siblings into
+            # one flat input map. The shared binder owns their distinct scopes.
             for declaration in arguments:
-                name, _ = _parameter_input(sessions._application.registry, declaration.tool, declaration.argument)
-                name = declaration_input(sessions._application.registry, declaration, name)
-                typed = _serialize(vars(declaration)) if isinstance(declaration, ExplicitArgument) else None
-                structured = structured or typed is not None
-                declarations[declaration.tool, declaration.argument,
-                    getattr(declaration, 'native_function', None), getattr(declaration, 'step_id', None),
-                    getattr(declaration, 'source', None)] = (name, values[name], typed)
-        # Share the admission owner: exact source-scoped consumers, no second
-        # single-instance interpretation during accepted-evidence presentation.
-        consumers = _check_parameter_plan(sessions._application.registry, run.plan, admitted, state.interactions)
+                _bind_arguments(sessions._application.registry, source.utterance, {},
+                    (declaration,), field_choices=fields)
+                structured = structured or isinstance(declaration, ExplicitArgument)
+                if declaration.argument == 'function_name':
+                    functions.append(_serialize(vars(declaration)))
+        from .structured_parameters import bound_records, matches, effective_value
+        registry = sessions._application.registry
+        consumers = _check_parameter_plan(registry, run.plan, admitted, state.interactions)
+        rows = bound_records(admitted, state.interactions, registry, interaction=interaction)
         names = {}
-        for (tool, argument_name, function, _, _), (input_name, argument, typed) in declarations.items():
-            if tool != step.tool_name or (step.step_id, argument_name) not in consumers:
+        for row in rows + functions:
+            name = row['argument']
+            if (row['tool'] != step.tool_name or (step.step_id, name) not in consumers
+                    or step.step_id not in {candidate.step_id for candidate in matches(run.plan, row, registry, admitted)}):
                 continue
-            if function is not None and planned.arguments.get('function_name') != function:
-                continue
-            if typed is not None:
-                from .structured_parameters import matches
-                if step.step_id in {candidate.step_id for candidate in matches(run.plan, typed,
-                        sessions._application.registry, admitted)}:
-                    names[argument_name] = 'explicit_user_instruction'
-                continue  # The shared plan check above already verified exact typed values.
-            if (input_name not in admitted.get('inputs', {})
-                    or _bytes(admitted['inputs'][input_name]) != _bytes(argument)
-                    or argument_name not in planned.arguments
-                    or _bytes(planned.arguments[argument_name]) != _bytes(argument)
-                    or argument_name not in step.resolved_arguments
-                    or _bytes(step.resolved_arguments[argument_name]) != _bytes(argument)):
-                raise ValueError('Declaration differs from exact accepted execution.')
-            names[argument_name] = 'explicit_user_instruction'
+            expected = row['value'] if name == 'function_name' else effective_value(row, rows, admitted['inputs'], registry)
+            declared = row['value']
+            for value in (expected, planned.arguments.get(name), step.resolved_arguments.get(name)):
+                if name == 'kwargs':
+                    if not isinstance(value, Mapping) or any(k not in value or _bytes(value[k]) != _bytes(v)
+                                                           for k, v in declared.items()):
+                        raise ValueError('Declaration differs from exact accepted execution.')
+                elif _bytes(value) != _bytes(declared):
+                    raise ValueError('Declaration differs from exact accepted execution.')
+            names[name] = 'explicit_user_instruction'
+        if interaction.preparation is not None:
+            from .preparation_state import active_answers
+            for answer, requirement in active_answers(state.interactions, interaction.preparation):
+                if (answer['kind'] != 'scalar' or answer['step_id'] != step.step_id
+                        or requirement['tool_name'] != step.tool_name
+                        or requirement['native_function'] is not None
+                        and requirement['native_function'] != planned.arguments.get('function_name')):
+                    continue
+                name, member = answer['argument'], answer['member']
+                for arguments in (planned.arguments, step.resolved_arguments):
+                    value = arguments.get(name)
+                    if member is not None:
+                        value = value.get(member) if isinstance(value, Mapping) else None
+                    if _bytes(value) != _bytes(answer['value']):
+                        raise ValueError('Preparation answer differs from exact accepted execution.')
+                names[name] = 'explicit_user_instruction'
+                structured = structured or answer['provenance'] == 'exact_submission'
     except (ValueError, TypeError, KeyError) as exc:
         raise _Unavailable('session_parameter_binding_mismatch') from exc
     if not names:
@@ -444,7 +462,8 @@ def _explicit_user_parameter_facts(sessions, state, run, step, planned):
     captured = linked + [i for i in scope_origins if i not in linked]
     records = {'interactions': [dict(turn_id=i.turn_id, utterance=i.utterance,
         base_revision_id=i.base_revision_id, base_generation=i.base_generation,
-        admitted=_serialize(i.admitted), **({} if not structured else dict(
+        admitted=_serialize(i.admitted), **({} if i.preparation is None else dict(preparation=_serialize(i.preparation))),
+        **({} if not structured else dict(
             structured_submission={k: _serialize(i.submission[k]) for k in ('parameter_overrides', 'clarification_choice')
                                    if k in (i.submission or {})}))) for i in captured]}
     return (EvidenceFact('explicit_user_parameters', 'available',

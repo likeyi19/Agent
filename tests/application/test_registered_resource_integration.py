@@ -352,6 +352,9 @@ def test_inspection_source_drift_cannot_activate_or_recover_revision(local_sourc
     assert service.submit_turn('analysis', 'inspect', utterance,
         expected_generation=0, registered_input=binding) == view
     assert calls == ['inspect_scATAC'] and len(models) == 1
+    assert [next(k for k in ('turn_schema_version','semantic_prompt_version','output_selection_schema_version')
+        if k in prompt) for prompt in models[0].calls]==[
+            'turn_schema_version','semantic_prompt_version','output_selection_schema_version']
 
 
 def interrupted_inspection_service(source, tmp_path, monkeypatch):
@@ -707,8 +710,10 @@ def test_missing_or_unsupported_declarations_are_not_guessed(local_source, tmp_p
         service.create_session('analysis')
         view = submit(service, binding)
         assert view.status == 'failed' and view.revision_id is None, view
-        run = service._application.run_store.load(view.run_id)
-        assert run.errors and view.error.code == run.errors[0].code
+        state=service._application.sessions.load('analysis')
+        assert not state.turns and not state.revisions
+        assert state.interactions[-1].admitted['preparation_result']['status']=='INVALID'
+        assert not list(service._application.run_store.root.glob('*.json'))
         assert view.error.code != 'INTERACTIVE_APPLICATION_FAILED'
         assert service._application.sessions.load('analysis').generation == 0
     else:

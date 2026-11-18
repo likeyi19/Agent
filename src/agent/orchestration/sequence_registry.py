@@ -43,10 +43,10 @@ def tool_specs():
     optional['sequence_index'] = argument((int,), 'Select one 1-based candidate from the exact source sequence order. Omit to consume all records.', scientific_parameter=True)
     output = argument((str,Path), 'Managed result destination.')
 
-    def spec(name, function, required, optional, fields, ports, producers, kind, execute, description, notes, policy=owner.POLICY):
+    def spec(name, function, required, optional, fields, ports, producers, kind, execute, description, notes, policy=owner.POLICY, source_input_types=None, source_encodings=None, preparation_owner=None, application_inputs=frozenset()):
         result_artifact = (A.SCATAC_REGULATORY_REGIONS if kind == 'scatac_regulatory_sequences' else
                            A.SEQUENCE_GENERATION if kind == 'regulatory_sequence_generation' else A.SEQUENCE_PREDICTIONS)
-        return ToolSpec(name=name, function=function, required_arguments=required, optional_arguments=optional,
+        return ToolSpec(application_inputs=application_inputs, preparation_owner=preparation_owner, source_encodings=source_encodings or {}, source_input_types=source_input_types or {}, name=name, function=function, required_arguments=required, optional_arguments=optional,
             result_contract=ResultContract('RegulatorySequenceResult', fields,
                 planning_fields={k:_planning_result('Exact sequence publication and model-specific scientific result.',
                     bindable=True, artifact=A.DNA_SEQUENCES if k.startswith('sequences_') else result_artifact)
@@ -68,7 +68,7 @@ def tool_specs():
         owner.KIND,owner.execute,'Predict human DNase accessibility from DNA sequences using released DHS64 folds 0, 1 and 3.',
         ('Supply exactly one sequence string or sequences source: ordinary FASTA or BED3–6 with explicit qualified assembly. Accepted sequences are reusable; no H5AD, cells or embeddings are involved.',
          'Default continuous-head arithmetic fold mean; retain all fold values and disagreement. ACGT only, 1–500 bases, native trailing zero padding, no clipping or invented genomic context. This is not enhancer activity, expression, MPRA or ATAC prediction.',
-         'Prediction needs no observed truth. Use evaluate_regulatory_predictions separately only for supplied compatible observed DNase measurements.'))
+         'Prediction needs no observed truth. Use evaluate_regulatory_predictions separately only for supplied compatible observed DNase measurements.'), preparation_owner=owner.prepare_operation, source_input_types={'sequences':('fasta','attachment','h5ad')}, source_encodings={'sequences':('fasta','bed')})
     prediction, prior = bundle('predictions','prediction_manifest',A.SEQUENCE_PREDICTIONS,True,('regulatory_predictions.v1',))
     observed, truth = bundle('observations','observations',A.SEQUENCE_OBSERVATIONS,True)
     evaluate = spec(owner.EVALUATE, owner.evaluate_regulatory_predictions,
@@ -77,7 +77,7 @@ def tool_specs():
         [Producer('evaluation','regulatory_prediction_evaluation.v1',(member('path','manifest_path'),member('sha256','manifest_sha256')))],
         owner.EVAL_KIND,owner.execute_evaluation,'Evaluate accepted DHS64 predictions against explicitly supplied compatible observed DNase measurements.',
         ('Never rerun prediction for evaluation. TSV columns: sequence_id, condition, measurement, value, provenance (optional sequence_sha256); exact identity, condition and native transform are required. Correspondence is never inferred from row count.',
-         'Continuous: RMSE, MAE, Pearson and Spearman; binary peak calls: AUROC, average precision, Brier and log loss. MPRA, ATAC and gene expression are not DNase ground truth. Undefined metrics are null.'))
+         'Continuous: RMSE, MAE, Pearson and Spearman; binary peak calls: AUROC, average precision, Brier and log loss. MPRA, ATAC and gene expression are not DNase ground truth. Undefined metrics are null.'), source_input_types={'observations':('attachment','h5ad')}, source_encodings={'observations':('tsv',)})
     from agent.tools.analysis import sequence_optimization as design
     options = dict(sequences)
     options['sequence_index'] = optional['sequence_index']
@@ -103,7 +103,7 @@ def tool_specs():
         design.KIND,design.execute,'Optimize existing human regulatory DNA for a supported PBMC accessibility objective using native CREsted DeepPBMC in silico evolution.',
         ('No DHS64 prerequisite or score reuse. Supply direct DNA, ordinary FASTA, exact 2114-base BED3–6 with qualified human assembly, or explicitly selected accepted DNA sequences. No arbitrary cell conditions or gene-expression/enhancer-activity claims.',
          'One final candidate per starting sequence (up to 32 inputs); deterministic native search does not promise distinct alternatives. No de novo generation. Native weighted difference penalizes comparison increases, not absolute changes or hard score bounds. Clarify incompatible objectives.',
-         'Return original and candidate scores under the same model, actual substitutions, constraints, native trajectory and reusable candidate sequences. Preserve explicit edit/protection coordinates and budget; do not invent user preferences. Biological improvement is unvalidated.'),policy=design.POLICY)
+         'Return original and candidate scores under the same model, actual substitutions, constraints, native trajectory and reusable candidate sequences. Preserve explicit edit/protection coordinates and budget; do not invent user preferences. Biological improvement is unvalidated.'),policy=design.POLICY, preparation_owner=design.prepare_operation, source_input_types={'sequences':('fasta','attachment','h5ad')}, source_encodings={'sequences':('fasta','bed')})
     from agent.tools.analysis import sequence_generation as generation
     generation_options = {
         'number_of_sequences': argument((int,), 'Requested number of synthetic candidates, 1–1000; default 20. Return exactly this count, retaining duplicates.', scientific_parameter=True),
@@ -119,6 +119,6 @@ def tool_specs():
         generation.KIND,generation.execute,'Generate de novo 200-base synthetic regulatory DNA candidates using pretrained native DNA-Diffusion.',
         ('No DNA upload, scATAC input or genomic reference is required. Use the installed qualified model. A new batch or changed supported condition is an independent generation request.',
          'Return exact count, GC, entropy, homopolymers, duplicates, pairwise Hamming diversity, model/condition/sampling provenance, FASTA and figure. These descriptors do not establish biological function or training-set novelty.',
-         'Retain sequences and generation results for later comparison and reuse. Optional explicitly requested DHS64 prediction can consume these 200-base sequences with its own native 500-position padding and actual conditions. Never invent 2114-base context for DeepPBMC.'),policy=generation.POLICY)
+         'Retain sequences and generation results for later comparison and reuse. Optional explicitly requested DHS64 prediction can consume these 200-base sequences with its own native 500-position padding and actual conditions. Never invent 2114-base context for DeepPBMC.'),policy=generation.POLICY, preparation_owner=generation.prepare_operation)
     from .scatac_sequence_registry import tool_spec
     return predict,evaluate,optimize,generate,tool_spec(spec, output)

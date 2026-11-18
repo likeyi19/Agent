@@ -176,7 +176,8 @@ def run_count_fallback(root, function, *, check_edit=False):
     model.complete = forbidden
     app = open_app()  # Pending slots and failure survive an actual reload.
     answer = app.submit_turn('asw', 'explicit', '', expected_generation=1,
-        parameter_overrides=[dict(tool='run_episcanpy', native_function=function,
+        clarification_choice=dict(question_turn_id='automatic',handle=choice['handle']),
+        parameter_overrides=[dict(tool='run_episcanpy', native_function=function,step_id=choice['step_id'],
             argument='kwargs', value={'num_clusters': 2})])
     assert answer.status == 'succeeded', answer.to_dict()
     owner = open_app()._application
@@ -202,7 +203,8 @@ def run_count_fallback(root, function, *, check_edit=False):
                 native_function=function, step_id='clusters', argument='parameter_selection', value='asw')])
         assert edited.status == 'clarification', edited.to_dict()
         answered = app.submit_turn('asw', 'edit-count', '', expected_generation=2,
-            parameter_overrides=[dict(tool='run_episcanpy', native_function=function,
+            clarification_choice=dict(question_turn_id='optimize-again',handle=edited.clarification_choices[0]['handle']),
+            parameter_overrides=[dict(tool='run_episcanpy', native_function=function,step_id=edited.clarification_choices[0]['step_id'],
                 argument='kwargs', value={'num_clusters': 2})])
         assert answered.status == 'succeeded', answered.to_dict()
         final = owner.sessions.load('asw')

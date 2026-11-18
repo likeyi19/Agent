@@ -152,18 +152,46 @@ def association(left_ids, left, right_ids, right, *, offset=0, limit=8, left_sou
                 **_page(rows, offset, len(pairs)))
 
 
-def fields(path):
-    """Inspect obs encodings only; numerical arrays are not offered as categories."""
+def has_field(path, name, *, axis='obs'):
+    """Check the actual declared axis, including an explicitly named field."""
+    if axis not in ('obs', 'var', 'uns', 'obsm'):
+        return False
+    with h5py.File(path, 'r') as handle:
+        from .peak_h5ad import metadata_item
+        section = metadata_item(handle, axis)
+        if section is None:
+            return False
+        names = section.attrs.get('column-order', ()) if axis not in ('uns','obsm') else section.keys()
+        if name not in names:
+            return False
+        field = metadata_item(handle, axis + '/' + name)
+        if field is None:
+            return False
+        return bool(isinstance(field, h5py.Dataset) and field.ndim <= (0 if axis == 'uns' else 2 if axis=='obsm' else 1)
+                    or axis != 'uns' and field.attrs.get('encoding-type') == 'categorical')
+
+
+def fields(path, *, axis='obs'):
+    """Inspect shallow field identities, without decoding matrix or field values."""
+    if axis not in ('obs', 'var', 'uns', 'obsm'):
+        raise ValueError('Unknown source field axis.')
     with h5py.File(path, 'r') as handle:
         from .peak_h5ad import inspect
         inspect(handle, require_matrix=False, observation_fields=())
-        obs = handle['obs']
-        if any(not isinstance(obs.get(key, getlink=True), h5py.HardLink) for key in obs.attrs['column-order']):
+        if axis not in handle:
+            return []
+        if not isinstance(handle.get(axis, getlink=True), h5py.HardLink):
+            raise ValueError('Indirect metadata fields are unsupported.')
+        obs = handle[axis]
+        names = obs.attrs['column-order'] if axis not in ('uns','obsm') else tuple(obs)
+        if any(not isinstance(obs.get(key, getlink=True), h5py.HardLink) for key in names):
             raise ValueError('Indirect observation fields are unsupported.')
-        return [str(key) for key in obs.attrs['column-order']
-                if (obs[key].attrs.get('encoding-type') in ('categorical', 'string-array', 'nullable-string-array')
+        return [str(key) for key in names
+                if (axis != 'obs' and isinstance(obs[key], h5py.Dataset) and obs[key].ndim <= (0 if axis == 'uns' else 2 if axis=='obsm' else 1)
+                    or obs[key].attrs.get('encoding-type') in ('categorical', 'string-array', 'nullable-string-array')
                     or 'categories' in obs[key].attrs
-                    or isinstance(obs[key], h5py.Dataset) and h5py.check_string_dtype(obs[key].dtype) is not None)]
+                    or isinstance(obs[key], h5py.Dataset) and h5py.check_string_dtype(obs[key].dtype) is not None)
+                and (axis != 'uns' or isinstance(obs[key], h5py.Dataset) and obs[key].ndim == 0)]
 
 
 def _series(item):

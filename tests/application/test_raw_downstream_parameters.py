@@ -98,7 +98,7 @@ def test_ordinary_bam_declaration_binds_native_and_macs_parameters_through_share
 
 
 def test_raw_parameter_scope_keeps_tool_function_and_operation_independent():
-    from agent.application.structured_parameters import bind_plan, input_key, ScopeRequired
+    from agent.application.structured_parameters import bind_plan, input_key
     from agent.application.turn_decisions import IntentError
     from agent.orchestration import AgentPlan, PlanStep, build_default_tool_registry
     registry = build_default_tool_registry()
@@ -122,7 +122,7 @@ def test_raw_parameter_scope_keeps_tool_function_and_operation_independent():
         bind_plan(AgentPlan('missing','missing','No matching consumer',unrelated),[row],values,registry,admitted)
     duplicate = step('second-import','run_snapatac2','pp.import_fragments')
     ambiguous = AgentPlan('two','two','Explicit operation required',(chosen,duplicate))
-    with pytest.raises(ScopeRequired):
+    with pytest.raises(IntentError, match='ambiguous_parameter'):
         bind_plan(ambiguous,[row],values,registry,admitted)
     exact = bind_plan(ambiguous,[dict(row,step_id='second-import')],values,registry,admitted)
     assert exact.steps[0] == chosen and dict(exact.steps[1].arguments['kwargs']) == row['value']

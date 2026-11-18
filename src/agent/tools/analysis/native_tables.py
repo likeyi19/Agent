@@ -123,6 +123,13 @@ class TablePackage:
             return tuple(k + '_path' for k in ('control', 'treatment2', 'control2') if not args.get(k + '_path'))
         return ('control_path',) if args.get('function_name') in ('bdgcmp', 'cmbreps') and not args.get('control_path') else ()
 
+    def prepare_operation(self, arguments, context):
+        from agent.orchestration.scientific_inputs import parameter_requirements, ScientificInputRequired
+        needs = parameter_requirements(context.tool, self.parameter_prerequisites(arguments))
+        if needs:
+            raise ScientificInputRequired(*needs)
+        return arguments
+
     def native(self, args, stage):
         kw = self.native_arguments(args); name = args['function_name']
         if self.package == 'MACS3':

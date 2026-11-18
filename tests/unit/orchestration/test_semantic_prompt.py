@@ -72,7 +72,7 @@ def test_catalog_is_versioned_complete_and_registry_driven(
     )
 
     assert catalog["semantic_catalog_version"] == 1
-    assert tuple(catalog["tools"]) == tuple(sorted(registry.names()))
+    assert tuple(catalog["tools"]) == tuple(sorted(set(registry.names()) - {"invoke_native_function"}))
     assert catalog["catalog_format"]["tool"] == (
         "purpose",
         "input_ports",
@@ -538,6 +538,9 @@ def test_prompt_is_compact_semantic_context_not_schema_or_serialization_manual(
         for port in tool[1].values():
             port[1] = modes[port[1]]
             if port[5] is not None: port[5].extend([None]*(5-len(port[5])))
+    prepared=payload['catalog'].pop('application_prepared_ports')
+    assert prepared == {'annotate_scATAC_cell_types':['cellmarker_id'],
+                        'epizoo_embed_cells':[], 'run_episcanpy':[], 'run_snapatac2':[]}
     assert payload["catalog"] == json.loads(
         json.dumps(build_semantic_planning_catalog(request, registry))
     )

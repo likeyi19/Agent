@@ -4,6 +4,7 @@ Registry ports identify arguments. Native catalogs identify kwargs. Recorded exe
 validity remain with the tools. There is no separate settings history.
 """
 from dataclasses import replace
+from collections.abc import Mapping
 
 from agent.schemas.orchestration import _serialize
 from agent.orchestration.native_parameters import declaration_input
@@ -145,10 +146,10 @@ def merge_decision(decision, interaction, registry):
     return replace(decision, arguments=previous + explicit)
 
 
-def explicit_records(admitted, interactions):
+def explicit_records(admitted, interactions, *, interaction=None):
     from .dialogue_execution import _parameter_records
     found = {}
-    for record in _parameter_records(admitted, interactions):
+    for record in _parameter_records(admitted, interactions, interaction=interaction):
         for row in record.get('arguments', ()):
             if row.get('origin') == 'structured':
                 key = argument_identity(ExplicitArgument(**_serialize(row)))
@@ -156,18 +157,19 @@ def explicit_records(admitted, interactions):
     return list(found.values())
 
 
-def bound_records(admitted, interactions, registry, *, current_utterance=None):
+def bound_records(admitted, interactions, registry, *, current_utterance=None, interaction=None):
     """One plan binding projection for UI values and admitted language values.
 
     Language evidence stays in its original declaration; this transient view is
     consumed by the existing prepared-plan binder, never saved as UI input.
     """
-    from .dialogue_execution import _parameter_records, _parameter_input
+    from .dialogue_execution import parameter_record_owners, _parameter_input
     from .turn_decisions import _scientific_arguments, admit_scientific_argument
-    rows = explicit_records(admitted, interactions)
+    rows = explicit_records(admitted, interactions, interaction=interaction)
     found = {tuple(row.get(k) for k in ('tool','argument','native_function','port','source','step_id')) for row in rows}
-    for record in _parameter_records(admitted, interactions):
-        original = next((i for i in reversed(interactions) if i.admitted == record), None)
+    for record, original in parameter_record_owners(admitted, interactions, interaction=interaction):
+        from .preparation_state import argument_origin
+        original = argument_origin(interactions, original)
         source = record
         while source.get('scope_selection'):
             original = next(i for i in interactions if i.turn_id == source['scope_selection'])
@@ -197,6 +199,42 @@ def bound_records(admitted, interactions, registry, *, current_utterance=None):
     return rows
 
 
+def parameter_projection(admitted, interactions, registry, *, interaction=None):
+    """Shared effective request rows; literal declarations retain their owners."""
+    rows=bound_records(admitted,interactions,registry,interaction=interaction,
+        current_utterance=None if interaction is None else interaction.utterance)
+    return tuple(dict(row,input_name=input_key(registry,row),value=effective_value(row,rows,admitted['inputs'],registry)) for row in rows)
+
+
+def preparation_parameter_values(interaction, interactions, registry):
+    """Exact task-addressed owner vocabulary, separate from original literals."""
+    if interaction is None or interaction.preparation is None:return ()
+    from .preparation_state import active_answers
+    values={};record=interaction.preparation
+    for answer,requirement in active_answers(interactions,record):
+        # Intake roles/declarations precede candidate selection and retain their
+        # own admission validation; only operation parameter answers enter here.
+        if answer['kind'] not in ('resource','scalar'):continue
+        if answer['kind']=='resource':
+            offer=answer['value']
+            if not isinstance(offer,Mapping) or 'value' not in offer:continue
+            if offer not in requirement.get('offers',()) or requirement.get('member') is not None:
+                raise IntentError('invalid_reference')
+            from .dialogue_execution import _parameter_input
+            _,spec=_parameter_input(registry,requirement['tool_name'],requirement['argument'])
+            if not spec.planning.scientific_parameter:raise IntentError('invalid_reference')
+            value=_serialize(offer['value'])
+        elif answer['kind']=='scalar':value=_serialize(answer['value'])
+        else:continue
+        if requirement['candidate_id']!=record['candidate_id']:raise IntentError('invalid_reference')
+        key=(requirement['step_id'],requirement['tool_name'],requirement['native_function'],requirement['argument'])
+        member=requirement.get('member')
+        row=values.setdefault(key,dict(step_id=key[0],tool=key[1],native_function=key[2],argument=key[3]))
+        if member is None:row['value']=value
+        else:row.setdefault('value',{})[member]=value
+    return tuple(values.values())
+
+
 def validate_capture(interaction):
     """Every new structured declaration is the exact captured researcher input."""
     if interaction.admitted is None or interaction.admitted.get('kind') == 'clarify' and 'arguments' not in interaction.admitted:
@@ -218,42 +256,8 @@ def input_key(registry, row):
 
 
 def matches(plan, row, registry, admitted):
-    selected = [s for s in plan.steps if s.tool_name == row['tool']
-                and (row.get('native_function') is None or s.arguments.get('function_name') == row['native_function'])]
-    if row.get('port') is not None:
-        from .local_resources import _group_port, plan_source_path
-        members = (admitted.get('registered_input') or {}).get('members', ())
-        index = int(row['source'].split('.')[1])
-        role = {k: row[k] for k in ('tool', 'port', 'source')}
-        roles = admitted.get('roles', ())
-        # Raw declarations retain their original attachment identities outside
-        # the derived native-science registration. They select the native input
-        # port without creating H5AD group roles or granting derived-file scope.
-        if (admitted.get('registered_input') or {}).get('composition') == 'native-science.v1':
-            raw = [field for field in ('bam', 'fragments')
-                if admitted.get(field + '_context', {}).get('adapter') == 'native-inputs.v1'
-                and admitted.get(field, {}).get('source') == row['source']]
-            if len(raw) == 1 and row['tool'] == 'run_snapatac2' and row['port'] == 'dataset':
-                members = admitted.get(raw[0] + '_sources', {}).get('members', ())
-                roles = (role,)
-        if index >= len(members) or role not in roles:
-            raise IntentError('invalid_reference')
-        port, _, _ = _group_port(registry, row['tool'], row['port'])
-        selected = [s for s in selected if plan_source_path(s.arguments.get(port.members[0].field_name), plan.steps)
-                    == members[index]['source_path']]
-    if row.get('step_id') is not None:
-        selected = [s for s in selected if s.step_id == row['step_id']]
-    failure = admitted.get('native_failure')
-    if (failure is not None and row['tool'] == 'run_episcanpy' and row['argument'] == 'kwargs'
-            and row.get('native_function') == failure['function_name'] and 'num_clusters' in row['value']):
-        selected = [s for s in selected if s.step_id == failure['step_id']]
-    return selected
-
-
-class ScopeRequired(IntentError):
-    def __init__(self, plan, row, choices):
-        super().__init__('ambiguous_parameter')
-        self.plan, self.row, self.choices = plan, row, choices
+    from agent.orchestration.native_parameters import parameter_matches
+    return parameter_matches(plan.steps, row, registry, admitted)
 
 
 def effective_value(row, rows, inputs, registry):
@@ -275,13 +279,8 @@ def bind_plan(plan, rows, inputs, registry, admitted):
     """Bind actual selected operations using their registered semantic arguments."""
     steps = list(plan.steps)
     for row in rows:
-        selected = matches(plan, row, registry, admitted)
-        if len(selected) != 1:
-            if selected:
-                raise ScopeRequired(plan, row, selected)
-            raise IntentError('invalid_reference')
-        step = selected[0]
-        value = effective_value(row, rows, inputs, registry)
+        from agent.orchestration.native_parameters import resolved_parameter
+        step, value = resolved_parameter(plan.steps,row,registry,admitted,effective_value(row,rows,inputs,registry))
         arguments = dict(step.arguments)
         if row['argument'] == 'kwargs':
             value = {**_serialize(arguments.get('kwargs', {})), **value}
@@ -292,7 +291,22 @@ def bind_plan(plan, rows, inputs, registry, admitted):
     return plan
 
 
-def check_plan(plan, rows, inputs, registry, admitted):
+def prepared_resource_values(plan, admitted, interactions, registry, *, interaction=None):
+    """Final assertion of the exact current task's owner-resolved vocabulary."""
+    values={}
+    from agent.orchestration.native_parameters import resolved_parameter
+    for row in preparation_parameter_values(interaction,interactions,registry):
+        step,value=resolved_parameter(plan.steps,row,registry,admitted,row['value'])
+        actual=_serialize(step.arguments.get(row['argument']))
+        if ((row['argument']=='kwargs' and (not isinstance(actual,dict) or any(actual.get(k)!=v for k,v in value.items())))
+                or (row['argument']!='kwargs' and actual!=value)
+                or (row['argument']!='function_name' and step.arguments.get('function_name')!=row.get('native_function'))):
+            raise IntentError('planning_failed')
+        values[(step.step_id,row['argument'])]=value
+    return values
+
+
+def check_plan(plan, rows, inputs, registry, admitted, *, prepared_values=None):
     for row in rows:
         edited = [s.arguments.get('operation_overrides',{}).get(row.get('step_id')) for s in plan.steps
                   if s.tool_name=='annotate_scATAC_cell_types' and row.get('step_id') in s.arguments.get('operation_overrides',{})]
@@ -304,16 +318,33 @@ def check_plan(plan, rows, inputs, registry, admitted):
                     or row['argument']!='kwargs' and actual!=row['value']):
                 raise IntentError('planning_failed')
             continue
-        selected = matches(plan, row, registry, admitted)
-        if len(selected) != 1:
-            raise IntentError('ambiguous_parameter')
-        expected = effective_value(row, rows, inputs, registry)
-        actual = _serialize(selected[0].arguments.get(row['argument']))
+        from agent.orchestration.native_parameters import resolved_parameter
+        selected, expected = resolved_parameter(plan.steps,row,registry,admitted,effective_value(row,rows,inputs,registry))
+        key = (selected.step_id,row['argument'])
+        if key in (prepared_values or {}):
+            expected = prepared_values[key]
+        actual = _serialize(selected.arguments.get(row['argument']))
         if row['argument'] == 'kwargs':
             if not isinstance(actual, dict) or any(actual.get(k) != v for k, v in expected.items()):
                 raise IntentError('planning_failed')
         elif actual != expected:
             raise IntentError('planning_failed')
+
+
+def assert_parameter_projection(plan, rows, registry, admitted, *, prepared_values=()):
+    """Final admission asserts the same rows consumed by compiler binding."""
+    from agent.orchestration.native_parameters import resolved_parameter
+    authorized=set()
+    for row in (*rows,*prepared_values):
+        step,expected=resolved_parameter(plan.steps,row,registry,admitted,row['value'],prepared_values=prepared_values)
+        actual=_serialize(step.arguments.get(row['argument']))
+        if (row['argument']=='kwargs' and (not isinstance(actual,dict) or any(actual.get(k)!=v for k,v in expected.items()))
+                or row['argument']!='kwargs' and actual!=expected):
+            raise IntentError('planning_failed')
+        authorized.add((step.step_id,row['argument']))
+    from agent.orchestration.native_parameters import assert_native_parameter_scopes
+    assert_native_parameter_scopes(plan.steps,(*rows,*prepared_values),registry,admitted)
+    return authorized
 
 
 def catalog(registry, tool_name=None, function=None):
@@ -364,28 +395,6 @@ def _selected_declaration(rows, scope):
     if len(candidates) != 1:
         raise IntentError('invalid_reference')
     return candidates[0]
-
-
-def selected_scope(sessions, interaction, preceding):
-    choice = (interaction.submission or {}).get('clarification_choice')
-    if choice is None or not choice['handle'].startswith('step:'):
-        return None
-    source = next((i for i in preceding if i.turn_id == choice['question_turn_id']), None)
-    if (source is None or source != preceding[-1] or source.status != 'clarification'
-            or source.base_generation != interaction.base_generation
-            or source.base_revision_id != interaction.base_revision_id
-            or choice['handle'] not in {r['handle'] for r in scope_choices(source)}):
-        raise IntentError('invalid_reference')
-    from .session_state import digest
-    admitted = _serialize(source.admitted)
-    pending = admitted.pop('parameter_scope')
-    rows = admitted['arguments']
-    row = _selected_declaration(rows, pending['argument'])
-    row['step_id'] = choice['handle'][5:]
-    admitted.update(request_id='turn-' + digest(dict(session=sessions._interaction_session_id,
-        turn=interaction.turn_id)), scope_selection=source.turn_id, native_plan=pending['plan'])
-    admitted['native_plan']['request_id'] = admitted['request_id']
-    return admitted
 
 
 def validate_scope(interaction, preceding):

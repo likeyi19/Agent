@@ -67,9 +67,16 @@ def test_shared_input_never_authorizes_an_undeclared_consumer():
     inputs = _bind_arguments(registry, utterance, {}, declarations)
     plan = AgentPlan('plan', 'request', 'Do not fan out.', tuple(
         PlanStep(f's{i}', tool, args) for i, (tool, args) in enumerate(expected.items())))
-    with pytest.raises(IntentError, match='ambiguous_parameter'):
-        _check_parameter_plan(registry, plan, dict(inputs=inputs,
-            arguments=[asdict(d) for d in declarations]), ())
+    admitted=dict(inputs=inputs, arguments=[asdict(d) for d in declarations])
+    # An undeclared consumer may make its own choice; the explicit bulk
+    # declaration must still be checked against its own operation.
+    independent=replace(plan, steps=plan.steps[:-1]+(replace(plan.steps[-1],
+        arguments=dict(plan.steps[-1].arguments,condition_key='independent')),))
+    _check_parameter_plan(registry, independent, admitted, ())
+    changed=tuple(replace(s,arguments=dict(s.arguments,condition_key='wrong'))
+        if s.tool_name=='build_replicate_pseudobulk' else s for s in independent.steps)
+    with pytest.raises(IntentError):
+        _check_parameter_plan(registry, replace(independent,steps=changed), admitted, ())
 
 
 def test_conflicting_shared_declarations_fail_even_when_replacing_pending_values():
@@ -121,7 +128,7 @@ def test_composed_declarations_survive_persisted_record_validation():
     from agent.application.session_state import digest
     registry, utterance, declarations, _ = declared_workflow()
     values = _bind_arguments(registry, utterance, {}, declarations)
-    record = SimpleNamespace(utterance=utterance, submission=None, admitted=dict(
+    record = SimpleNamespace(utterance=utterance, submission=None, preparation=None, admitted=dict(
         kind='execute', operation='plan', inputs=values,
         arguments=[asdict(d) for d in declarations],
         arguments_received_inputs_sha256=digest({})))

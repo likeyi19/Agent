@@ -1,4 +1,6 @@
 """Function-specific resource binding; small technical fixtures, no biology claims."""
+from agent.orchestration.semantic_compiler import ScientificInputRequired
+from agent.orchestration.llm_planner import LLMPlanner
 from dataclasses import replace
 import hashlib
 import json
@@ -10,7 +12,7 @@ import pytest
 
 from agent.application.input_sets import ScientificInputSet
 from agent.application.native_raw_handoff import (
-    bind_plan, resource_evidence, requirements, ResourcePrerequisite,
+    bind_plan, resource_evidence, requirements,
 )
 from agent.application.raw_handoff import FragmentsDeclaration, declaration_dict
 from agent.application.shared_resources import ScientificResourceLibrary
@@ -85,7 +87,7 @@ def test_separate_library_components_are_native_inputs_without_bundle(inputs):
 def test_true_feature_ambiguity_and_default_are_distinct(inputs):
     other=inputs.component('different-release','peaks',inputs.bed2)
     choices=(inputs.full,other)
-    with pytest.raises(ResourcePrerequisite,match='distinct region feature'):
+    with pytest.raises(ScientificInputRequired,match='distinct region feature'):
         bind_plan(plan(inputs,'pp.make_peak_matrix'),receipt(inputs,choices))
     default=replace(other,fragments_companion=True,fragments_default=True)
     resolved=bind_plan(plan(inputs,'pp.make_peak_matrix'),receipt(inputs,(inputs.full,default)))
@@ -132,10 +134,10 @@ def test_invalid_explicit_preference_is_never_substituted(inputs,selection):
 
 
 def test_absent_component_and_cross_assembly_are_function_scoped(inputs):
-    with pytest.raises(ResourcePrerequisite,match='gene annotation'):
+    with pytest.raises(ScientificInputRequired,match='gene annotation'):
         bind_plan(plan(inputs,'metrics.tsse'),receipt(inputs,(inputs.genome,inputs.regions)))
     wrong=replace(inputs.genome,execution_inputs=dict(inputs.genome.inputs(),assembly='mm10'))
-    with pytest.raises(ResourcePrerequisite,match='chromosome-size'):
+    with pytest.raises(ScientificInputRequired,match='chromosome-size'):
         bind_plan(plan(inputs,'pp.import_fragments'),receipt(inputs,(wrong,)))
     p=plan(inputs,'pp.make_peak_matrix')
     substituted=replace(p,steps=(replace(p.steps[0],arguments=dict(p.steps[0].arguments,peaks_path='/etc/passwd',peaks_sha256='f'*64)),))
@@ -180,6 +182,11 @@ class TaskModel:
     def __init__(self,preference=None):self.calls=[];self.preference=preference;self.language_calls=[]
     def complete(self,*,prompt,response_schema):
         data=json.loads(prompt)
+        if data.get('focus')=='outcome' or 'grounding_review_version' in data:
+            self.language_calls.append(data)
+            if 'grounding_review_version' in data:
+                return json.dumps(dict(verdicts={row['id']:dict(verdict='entailed',independent=True) for row in data['paragraphs']}))
+            return json.dumps(dict(support='supported',paragraphs=[dict(text='Scientific execution has not started; supply the required inputs.',kind='limitation',citations=[],comparisons=[])]))
         if 'clarification' in data:
             self.language_calls.append(data)
             return json.dumps(dict(text=data['request']))
@@ -193,19 +200,35 @@ class TaskModel:
         raise AssertionError('Unexpected provider call: '+str(data.keys()))
 
 
-class TaskPlanner:
-    def __init__(self):self.calls=0
-    def plan(self,request,registry):
-        self.calls+=1
-        from agent.orchestration.semantic_compiler import (
-            SemanticPlanCandidate,SemanticPlanStep,SemanticRegisteredChoiceSource as Choice,
-            SemanticRequestInputSource as Input,SemanticStepOutputSource as Output,
-            compile_semantic_plan,build_semantic_compiler_contract,
-        )
-        candidate=SemanticPlanCandidate((
-            SemanticPlanStep('import','run_snapatac2',(Choice('function_name','pp.import_fragments'),Input('dataset','input_path'),Input('input_sha256','input_sha256'))),
-            SemanticPlanStep('matrix','run_snapatac2',(Choice('function_name','pp.make_peak_matrix'),Output('dataset','import','dataset')))))
-        return compile_semantic_plan(request,candidate,registry,build_semantic_compiler_contract(registry))
+def semantic_step(step_id, tool, function, sources):
+    return dict(step_id=step_id, tool=tool, control_dependencies=[], sources=[
+        dict(target='function_name', source=dict(kind='registered_choice', choice=function)), *sources])
+
+
+def input_source(target, name):
+    return dict(target=target, source=dict(kind='input', input=name))
+
+
+def output_source(step, port='dataset'):
+    return dict(target='dataset', source=dict(kind='step_port', step=step, source_port=port))
+
+
+class TaskPlanner(LLMPlanner):
+    """Exercise actual wire-v4 acquisition with a deterministic provider."""
+    def __init__(self, steps=None):
+        self.calls = 0
+        steps = steps or [semantic_step('import','run_snapatac2','pp.import_fragments',[
+            input_source('dataset','input_path'),input_source('input_sha256','input_sha256')]),
+            semantic_step('matrix','run_snapatac2','pp.make_peak_matrix',[output_source('import')])]
+        class Model:
+            model_id = 'fixture/candidate'
+            def complete(self, **kwargs):
+                return json.dumps(dict(schema_version=4, decision=dict(kind='plan', steps=steps)))
+        super().__init__(Model())
+
+    def acquire_candidate(self, request, registry):
+        self.calls += 1
+        return super().acquire_candidate(request, registry)
 
 
 def task_application(inputs):
@@ -346,16 +369,16 @@ def test_resource_question_replays_after_catalog_order_and_wording_changes(input
     result=app.sessions.respond('research','first','Prepare a cCRE matrix from these human hg38 fragments.',
         interpreter=TaskModel(),submission=dict(execution_inputs=dict(captured.execution_inputs),registered_input=captured.attribution()),input_sets=choices)
     assert result.status=='clarification'
-    state=app.sessions.load('research');before=state.interactions[0].admitted['choices']
+    state=app.sessions.load('research');before=state.interactions[0].admitted['preparation_result']['requirements']
     from agent.application import native_raw_handoff as owner
     original=owner.bind_plan
     def changed_wording(*args,**kwargs):
         try:return original(*args,**kwargs)
-        except ResourcePrerequisite as exc:raise ResourcePrerequisite(['Please identify the source reference.'], options=exc.options)
+        except ScientificInputRequired as exc:raise ScientificInputRequired(*(replace(r, messages=('Please identify the source reference.',)) for r in exc.requirements))
     monkeypatch.setattr(owner,'bind_plan',changed_wording)
     from agent.application import ResearchAgentApplication
     reopened=ResearchAgentApplication(app.workspace_root).sessions.load('research')
-    assert reopened==state and reopened.interactions[0].admitted['choices']==before
+    assert reopened==state and reopened.interactions[0].admitted['preparation_result']['requirements']==before
     assert not reopened.turns and not list((app.workspace_root/'run_state').glob('*.json'))
 
 
@@ -379,7 +402,7 @@ def test_user_genome_name_resolves_equivalent_configuration_aliases_per_function
     evidence=resource_evidence(choices)
     questions,selected=requirements(SimpleNamespace(members=[{}]),declared,choices,evidence)
     assert not questions
-    with pytest.raises(ResourcePrerequisite,match='region feature'):
+    with pytest.raises(ScientificInputRequired,match='region feature'):
         bind_plan(plan(inputs,'pp.make_peak_matrix'),receipt(inputs,choices,selected=_preferred_ids(declared,evidence,selected)))
 
 
@@ -390,10 +413,10 @@ def test_existing_configured_defaults_retain_their_declared_role_scope(inputs):
 
 
 def test_preparation_error_uses_existing_failed_interaction_boundary(inputs,monkeypatch):
-    from agent.application import dialogue_execution
+    from agent.application import scientific_preparation
     app,_,captured=task_application(inputs)
-    def fail(*args):raise ValueError('simulated preparation failure')
-    monkeypatch.setattr(dialogue_execution,'prepare_native_task',fail)
+    def fail(*args, **kwargs):raise ValueError('simulated preparation failure')
+    monkeypatch.setattr(scientific_preparation,'prepare',fail)
     with pytest.raises(ValueError,match='simulated preparation'):
         app.sessions.respond('research','first','Prepare a cCRE matrix from these human hg38 fragments.',
             interpreter=TaskModel(),submission=dict(execution_inputs=dict(captured.execution_inputs),registered_input=captured.attribution()),input_sets=(inputs.full,))
@@ -406,7 +429,7 @@ def test_native_dictionary_needs_no_library_and_cannot_override_explicit_referen
     p=replace(p,steps=(replace(p.steps[0],arguments=dict(p.steps[0].arguments,kwargs={'chrom_sizes':{'chr1':10000}})),))
     assert bind_plan(p,receipt(inputs,()))==p
     assert bind_plan(p,receipt(inputs,(inputs.full,)))==p
-    with pytest.raises(ResourcePrerequisite,match='Both a native value'):
+    with pytest.raises(ScientificInputRequired,match='Both a native value'):
         bind_plan(p,receipt(inputs,(inputs.full,),selected='full'))
 
 
@@ -453,7 +476,7 @@ def test_no_resource_function_and_native_dictionary_need_no_biological_declarati
 def test_unknown_context_does_not_merge_known_distinct_declarations(inputs):
     other=replace(inputs.genome,input_set_id='different-frame',execution_inputs=dict(inputs.genome.inputs(),assembly='another-assembly'))
     r=dict(receipt(inputs,(inputs.genome,other)),species=None,assembly=None)
-    with pytest.raises(ResourcePrerequisite,match='distinct chromosome-size'):
+    with pytest.raises(ScientificInputRequired,match='distinct chromosome-size'):
         bind_plan(plan(inputs,'pp.import_fragments'),r)
 
 
@@ -475,16 +498,20 @@ def test_fastq_reuses_genome_and_independent_whitelist_without_qc_or_regions(inp
         def complete(self,*,prompt,response_schema):
             return json.dumps(dict(turn_schema_version=1,decision=dict(kind='request_roles',target='run_chromap',
                 required_roles=[],roles=[],arguments=[],fastq=declaration_dict(d))))
-    class Planner:
-        def plan(self,request,registry):
+    class Planner(TaskPlanner):
+        def __init__(self):
+            from agent.tools.data.chromap_native import PORTS
+            super().__init__([
+                semantic_step('map','run_chromap','map',[input_source(port, key) for port, key in PORTS.items()
+                    if port in ('reference','whitelist','read1','read2','barcode')]),
+                semantic_step('import','run_snapatac2','pp.import_fragments',[output_source('map','fragments')]),
+                semantic_step('tsse','run_snapatac2','metrics.tsse',[output_source('import')])])
+        def acquire_candidate(self,request,registry):
             assert request.inputs['reference_path']==str(inputs.fasta)
             assert request.inputs['reference_sha256']==pin(inputs.fasta)['sha256']
             assert request.inputs['whitelist_path']==str(white)
             assert not any('bundle' in key or 'qc_reference' in key for key in request.inputs)
-            return AgentPlan('plan',request.request_id,'Scripted mapping then requested TSSe',(
-                PlanStep('map','run_chromap',dict(function_name='map',output_dir=str(Path(request.inputs['output_dir'])/'map'),
-                    **{key:value for key,value in request.inputs.items() if key in ('reference_path','reference_sha256','whitelist_path','whitelist_sha256','read1_path','read2_path','barcode_path')})),
-                PlanStep('tsse','run_snapatac2',dict(function_name='metrics.tsse',input_path=StepOutputRef('map','fragments_path'),output_dir=str(Path(request.inputs['output_dir'])/'tsse')),depends_on=('map',))))
+            return super().acquire_candidate(request,registry)
     from pathlib import Path
     app=ResearchAgentApplication(inputs.root/'fastq-workspace',planner=Planner());app.sessions.create('research')
     owner=LocalResourceAdmission(app._workspace,approved_source_roots=(inputs.root,))
@@ -500,7 +527,7 @@ def test_fastq_reuses_genome_and_independent_whitelist_without_qc_or_regions(inp
     state=app.sessions.load('research')
     assert not state.turns and not state.revisions
     a=state.interactions[0].admitted
-    assert 'gene annotation' in a['choices'][0]
+    assert 'gene annotation' in ' '.join(m for r in a['preparation_result']['requirements'] for m in r.get('messages', ()))
     assert a['fastq_context']['resources']['whitelist_sha256']==pin(white)['sha256']
     for path in (inputs.fasta,inputs.fai,white):path.unlink()
     assert ResearchAgentApplication(app._workspace.root).sessions.load('research')==state
@@ -536,7 +563,7 @@ def test_explicit_size_reference_cannot_be_replaced_by_genome_association(inputs
     captured=receipt(inputs,(inputs.full,requested),selected=requested.input_set_id,
         custom={'genome':pin(inputs.fasta)} if association=='supplied' else None)
     if association=='mapped':captured['resources']={'reference_sha256':pin(inputs.fasta)['sha256']}
-    with pytest.raises(ResourcePrerequisite,match='reference.*genome'):
+    with pytest.raises(ScientificInputRequired,match='reference.*genome'):
         bind_plan(plan(inputs,'pp.import_fragments'),captured)
 
 
@@ -553,7 +580,7 @@ def test_conflicting_explicit_sizes_remain_a_saved_question_before_science(input
     class Model(TaskModel):
         def complete(self,*,prompt,response_schema):
             result=json.loads(super().complete(prompt=prompt,response_schema=response_schema))
-            result['decision']['fragments']['genome_source']='source.1'
+            if 'decision' in result:result['decision']['fragments']['genome_source']='source.1'
             return json.dumps(result)
     outcome=app.sessions.respond('research','choice','Use requested-sizes with this supplied genome.',
         interpreter=Model('requested-sizes'),input_sets=(inputs.full,requested),
@@ -561,7 +588,7 @@ def test_conflicting_explicit_sizes_remain_a_saved_question_before_science(input
     assert outcome.status=='clarification',outcome
     state=app.sessions.load('research');admitted=state.interactions[0].admitted
     assert admitted['raw_resource_choice']=='resource.requested-sizes'
-    assert 'no recorded association' in admitted['choices'][0]
+    assert 'no recorded association' in ' '.join(m for r in admitted['preparation_result']['requirements'] for m in r.get('messages', ()))
     assert not state.turns and not state.revisions and not list((app.workspace_root/'run_state').glob('*.json'))
     assert ResearchAgentApplication(app.workspace_root).sessions.load('research')==state
 
@@ -572,7 +599,7 @@ def test_raw_annotation_context_survives_reference_question_and_restart(inputs):
     class CompoundModel(TaskModel):
         def complete(self, *, prompt, response_schema):
             value=json.loads(super().complete(prompt=prompt,response_schema=response_schema))
-            value['decision']['annotation']=declaration_dict(AnnotationDeclaration(context='human PBMC'))
+            if 'decision' in value:value['decision']['annotation']=declaration_dict(AnnotationDeclaration(context='human PBMC'))
             return json.dumps(value)
     app,planner,captured=task_application(inputs)
     choices=(inputs.full,inputs.component('release-2','peaks',inputs.bed2))
@@ -583,7 +610,8 @@ def test_raw_annotation_context_survives_reference_question_and_restart(inputs):
     admitted=state.interactions[-1].admitted
     assert admitted['downstream_annotation']['context']=='human PBMC'
     assert admitted['fragments']['source']=='source.0'
-    assert state.interactions[-1].prerequisite['field']=='fragments'
+    assert state.interactions[-1].prerequisite is None
+    assert state.interactions[-1].preparation['task']['context']['intake_owner']=='fragments'
     assert not state.turns and not state.revisions
     assert ResearchAgentApplication(app.workspace_root).sessions.load('research')==state
     class Continuation:
@@ -661,29 +689,27 @@ def test_rejected_parameter_clarification_does_not_discard_pending_raw_task(inpu
 
 
 def test_clicked_reference_uses_exact_pending_identity_without_language_interpretation(inputs):
-    from agent.application.resource_continuation import selected_answer
-    from agent.application.session_state import Interaction
-    from agent.application.turn_decisions import RoleAnswer
+    from agent.application import preparation_state
+    from agent.application.session_state import Interaction, SessionConflictError
     app,planner,captured=task_application(inputs)
     choices=(inputs.full,inputs.component('release-2','peaks',inputs.bed2))
     app.sessions.respond('research','first','Build a matrix from human hg38 fragments.',interpreter=TaskModel(),
         submission=dict(execution_inputs=dict(captured.execution_inputs),registered_input=captured.attribution()),input_sets=choices)
-    before=app.sessions.load('research');question=before.interactions[0];option=question.admitted['resource_options'][0]
-    follow=Interaction('reply',option['label'],None,0,
-        dict(prerequisite=dict(question.prerequisite,predecessor_turn_id='first')),
+    before=app.sessions.load('research');question=before.interactions[0]
+    option=preparation_state.choices(question)[0]
+    follow=Interaction('reply','',None,0,{},
         submission=dict(clarification_choice=dict(question_turn_id='first',handle=option['handle'])))
-    answer=selected_answer(follow,before.interactions)
-    assert isinstance(answer,RoleAnswer) and answer.fragments.resource==option['handle']
-    assert answer.fragments.resource_preference is None
-    from agent.application.raw_handoff import merge
-    previous=FragmentsDeclaration(**dict(question.admitted['fragments']))
-    continued=merge(previous,answer.fragments,pending=True)
-    assert continued.source==previous.source and continued.assembly==previous.assembly
+    requirement=next(r for r in preparation_state.observation(question)['requirements'] if r['requirement_id']==option['requirement_id'])
+    value=requirement['offers'][int(option['handle'].rsplit('.',1)[1])]
+    record=preparation_state.answer_question(before.interactions,follow,values={requirement['requirement_id']:value})
+    admitted=preparation_state.continued_admission(before.interactions,record,'exact-answer')
+    assert admitted['fragments']==question.admitted['fragments']
+    assert record['answers'][0]['step_id']==option['step_id']
     for changed in (dict(question_turn_id='other-question',handle=option['handle']),
                     dict(question_turn_id='first',handle='resource.not-offered')):
-        with pytest.raises(IntentError):
-            selected_answer(replace(follow,submission=dict(clarification_choice=changed)),before.interactions)
-    assert selected_answer(replace(follow,submission=None,utterance='Use the reference matching my data'),before.interactions) is None
+        with pytest.raises(SessionConflictError):
+            preparation_state.answer_question(before.interactions,replace(follow,submission=dict(clarification_choice=changed)),
+                values={requirement['requirement_id']:value})
     assert app.sessions.load('research')==before and not before.turns and not before.revisions
 
 
@@ -695,8 +721,8 @@ def test_finite_choice_dispatch_also_uses_existing_resource_answer():
     question=SimpleNamespace(turn_id='question',admitted=dict(resource_options=[dict(handle='resource.exact',label='Exact offered choice')]))
     received=Interaction('answer','Exact offered choice',None,0,dict(prerequisite=reference),
         submission=dict(clarification_choice=dict(question_turn_id='question',handle='resource.exact')))
-    answer=selected_answer(received,(question,))
-    assert isinstance(answer,ResourceAnswer) and answer.pending=='@resources' and answer.choice=='resource.exact'
+    with pytest.raises(IntentError, match='invalid_reference'):
+        selected_answer(received,(question,))
 
 
 @pytest.mark.parametrize('field',['fastq','bam','fragments','annotation'])
@@ -709,10 +735,8 @@ def test_captured_annotation_choices_keep_their_owner_inside_raw_objectives(fiel
     question=SimpleNamespace(turn_id='question',admitted=dict(resource_options=[dict(handle=handle,label='Exact captured choice',value=value)]))
     received=Interaction('answer','',None,0,dict(prerequisite=reference),
         submission=dict(clarification_choice=dict(question_turn_id='question',handle=handle)))
-    answer=selected_answer(received,(question,))
-    assert isinstance(answer,RoleAnswer) and answer.pending=='@roles'
-    assert answer.annotation is not None and all(getattr(answer,k) is None for k in ('bam','fastq','fragments'))
-    assert (answer.annotation.species if handle.startswith('annotation-species:') else answer.annotation.generate_umap)==value
+    with pytest.raises(IntentError, match='invalid_reference'):
+        selected_answer(received,(question,))
     with pytest.raises(IntentError,match='invalid_reference'):
         selected_answer(replace(received,submission=dict(clarification_choice=dict(question_turn_id='other',handle=handle))),(question,))
 
@@ -727,5 +751,268 @@ def test_gene_activity_uses_selected_managed_annotation_only(inputs,tool,functio
     assert bound.steps[0].arguments['gene_anno_path']==str(other)
     assert bound.steps[0].arguments['gene_anno_sha256']==pin(other)['sha256']
     assert 'chrom_sizes_path' not in bound.steps[0].arguments
-    with pytest.raises(ResourcePrerequisite): bind_plan(p,receipt(inputs,(inputs.genome,)))
-    with pytest.raises(ResourcePrerequisite): bind_plan(p,receipt(inputs,(inputs.genes,selected)))
+    with pytest.raises(ScientificInputRequired): bind_plan(p,receipt(inputs,(inputs.genome,)))
+    with pytest.raises(ScientificInputRequired): bind_plan(p,receipt(inputs,(inputs.genes,selected)))
+
+
+@pytest.mark.parametrize('order', [('genes', 'genome'), ('genome', 'genes')])
+def test_independent_reference_choices_survive_the_same_pending_task(inputs, order):
+    from agent.application.raw_handoff import _native_component_selections
+    from agent.application.session_state import Interaction
+    choices = (inputs.genome, inputs.genes,
+        inputs.component('other-genome', 'chrom_sizes', inputs.bed2),
+        inputs.component('other-genes', 'gene_anno', inputs.bed2))
+    evidence = resource_evidence(choices)
+    declared = FragmentsDeclaration(source='source.0', species='human')
+    first, second = (getattr(inputs, name) for name in order)
+    previous = Interaction('choice', 'Exact reference answer', None, 0, {},
+        admitted=dict(fragments=declaration_dict(declared), fragments_context=dict(
+            component_selections={port:first.input_set_id for port in evidence[first.input_set_id]['components']})))
+    scope = _native_component_selections(previous, second, evidence,
+        'fragments', FragmentsDeclaration(resource='resource.'+second.input_set_id))
+    r = receipt(inputs, choices, selected=second.input_set_id)
+    r['assembly'] = None
+    r['component_selections'] = scope
+    bound = bind_plan(plan(inputs, 'pp.import_fragments', 'metrics.tsse'), r)
+    assert bound.steps[0].arguments['chrom_sizes_sha256'] == pin(inputs.fai)['sha256']
+    assert bound.steps[1].arguments['gene_anno_sha256'] == pin(inputs.gtf)['sha256']
+    # Independent same-assembly resources remain ambiguous without the saved operands.
+    with pytest.raises(ScientificInputRequired):
+        bind_plan(plan(inputs, 'pp.import_fragments', 'metrics.tsse'), dict(r, component_selections={}))
+    conflicting = dict(r, assembly='different-assembly')
+    with pytest.raises(ScientificInputRequired, match='conflicts'):
+        bind_plan(plan(inputs, 'pp.import_fragments', 'metrics.tsse'), conflicting)
+
+
+def test_component_correction_replaces_only_the_selected_component_and_pins_identity(inputs):
+    from agent.application.raw_handoff import _native_component_selections
+    from agent.application.native_raw_handoff import identity
+    from agent.application.session_state import Interaction
+    other = inputs.component('new-genes', 'gene_anno', inputs.bed2)
+    evidence = resource_evidence((inputs.genome, inputs.genes, other))
+    d = FragmentsDeclaration(source='source.0', species='human')
+    old = dict(chrom_sizes='genome', gene_anno='genes')
+    previous = Interaction('choice', 'Exact reference answer', None, 0, {},
+        admitted=dict(fragments=declaration_dict(d), fragments_context=dict(component_selections=old)))
+    scope = _native_component_selections(previous, other, evidence, 'fragments', FragmentsDeclaration(resource='resource.new-genes'))
+    assert scope == dict(chrom_sizes='genome', gene_anno='new-genes')
+    assert old == dict(chrom_sizes='genome', gene_anno='genes')
+    candidate = SimpleNamespace(attribution=lambda: {})
+    assert identity(candidate, d, other, component_selections=scope) != identity(candidate, d, other, component_selections=old)
+    assert _native_component_selections(None, other, evidence, 'fragments', FragmentsDeclaration()) == {'gene_anno':'new-genes'}
+    assert _native_component_selections(previous, None, evidence, 'fragments', FragmentsDeclaration(), ('resource',)) == {}
+
+
+
+def test_exact_component_answers_finish_preparation_and_restart_without_science(inputs, textual=False):
+    from pathlib import Path
+    from agent.application import ResearchAgentApplication
+    from agent.application.local_resources import LocalResourceAdmission
+    from agent.orchestration import build_default_tool_registry
+    from agent.orchestration.executor import PlanExecutor, ExecutionOutcome
+    from agent.orchestration.error_policy import classified_agent_error
+    from agent.schemas import ErrorCategory
+    class WithholdScience(PlanExecutor):
+        def __init__(self, registry):
+            super().__init__(registry); self.plans=[]
+        def execute(self, plan, **kwargs):
+            assert self.preflight(plan).passed
+            self.plans.append(plan)
+            error=classified_agent_error(category=ErrorCategory.USER_INPUT_ERROR,
+                code='TEST_SCIENCE_WITHHELD', exception_type='TestBoundary')
+            return ExecutionOutcome((), (error,), ())
+    class Planner(TaskPlanner):
+        def __init__(self):
+            super().__init__([
+                semantic_step('import','run_snapatac2','pp.import_fragments',[
+                    input_source('dataset','input_path'),input_source('input_sha256','input_sha256')]),
+                semantic_step('tsse','run_snapatac2','metrics.tsse',[output_source('import')])])
+    class Model(TaskModel):
+        def complete(self, *, prompt, response_schema):
+            value=json.loads(prompt)
+            if 'turn_schema_version' in value and value['utterance']=='Use the offered gene annotation.':
+                selected=next(c for c in value['dialogue']['pending_preparation']['choices'] if c.get('choice_identity')=='resource.genes')
+                return json.dumps(dict(turn_schema_version=1,decision=dict(kind='answer_resources',pending='@resources',choice=selected['handle'],arguments=[])))
+            if textual and 'turn_schema_version' in value:
+                response=json.loads(super().complete(prompt=prompt,response_schema=response_schema))
+                response['decision']['arguments']=[dict(tool='run_snapatac2',native_function='pp.import_fragments',
+                    argument='kwargs',members=[dict(name='min_num_fragments',kind='number',literal='7',evidence='min_num_fragments=7')])]
+                return json.dumps(response)
+            if 'output_selection_schema_version' in value:
+                return json.dumps(dict(outputs=[dict(name='dataset', step_id='tsse', output_key='matrix_path')]))
+            if 'dialogue_schema_version' in value or 'grounding_review_version' in value:
+                if 'dialogue_schema_version' in value:
+                    return json.dumps(dict(support='supported',paragraphs=[dict(text='The test executor withheld science.',kind='limitation',citations=[],comparisons=[])]))
+                return json.dumps(dict(verdicts={row['id']:dict(verdict='entailed',independent=True) for row in value['paragraphs']}))
+            return super().complete(prompt=prompt,response_schema=response_schema)
+    registry=build_default_tool_registry();executor=WithholdScience(registry)
+    planner_=Planner()
+    app=ResearchAgentApplication(inputs.root/'component-workspace', planner=planner_, registry=registry, executor=executor)
+    app.sessions.create('research')
+    owner=LocalResourceAdmission(app._workspace, approved_source_roots=(inputs.root,))
+    record=owner.register('source',inputs.source,input_type='attachment',label='Technical fragments',attribution='Fixture',session_id='research')
+    group=owner.compose_group([record.resource_id],attachment_candidates=True)
+    choices=(inputs.genome, inputs.genes, inputs.component('other-genome','chrom_sizes',inputs.bed2), inputs.component('other-genes','gene_anno',inputs.bed2))
+    first=app.sessions.respond('research','initial','Analyze these human hg38 fragments.' + (' min_num_fragments=7' if textual else ''),interpreter=Model(),input_sets=choices,
+        submission=dict(execution_inputs={}, registered_input=group.attribution()))
+    assert first.status=='clarification',first
+    from agent.application.preparation_state import choices as offered
+    question=app.sessions.load('research').interactions[-1]
+    genome=next(c['handle'] for c in offered(question) if c.get('choice_identity')=='resource.genome')
+    second=app.sessions.respond('research','genome','',interpreter=Model(),input_sets=choices,
+        submission=dict(execution_inputs={}, clarification_choice=dict(question_turn_id='initial',handle=genome)))
+    assert second.status=='clarification',second
+    before=app.sessions.load('research')
+    from agent.application.preparation_state import resource_bindings
+    bound = resource_bindings(before.interactions, before.interactions[-1].preparation)
+    assert bound['import']['chrom_sizes_path']['handle'] == 'resource.genome'
+    assert before.interactions[-1].admitted['fragments_context'] == before.interactions[0].admitted['fragments_context']
+    genes=next(c['handle'] for c in offered(before.interactions[-1]) if c.get('choice_identity')=='resource.genes')
+    third=app.sessions.respond('research','genes','Use the offered gene annotation.' if textual else '',interpreter=Model(),input_sets=choices,
+        submission=dict(execution_inputs={}) if textual else dict(execution_inputs={}, clarification_choice=dict(question_turn_id='genome',handle=genes)))
+    if third.status!='failed':
+        from agent.schemas.orchestration import _serialize
+        pytest.fail(json.dumps(_serialize(app.sessions.load('research').interactions[-1].admitted['preparation_result']),indent=2))
+    assert third.error.code=='TEST_SCIENCE_WITHHELD',third
+    assert len(executor.plans)==1 and planner_.calls==1
+    plan_=executor.plans[0]
+    assert plan_.steps[0].arguments['chrom_sizes_sha256']==pin(inputs.fai)['sha256']
+    assert plan_.steps[1].arguments['gene_anno_sha256']==pin(inputs.gtf)['sha256']
+    if textual: assert plan_.steps[0].arguments['kwargs']['min_num_fragments']==7
+    state=app.sessions.load('research')
+    assert state.interactions[-1].preparation['answers'][0]['provenance']==('interpreted_resource' if textual else 'exact_submission')
+    assert state.interactions[:2]==before.interactions
+    assert ResearchAgentApplication(app.workspace_root).sessions.load('research')==state
+
+
+
+@pytest.mark.parametrize('explicit_annotation', [False, True])
+def test_annotation_activity_receives_the_same_exact_raw_reference_scope(inputs, monkeypatch, explicit_annotation):
+    from agent.application.resource_continuation import catalog
+    from agent.application.annotation_preparation import preparer
+    from agent.application.raw_handoff import AnnotationDeclaration
+    from agent.tools.analysis import sequence_prediction
+    from agent.tools.data import cellmarker
+    from agent.orchestration import build_default_tool_registry
+    monkeypatch.setattr(sequence_prediction,'library',lambda:SimpleNamespace(entries=lambda:[dict(kind='cellmarker',id='installed')]))
+    monkeypatch.setattr(cellmarker,'CellMarkerEvidence',lambda *args:SimpleNamespace(identity={},metadata={'species':['Human','Mouse']}))
+    other=inputs.component('other-genes','gene_anno',inputs.bed2)
+    annotation=AnnotationDeclaration(species='Human',resource='resource.other-genes' if explicit_annotation else None)
+    admitted=dict(downstream_annotation=declaration_dict(annotation),
+        resource_catalog=catalog((inputs.genome,inputs.genes,other)),
+        bam_context=dict(adapter='native-inputs.v1',assembly=None,selected='genome',
+            component_selections=dict(chrom_sizes='genome',gene_anno='genes')))
+    args=dict(input_path=StepOutputRef('matrix','matrix_path'),grouping_path=StepOutputRef('cluster','matrix_path'),
+        activity_source_path=StepOutputRef('import','matrix_path'),activity_method='snapatac2.pp.make_gene_matrix')
+    with pytest.raises(ScientificInputRequired,match='assembly'):
+        preparer(None,None,admitted)(build_default_tool_registry().get('annotate_scATAC_cell_types'),args,{})
+    # A selected GTF is not a source assembly declaration. Establish the known
+    # source fact explicitly before reusing its independent component choices.
+    admitted['bam_context']['assembly']='hg38'
+    result=preparer(None,None,admitted)(build_default_tool_registry().get('annotate_scATAC_cell_types'),args,{})
+    assert result['gene_anno_sha256']==pin(inputs.bed2 if explicit_annotation else inputs.gtf)['sha256']
+
+
+
+def test_text_component_answer_uses_same_canonical_reducer(inputs):
+    test_exact_component_answers_finish_preparation_and_restart_without_science(inputs, textual=True)
+
+
+def test_component_question_selects_its_port_without_replacing_an_independent_annotation(inputs):
+    from agent.application.raw_handoff import _native_component_selections
+    from agent.application.session_state import Interaction
+    combined=inputs.component('combined','chrom_sizes',inputs.fai)
+    combined=replace(combined,execution_inputs=dict(combined.inputs(),gene_anno_path=str(inputs.bed2),gene_anno_sha256=pin(inputs.bed2)['sha256']))
+    evidence=resource_evidence((inputs.genes,combined))
+    source=Interaction('question','Choose chromosome sizes.',None,0,{},admitted=dict(
+        fragments_context=dict(component_selections={'gene_anno':'genes'}),
+        resource_options=[dict(handle='resource.combined',port='chrom_sizes')]))
+    scope=_native_component_selections(source,combined,evidence,'fragments',FragmentsDeclaration(resource='resource.combined'))
+    assert scope==dict(gene_anno='genes',chrom_sizes='combined')
+    r=receipt(inputs,(inputs.genes,combined),selected='combined');r['component_selections']=scope
+    bound=bind_plan(plan(inputs,'pp.import_fragments','metrics.tsse'),r)
+    assert bound.steps[1].arguments['gene_anno_sha256']==pin(inputs.gtf)['sha256']
+
+
+
+def test_nonreference_answers_and_missing_declarations_preserve_component_choices(inputs):
+    from agent.application.raw_handoff import _native_component_selections
+    from agent.application.session_state import Interaction
+    combined=replace(inputs.full,execution_inputs=dict(inputs.full.inputs(),gene_anno_path=str(inputs.bed2),gene_anno_sha256=pin(inputs.bed2)['sha256']))
+    evidence=resource_evidence((combined,inputs.genes))
+    scoped=dict(chrom_sizes='full',gene_anno='genes')
+    first=Interaction('selected','Choose references.',None,0,{},admitted=dict(
+        fragments_context=dict(component_selections=scoped)))
+    question=Interaction('declaration','Correct the source assembly.',None,0,{},admitted=dict(
+        continuation=dict(binding_turn_id='selected')))
+    kept=_native_component_selections(question,combined,evidence,'fragments',FragmentsDeclaration(assembly='hg38'),preceding=(first,question))
+    assert kept==scoped
+    r=receipt(inputs,(combined,inputs.genes),selected='full');r['component_selections']=kept
+    bound=bind_plan(plan(inputs,'pp.import_fragments','metrics.tsse'),r)
+    assert bound.steps[1].arguments['gene_anno_sha256']==pin(inputs.gtf)['sha256']
+
+
+def test_native_owner_missing_offer_keeps_registered_operand(inputs):
+    from agent.application.native_raw_handoff import bind_operation, _component
+    from agent.application.scientific_preparation import _owner_requirements
+    from agent.orchestration import build_default_tool_registry
+    captured=receipt(inputs,())
+    with pytest.raises(ScientificInputRequired) as failure:
+        bind_operation('run_snapatac2','metrics.tsse',{'function_name':'metrics.tsse'},
+                       captured,step_id='tsse')
+    rows=_owner_requirements('candidate','tsse',build_default_tool_registry().get('run_snapatac2'),
+                             {'function_name':'metrics.tsse'},failure.value)
+    assert len(rows)==1
+    requirement=rows[0]
+    assert (requirement['port'],requirement['argument'],requirement['step_id'])==('gene_anno','gene_anno_path','tsse')
+    assert not requirement['offers']
+    assert requirement['applicability']['assembly']=='hg38'
+    assert 'tsse:declaration:assembly' in requirement['dependencies']
+    with pytest.raises(ScientificInputRequired) as mapping:
+        _component(captured,'reference')
+    assert mapping.value.requirements[0].port=='reference'
+    assert mapping.value.requirements[0].argument=='reference_path'
+
+
+def test_owner_operands_do_not_collapse_shared_resource_offers(inputs):
+    from agent.application.native_raw_handoff import bind_operation
+    from agent.application.scientific_preparation import _owner_requirements
+    from agent.orchestration import build_default_tool_registry
+    from agent.orchestration.semantic_compiler import ScientificInputRequirement
+    tool=build_default_tool_registry().get('run_snapatac2')
+    # A source can supply independent ports. The owner contract preserves both
+    # even when their opaque resource handle is identical.
+    same=dict(handle='resource.full',label='Pinned shared resource')
+    error=ScientificInputRequired(
+        ScientificInputRequirement('chrom_sizes','chrom_sizes_path',offers=(dict(same,port='chrom_sizes'),)),
+        ScientificInputRequirement('gene_anno','gene_anno_path',offers=(dict(same,port='gene_anno'),)))
+    rows=_owner_requirements('candidate','operation',tool,{'function_name':'pp.import_fragments'},error)
+    assert {row['port'] for row in rows}=={'chrom_sizes','gene_anno'}
+    assert len({row['requirement_id'] for row in rows})==2
+    invalid=ScientificInputRequired(ScientificInputRequirement('gene_anno','chrom_sizes_path'))
+    with pytest.raises(ValueError,match='unregistered operand'):
+        _owner_requirements('candidate','operation',tool,{},invalid)
+    alternatives=(inputs.genes,inputs.component('other-genes','gene_anno',inputs.bed2))
+    first=bind_operation(tool.name,'metrics.tsse',{'function_name':'metrics.tsse'},
+        receipt(inputs,alternatives,selected='genes'),step_id='first')
+    second=bind_operation(tool.name,'metrics.tsse',{'function_name':'metrics.tsse'},
+        receipt(inputs,alternatives,selected='other-genes'),step_id='second')
+    assert first['gene_anno_sha256']==pin(inputs.gtf)['sha256']
+    assert second['gene_anno_sha256']==pin(inputs.bed2)['sha256']
+
+
+def test_chromap_function_output_lineage_preserves_declared_read_library(inputs):
+    from agent.application.preparation_state import operation_sources
+    from agent.orchestration import build_default_tool_registry
+    registry=build_default_tool_registry()
+    args=dict(function_name='map',reference_path='/reference',read1_path=['/lane1/r1','/lane2/r1'],
+        read2_path=['/lane1/r2','/lane2/r2'],barcode_path=['/lane1/bc','/lane2/bc'],output_dir='/out')
+    operations=(PlanStep('map','run_chromap',args),PlanStep('consume','run_snapatac2',dict(
+        function_name='pp.import_fragments',input_path=StepOutputRef('map','fragments_path'))))
+    assert operation_sources('map',operations,registry,lineage=True)==args['read1_path']
+    assert operation_sources('consume',operations,registry,lineage=True)==args['read1_path']
+    assert '/reference' in operation_sources('consume',operations,registry)
+    catalog=registry.get('run_chromap').native_functions
+    assert catalog.output_available(args,'fragments_path') and not catalog.output_available(args,'index_path')
+    index=PlanStep('index','run_chromap',dict(args,function_name='index'))
+    assert operation_sources('index',(index,),registry,lineage=True)==['/reference']

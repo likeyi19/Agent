@@ -66,7 +66,7 @@ def test_native_declarations_survive_persisted_record_and_reject_fanout():
     registry=build_default_tool_registry();utterance,decl=declarations()
     inputs=_bind_arguments(registry,utterance,{},decl)
     admitted=dict(kind='execute',operation='plan',inputs=inputs,arguments=[asdict(d) for d in decl],arguments_received_inputs_sha256=digest({}))
-    record=SimpleNamespace(utterance=utterance,submission=None,admitted=admitted)
+    record=SimpleNamespace(utterance=utterance,submission=None,admitted=admitted,preparation=None)
     _validate_argument_record(record)
     plan=AgentPlan('test','test','fanout',tuple(PlanStep(name,'run_snapatac2',dict(function_name=fn,kwargs=kw)) for name,fn,kw in [
         ('pca','tl.spectral',{'n_comps':8}),('graph','pp.knn',{'n_neighbors':12,'use_rep':'X_spectral'}),
@@ -248,3 +248,76 @@ def test_function_scope_is_distinct_from_direct_original_source_scope(tmp_path):
     # Downstream native output is not the exact original file even with shared ancestry.
     crossed={**admitted,'arguments':[admitted['arguments'][0],dict(admitted['arguments'][1],source='source.0',port='dataset')]}
     with pytest.raises(IntentError):_check_parameter_plan(registry,plan,crossed,())
+
+
+def test_shared_native_scope_guard_preserves_defaults_and_independent_explicit_values(monkeypatch):
+    from agent.orchestration.native_parameters import bind_structured_parameters
+    from agent.application.structured_parameters import assert_parameter_projection
+    registry=build_default_tool_registry()
+    row=dict(tool='run_snapatac2',step_id='spectral',native_function='tl.spectral',argument='kwargs',value=dict(n_comps=8))
+    # Controlled owner metadata from a real callable signature; no native science.
+    from agent.tools.analysis.native_callable_worker import signature_metadata
+    from agent.tools.analysis.native_matrix import MatrixPackage
+    def umap(adata,n_comps=2):pass
+    monkeypatch.setattr(MatrixPackage,'parameter_metadata',lambda self,fn:signature_metadata(umap) if fn=='tl.umap' else {})
+    registry=build_default_tool_registry()
+    native=registry.get('run_snapatac2').native_functions
+    default=native.parameter_metadata('tl.umap')['n_comps']['default_when_omitted']
+    assert default!=8
+    selected=dict(spectral=('run_snapatac2',dict(function_name='tl.spectral',kwargs=dict(n_comps=8))),
+        umap=('run_snapatac2',dict(function_name='tl.umap')))
+    def check(values,rows=(row,)):
+        bound,_,ambiguous=bind_structured_parameters(values,rows,registry,{})
+        assert not ambiguous
+        plan=AgentPlan('p','r','scope-test',tuple(PlanStep(s,t,a) for s,(t,a) in bound.items()))
+        assert_parameter_projection(plan,rows,registry,dict(inputs={}))
+        return plan
+    check(selected)
+    for value in (default,3,8):
+        candidate={**selected,'umap':('run_snapatac2',dict(function_name='tl.umap',kwargs=dict(n_comps=value)))}
+        if value==default:check(candidate)
+        else:
+            with pytest.raises(IntentError):check(candidate)
+        independent=dict(row,step_id='umap',native_function='tl.umap',value=dict(n_comps=value))
+        check(candidate,(row,independent))
+    # The same member name in a different package grants no cross-package scope.
+    check({**selected,'other':('run_scanpy',dict(function_name='pp.pca',kwargs=dict(n_comps=8)))})
+
+    monkeypatch.setattr(MatrixPackage,'parameter_metadata',lambda self,fn:{})
+    registry=build_default_tool_registry()
+    check(selected)
+    with pytest.raises(IntentError):
+        check({**selected,'umap':('run_snapatac2',dict(function_name='tl.umap',kwargs=dict(n_comps=default)))})
+
+
+def test_scope_guard_respects_only_owner_registered_planned_group_bindings(monkeypatch):
+    """Symbolic guarantees only; fake accepted ancestor is never observed/admitted."""
+    import sys
+    from agent.tools.analysis import native_matrix
+    from agent.orchestration.native_parameters import assert_native_parameter_scopes
+    from agent.schemas import StepOutputRef,PriorOutputRef,PriorOutputBinding
+    monkeypatch.setenv('AGENT_SCANPY_PYTHON',sys.executable)
+    monkeypatch.setattr(native_matrix,'_installed_parameter_metadata',lambda *a:dict(groupby=dict(required=True,types=['str'])))
+    registry=build_default_tool_registry()
+    binding=PriorOutputBinding('unobserved','source','inspect_scATAC','dataset','raw_scatac_dataset.v1','a'*64,'b'*64,'c'*64,'accepted-file.v1')
+    ancestor=PriorOutputRef(binding,'input_path')
+    producer=PlanStep('group','run_scanpy',dict(input_path=ancestor,function_name='tl.leiden',kwargs=dict(key_added='generated')))
+    first=PlanStep('first','run_scanpy',dict(function_name='tl.rank_genes_groups',kwargs=dict(groupby='explicit')))
+    second=PlanStep('second','run_scanpy',dict(input_path=StepOutputRef('group','matrix_path'),function_name='tl.rank_genes_groups',kwargs=dict(groupby='generated')))
+    row=dict(tool='run_scanpy',step_id='first',native_function='tl.rank_genes_groups',argument='kwargs',value=dict(groupby='explicit'))
+    def check(p=producer,s=second,rows=(row,)):
+        assert_native_parameter_scopes((p,first,s),rows,registry,{})
+    check()
+    retained=PlanStep('retained','run_scanpy',dict(input_path=StepOutputRef('group','matrix_path'),function_name='pp.log1p'))
+    assert_native_parameter_scopes((producer,retained,first,replace(second,arguments={**second.arguments,'input_path':StepOutputRef('retained','matrix_path')})),(row,),registry,{})
+    for source in ('/existing-file.h5ad',ancestor):
+        with pytest.raises(IntentError):check(s=replace(second,arguments={**second.arguments,'input_path':source}))
+    with pytest.raises(IntentError):check(s=replace(second,arguments={**second.arguments,'kwargs':dict(groupby='wrong')}))
+    for p in [replace(producer,arguments=dict(input_path=ancestor,function_name='pp.log1p')),
+              replace(producer,tool_name='inspect_scATAC',arguments=dict(path=ancestor))]:
+        with pytest.raises(IntentError):check(p=p)
+    snap=replace(producer,tool_name='run_snapatac2',arguments=dict(input_path=ancestor,function_name='tl.leiden',kwargs=dict(key_added='generated')))
+    check(p=snap)  # Compatible registered producer, no package priority.
+    with pytest.raises(IntentError):check(p=replace(snap,arguments={**snap.arguments,'kwargs':dict(key_added='generated',inplace=False)}))
+    custom=replace(second,arguments={**second.arguments,'kwargs':dict(groupby='custom')})
+    check(s=custom,rows=(row,dict(row,step_id='second',value=dict(groupby='custom'))))

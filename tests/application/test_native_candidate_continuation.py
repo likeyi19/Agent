@@ -39,7 +39,7 @@ def _proposal():
     return dict(schema_version=4, decision=dict(kind="plan", steps=steps))
 
 
-@pytest.mark.parametrize("failure", [None, "ambiguous", "missing", "preflight", "catalog", "generation"])
+@pytest.mark.parametrize("failure", [None, "candidate_source", "candidate_step", "preflight", "catalog", "generation"])
 def test_human_choice_recompiles_the_captured_graph_without_interpretation_or_planning(
         tmp_path, monkeypatch, failure):
     from agent.tools.analysis import sequence_prediction
@@ -97,33 +97,39 @@ def test_human_choice_recompiles_the_captured_graph_without_interpretation_or_pl
     binding = app.resources.compose_group([record.resource_id], attachment_candidates=True)
     values = dict(species="human", assembly="hg19")
     for port in ["chrom_sizes", "peaks", "gene_anno"]:
-        values[port + "_path"] = "/references/" + port
-        values[port + "_sha256"] = "b" * 64
+        reference = tmp_path / (port + ".reference")
+        reference.write_text("Controlled " + port)
+        values[port + "_path"] = str(reference)
+        values[port + "_sha256"] = __import__("hashlib").sha256(reference.read_bytes()).hexdigest()
     references = (ScientificInputSet("references", "Reference components", values),)
     first = app.submit_turn("session", "ask", "Annotate this human BAM.", expected_generation=0,
         registered_input=binding, input_sets=references)
     assert first.status == "clarification", first.to_dict()
     state = app._application.sessions.load("session")
-    assert state.interactions[-1].admitted["native_semantic_candidate"]["schema_version"] == 4
+    original = state.interactions[-1]
+    assert original.preparation["candidate"]["version"] == 1
+    assert "native_semantic_candidate" not in original.admitted
+    choice = next((c for c in first.clarification_choices if c.get("choice_identity") == "annotation-species:0"), None)
+    assert choice is not None,first.to_dict()
     assert not state.turns and not executor.plans
     count = len(calls)
     planning_calls = sum("semantic_prompt_version" in row for row in calls)
-    if failure in {"ambiguous", "missing"}:
-        # Inject an invalid proposal at the recompilation boundary. Session
-        # immutability and the ordinary parser/compiler remain in force.
-        from agent.orchestration import semantic_wire_v4
-        original = semantic_wire_v4.parse_semantic_wire_v4
-        def parse(payload, *args, **kwargs):
-            proposal = json.loads(payload)
-            if failure == "ambiguous":
-                source = proposal["decision"]["steps"][3]["sources"][0]["source"]
-                source.pop("source_port")
-                source["kind"] = "step"
-            else:
-                proposal["decision"]["steps"].append(dict(step_id="inspect", tool="inspect_raw_scATAC",
-                    sources=[], control_dependencies=[]))
-            return original(json.dumps(proposal), *args, **kwargs)
-        monkeypatch.setattr(semantic_wire_v4, "parse_semantic_wire_v4", parse)
+    if failure in {"candidate_source", "candidate_step"}:
+        # The current candidate is immutable normalized data, never reparsed
+        # provider text. Corruption cannot acquire a second graph authority.
+        from agent.application.session_state import AnalysisSession, SessionError
+        from agent.schemas.orchestration import _serialize
+        saved = _serialize(state.to_dict())
+        steps = saved['interactions'][-1]['preparation']['candidate']['steps']
+        if failure == 'candidate_source':
+            steps[3]['sources'][0]['step_id'] = 'absent'
+        else:
+            steps.append(dict(step_id='invented',tool_name='invented_science',sources=[],control_dependencies=[]))
+        with pytest.raises((ValueError, SessionError)):
+            AnalysisSession.from_dict(saved)
+        assert not executor.plans and len(calls) == count
+        assert app._application.sessions.load('session') == state
+        return
     if failure == "preflight":
         from agent.schemas import VerificationCheck, VerificationResult
         monkeypatch.setattr(executor, "preflight", lambda plan: VerificationResult(False, "plan", plan.plan_id,
@@ -135,22 +141,18 @@ def test_human_choice_recompiles_the_captured_graph_without_interpretation_or_pl
         from agent.application import InteractiveBoundaryError
         with pytest.raises(InteractiveBoundaryError) as error:
             app.submit_turn("session", "human", "", expected_generation=1, input_sets=references,
-                clarification_choice=dict(question_turn_id="ask", handle="annotation-species:0"))
+                clarification_choice=dict(question_turn_id="ask", handle=choice["handle"]))
         assert error.value.error.code == "INTERACTIVE_GENERATION_CONFLICT"
         assert not executor.plans and len(calls) == count
         return
     second = app.submit_turn("session", "human", "", expected_generation=0, input_sets=references,
-        clarification_choice=dict(question_turn_id="ask", handle="annotation-species:0"))
+        clarification_choice=dict(question_turn_id="ask", handle=choice["handle"]))
     assert sum("turn_schema_version" in row for row in calls) == 1
-    if failure == "catalog":
-        assert sum("semantic_prompt_version" in row for row in calls) == planning_calls + 1
-        assert second.error.code == "UNSUPPORTED_REQUEST" and not executor.plans
-        return
     assert sum("semantic_prompt_version" in row for row in calls) == planning_calls
     assert second.status == "failed", second.to_dict()  # Science is intentionally withheld.
-    if failure:
-        assert second.error.code == {"ambiguous": "AMBIGUOUS_SOURCE_PORT", "missing": "MISSING_REQUIRED_SOURCE",
-                                     "preflight": "PLAN_PREFLIGHT_FAILED"}[failure]
+    assert app._application.sessions.load("session").interactions[0] == original
+    if failure == "preflight":
+        assert second.error.code == "PLAN_PREFLIGHT_FAILED"
         assert not executor.plans
         assert len(calls) == count
     else:

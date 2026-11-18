@@ -30,59 +30,14 @@ MAX_DISCOVERY_RECORDS = 1024
 MAX_DISCOVERY_CHOICES = 128
 MAX_GROUP_MEMBERS = 8
 _GROUP_COMPOSITION = 'scientific-role-selection.v1'
-# Reviewed source ports only; their aliases, roles and types remain Registry facts.
-_GROUP_PORTS = (
-    ('run_archr', 'dataset'),
-    ('run_archr', 'second'),
-    ('run_monalisa', 'dataset'),
-    ('run_monalisa', 'bins'),
-    ('run_monalisa', 'genome'),
-    ('run_cicero_cds', 'dataset'),
-    ('run_cicero_cds', 'genomic_coords'),
-    ('run_scanpy', 'dataset'),
-    ('run_cicero', 'dataset'),
-    ('run_macs3', 'dataset'),
-    ('run_macs3', 'control'),
-    ('run_macs3', 'treatment2'),
-    ('run_macs3', 'control2'),
-    ('run_episcanpy', 'dataset'),
-    ('run_episcanpy', 'gene_anno'),
-    ('run_snapatac2', 'dataset'),
-    ('run_snapatac2', 'chrom_sizes'),
-    ('run_snapatac2', 'gene_anno'),
-    ('run_snapatac2', 'peaks'),
-    ('run_snapatac2', 'whitelist'),
-    ('run_chromap', 'reference'),
-    ('run_chromap', 'index'),
-    ('run_chromap', 'read1'),
-    ('run_chromap', 'read2'),
-    ('run_chromap', 'barcode'),
-    ('run_chromap', 'whitelist'),
-    ('run_signac', 'dataset'),
-    ('run_signac', 'second'),
-    ('run_chromvar', 'dataset'),
-    ('run_motifmatchr', 'dataset'),
-    ('run_motifmatchr', 'genome'),
-    ('call_scATAC_peaks', 'dataset'),
-    ('compute_motif_accessibility', 'dataset'),
-    ('compute_motif_accessibility', 'genome'),
-    ('prepare_scatac_regulatory_sequences', 'dataset'),
-    ('predict_regulatory_sequences', 'sequences'),
-    ('optimize_regulatory_sequences', 'sequences'),
-    ('evaluate_regulatory_predictions', 'observations'),
-    ('inspect_scATAC_fragments', 'source'),
-    ('inspect_scATAC_fragments', 'source_index'),
-    ('inspect_scATAC', 'dataset'),
-    ('epizoo_embed_cells', 'dataset'),
-    ('adopt_scATAC_cell_by_features', 'source'),
-    ('evaluate_cell_clustering', 'analysis'),
-    ('evaluate_cell_clustering', 'ground_truth_dataset'),
-    ('validate_scATAC_feature_space', 'input_path'),
-    ('transfer_cell_labels', 'reference_dataset'),
-    ('transfer_cell_labels', 'query_dataset'),
-    ('annotate_scATAC_cell_types', 'source'),
-    ('annotate_scATAC_cell_types', 'groups'),
-)
+def source_ports(registry=None):
+    """Explicit source admission from the registered consumer owners."""
+    if registry is None:
+        from agent.orchestration.registry import build_default_tool_registry
+        registry = build_default_tool_registry()
+    return tuple((name, port) for name in registry.names() for port in registry.get(name).source_input_types)
+
+
 _FORMAT = 'agent.local-resource.v1'
 _ID = re.compile(r'local-[0-9a-f]{64}')
 _SHA = re.compile(r'[0-9a-f]{64}')
@@ -104,7 +59,9 @@ _NATIVE_COMPOSITION = 'native-science.v1'
 # These consumers may receive user parameters; only the planner binds matrix outputs.
 _FASTQ_SELECTION_ERRORS = ('FASTQ_RESOURCE_AMBIGUOUS',)
 _BAM_SELECTION_ERRORS = ('BAM_RESOURCE_AMBIGUOUS',)
-_H5AD_COMPANION_TOOLS = ('epizoo_embed_cells', 'run_snapatac2', 'adopt_scATAC_cell_by_features', 'adapt_epizoo_species','posttrain_epizoo_model')
+def h5ad_companion_tools(registry):
+    return tuple(name for name in registry.names() if any('h5ad' in types
+        for types in registry.get(name).source_input_types.values()) or name in ('adapt_epizoo_species','posttrain_epizoo_model'))
 _H5AD_SOURCE_ARGUMENTS = {'input_path', 'path', 'output_dir', 'embedding_path',
                           'cell_ids_path', 'analysis_path', 'source_path', 'source_sha256',
                           'matrix_manifest_path', 'matrix_manifest_sha256'}
@@ -533,7 +490,7 @@ def _group_roles(values, member_count):
     roles = []
     for role in values:
         if (not isinstance(role, Mapping) or set(role) != {'tool', 'port', 'source'}
-                or (role['tool'], role['port']) not in _GROUP_PORTS
+                or (role['tool'], role['port']) not in source_ports()
                 or role['source'] not in {f'source.{i}' for i in range(member_count)}):
             raise ValueError('Unsupported source role.')
         roles.append(dict(role))
@@ -544,7 +501,7 @@ def _group_roles(values, member_count):
 
 def _group_port(registry, tool_name, port_name):
     """One reviewed source port, including atomic path/digest bundles."""
-    if (tool_name, port_name) not in _GROUP_PORTS:
+    if (tool_name, port_name) not in source_ports(registry):
         raise _fail('MULTI_INPUT_ROLE_INVALID')
     spec = registry.get(tool_name)
     ports = [p for p in spec.semantic_planning.consumer_ports if p.name == port_name]
@@ -555,7 +512,7 @@ def _group_port(registry, tool_name, port_name):
     sources = [s for s in port.request_sources if tuple(m.name for m in s.members) == tuple(m.name for m in port.members)]
     if len(port.members) == 2 and tuple(m.name for m in port.members) not in (('path','sha256'),('dataset','sha256')):
         raise _fail('MULTI_INPUT_ROLE_INVALID')
-    alias = 'input_path' if (tool_name, port_name) == ('inspect_scATAC', 'dataset') else member.field_name
+    alias = spec.source_request_aliases.get(port_name, member.field_name)
     exact = [s for s in sources if s.members[0].input_name == alias]
     choices = exact if exact else sources
     if len(choices) != 1:
@@ -616,7 +573,7 @@ def group_choices(binding, registry):
     if type(binding) is not RegisteredInputGroup:
         raise _fail('LOCAL_RESOURCE_BINDING_INVALID')
     roles = []
-    for tool, name in _GROUP_PORTS:
+    for tool, name in source_ports(registry):
         if tool not in registry.names():
             continue
         # A registered H5AD is a cell matrix, not a FASTA/BED sequence source.
@@ -657,6 +614,15 @@ def source_field_choices(binding):
                 eligible = [name for name in names if type(name) is str and name.strip() and len(name) <= 80
                             and not _unsafe_fact_field(name) and not _unsafe_fact_value(name)]
                 row.update(fields=eligible[:64], complete=len(names) == len(eligible) <= 64)
+                axes = {}
+                for axis in ('var', 'uns'):
+                    descriptor = os.open(member['source_path'], os.O_RDONLY | os.O_NOFOLLOW)
+                    with os.fdopen(descriptor, 'rb') as stream:
+                        names = fields(stream, axis=axis)
+                    eligible = [name for name in names if type(name) is str and name.strip() and len(name) <= 80
+                                and not _unsafe_fact_field(name) and not _unsafe_fact_value(name)]
+                    axes[axis] = dict(fields=eligible[:64], complete=len(names) == len(eligible) <= 64)
+                row['axes'] = axes
             except (ValueError, TypeError, OSError, KeyError, UnicodeError):
                 pass
         rows.append(row)
@@ -692,7 +658,7 @@ def source_field_inputs(registry, binding, roles, choices):
             raise ValueError('Invalid captured observation offers.')
         by_source = {}
         for row in choices:
-            if (not isinstance(row, Mapping) or set(row) != {
+            if (not isinstance(row, Mapping) or set(row) - {'axes'} != {
                     'source', 'resource_id', 'source_sha256', 'fields', 'complete'}
                     or row['source'] not in {f'source.{i}' for i in range(len(binding.members))}
                     or row['source'] in by_source or type(row['complete']) is not bool
@@ -708,6 +674,18 @@ def source_field_inputs(registry, binding, roles, choices):
                                           or member.get('source_sha256') is None)):
                 raise ValueError('Observation offers do not match the captured source.')
             by_source[row['source']] = row
+            axes = row.get('axes', {})
+            if set(axes) - {'var', 'uns'}:
+                raise ValueError('Invalid captured metadata axis.')
+            for section in axes.values():
+                if (set(section) != {'fields', 'complete'} or type(section['complete']) is not bool
+                        or not isinstance(section['fields'], (tuple, list)) or len(section['fields']) > 64
+                        or len(set(section['fields'])) != len(section['fields'])
+                        or section['fields'] and (member['input_type'] not in ('h5ad', 'attachment')
+                                                  or member.get('source_sha256') is None)
+                        or any(type(name) is not str or not name.strip() or len(name) > 80
+                            or _unsafe_fact_field(name) or _unsafe_fact_value(name) for name in section['fields'])):
+                    raise ValueError('Invalid captured metadata field offers.')
         inputs = {}
         for role in selected:
             row = by_source.get(role['source'])
@@ -716,7 +694,8 @@ def source_field_inputs(registry, binding, roles, choices):
             spec = registry.get(role['tool'])
             for name, argument in (*spec.required_arguments.items(), *spec.optional_arguments.items()):
                 if argument.planning is not None and argument.planning.observation_source == role['port']:
-                    inputs[(role['tool'], name)] = tuple(row['fields'])
+                    axis = argument.planning.observation_axis
+                    inputs[(role['tool'], name)] = tuple(row['fields'] if axis == 'obs' else row.get('axes', {}).get(axis, {}).get('fields', ()))
         return inputs
     except (ValueError, TypeError, KeyError, LookupError) as exc:
         raise _fail('MULTI_INPUT_ROLE_INVALID') from exc
@@ -725,14 +704,14 @@ def source_field_inputs(registry, binding, roles, choices):
 def _group_declarations(registry):
     """Existing Registry companion fields; selected dataset paths are excluded."""
     aliases = set()
-    for tool, port_name in _GROUP_PORTS:
+    for tool, port_name in source_ports(registry):
         port, _, _ = _group_port(registry, tool, port_name)
         aliases.update(m.input_name for s in port.request_sources for m in s.members)
         aliases.update(m.field_name for m in port.members)
     declarations = {}
     # Adaptation consumes the explicitly adopted matrix and its qualified model
     # specification; it contributes companion parameters, not another file role.
-    for tool in sorted({tool for tool, _ in _GROUP_PORTS} | {'adapt_epizoo_species','posttrain_epizoo_model'}):
+    for tool in sorted({tool for tool, _ in source_ports(registry)} | {'adapt_epizoo_species','posttrain_epizoo_model'}):
         spec = registry.get(tool)
         arguments = dict(spec.required_arguments) | dict(spec.optional_arguments)
         for port in spec.semantic_planning.consumer_ports:
@@ -790,20 +769,9 @@ def _role_sources(roles, binding, registry):
 
 
 def plan_source_path(value, steps):
-    """Follow only the registered identity-preserving inspection output."""
-    from agent.schemas.orchestration import StepOutputRef
-    if not isinstance(value, StepOutputRef):
-        return value
-    by_id = {step.step_id: step for step in steps}
-    seen = set()
-    while isinstance(value, StepOutputRef):
-        producer = by_id.get(value.step_id)
-        if (value.step_id in seen or producer is None or producer.tool_name != 'inspect_scATAC'
-                or value.output_key != 'input_path'):
-            return None
-        seen.add(value.step_id)
-        value = producer.arguments.get('path')
-    return value
+    from agent.orchestration.registry import build_default_tool_registry
+    from .source_observations import identity_source
+    return identity_source(value, {s.step_id:(s.tool_name,s.arguments) for s in steps}, build_default_tool_registry())
 
 
 def group_role_inputs(binding, roles, registry):
@@ -837,9 +805,7 @@ def group_role_inputs(binding, roles, registry):
             arguments = dict(spec.required_arguments) | dict(spec.optional_arguments)
             fields = {m.name: m.field_name for m in port.members}
             record = binding.members[int(role['source'].split('.')[1])]
-            wanted_type = 'groups' if (role['tool'], role['port']) == ('annotate_scATAC_cell_types', 'groups') else 'h5ad'
-            sequence_source = (role['tool'] in ('predict_regulatory_sequences', 'optimize_regulatory_sequences') or (role['tool'], role['port']) in (('compute_motif_accessibility', 'genome'), ('run_motifmatchr', 'genome'))) and record['input_type'] == 'fasta'
-            if record['input_type'] != wanted_type and not sequence_source and not (binding.attachment_candidates
+            if record['input_type'] not in spec.source_input_types[port.name] and not (binding.attachment_candidates
                     and record['input_type'] == 'attachment'):
                 raise ValueError('File type does not match the explicit scientific role.')
             for member in source.members:
@@ -1452,7 +1418,7 @@ class LocalResourceAdmission:
         for name in self._registry.names():
             spec = self._registry.get(name)
             arguments = dict(spec.required_arguments) | dict(spec.optional_arguments)
-            if name not in _H5AD_COMPANION_TOOLS:
+            if name not in h5ad_companion_tools(self._group_registry()):
                 # New ordinary H5AD consumers declare their dataset semantics in
                 # the Registry; do not grow a second companion/source-name list.
                 ports = spec.semantic_planning.consumer_ports if spec.semantic_planning else ()
@@ -1877,7 +1843,7 @@ class LocalResourceAdmission:
                             and reference.step_id in planned.depends_on and source_path(reference) == actual)
                         if not inspection and not inspected_source and actual not in authorized.get((step.tool_name, port.name), set()):
                             raise _fail('MULTI_INPUT_SOURCE_MISMATCH')
-                    elif (not resolved and (step.tool_name, port.name) in _GROUP_PORTS and member == port.members[0]
+                    elif (not resolved and (step.tool_name, port.name) in source_ports(registry) and member == port.members[0]
                             and type(actual) is str):
                         # Unassigned dataset consumers must use explicit semantic
                         # dependencies, never an unregistered literal companion.
@@ -2032,8 +1998,8 @@ class LocalResourceAdmission:
             if isinstance(source, StepOutputRef):
                 producer = by_id.get(source.step_id)
                 if channels is None:
-                    from agent.orchestration.semantic_compiler import build_m92_semantic_compiler_contract
-                    channels = build_m92_semantic_compiler_contract(self._registry).step_output_channels
+                    from agent.orchestration.semantic_compiler import build_semantic_compiler_contract
+                    channels = build_semantic_compiler_contract(self._registry).step_output_channels
                 permitted = (producer is not None and source.step_id in step.depends_on
                     and producer.tool_name == 'inspect_scATAC'
                     and producer.arguments.get('path') == source_path
@@ -2118,3 +2084,22 @@ class LocalResourceAdmission:
                     for key in keys:
                         if step.resolved_arguments.get(key) != values.get(key):
                             raise _fail('EPIZOO_RESOURCE_CONSUMPTION_MISMATCH')
+
+
+def prepare_epizoo_operation(arguments, context):
+    """Qualified model selection remains with the existing resource owner."""
+    if 'species' not in arguments or 'target_model_manifest_path' in arguments:
+        return arguments
+    from .dialogue_execution import _select_declared_resource
+    for index, resources in enumerate(context.model_catalogs):
+        try:
+            completed, error = _select_declared_resource(arguments, resources)
+        except ResourceAdmissionError:
+            if index == len(context.model_catalogs) - 1:
+                raise
+            continue
+        if error is None:
+            return completed
+        if index == len(context.model_catalogs) - 1:
+            raise ResourceAdmissionError(error)
+    return arguments

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from agent.schemas.orchestration import _serialize
 from .session_state import digest
+from agent.orchestration.semantic_compiler import ScientificInputRequired, ScientificInputRequirement
 
 # Reviewed external names for one exact qualified FASTA/FAI/ordered-axis triple.
 # This is not an hg38/GRCh38 synonym or a substitute for component qualification.
@@ -51,24 +52,29 @@ def _mapping_index(values):
     return candidates[0] if len(candidates) == 1 else {}
 
 
-def identity(candidates, declared, selected, *, adapter='native-files.v1'):
-    return digest(dict(sources=candidates.attribution(), declaration={k:v for k,v in asdict(declared).items() if k != 'resource_preference' or v is not None},
-        resource=None if selected is None else selected.resource_choice(), adapter=adapter))
+def identity(candidates, declared, selected, *, adapter='native-files.v1', component_selections=None):
+    value = dict(sources=candidates.attribution(), declaration={k:v for k,v in asdict(declared).items() if k != 'resource_preference' or v is not None},
+        resource=None if selected is None else selected.resource_choice(), adapter=adapter)
+    if component_selections:
+        value['component_selections'] = component_selections
+    return digest(value)
 
 
-def prepare(owner, session_id, candidates, declared, selected, arguments, *, resource_evidence=None):
+def prepare(owner, session_id, candidates, declared, selected, arguments, *, resource_evidence=None, component_selections=None):
     if resource_evidence is None:
         raise ValueError('New native tasks require captured function-input resources')
-    return prepare_inputs(owner, session_id, candidates, declared, selected, arguments, resource_evidence)
+    return prepare_inputs(owner, session_id, candidates, declared, selected, arguments, resource_evidence,
+        component_selections=component_selections)
 
 
-def validate(admitted, candidates, declared, selected, arguments, field):
+def validate(admitted, candidates, declared, selected, arguments, field, *, component_selections=None):
     """Pure replay of captured identity; no native computation or source opening."""
     from .local_resources import LocalResourceAdmission, RegisteredInput, RegisteredInputCollection
     from .raw_handoff import FastqDeclaration
     receipt = admitted[field + '_context']
     if receipt.get('adapter') == 'native-inputs.v1':
-        return validate_inputs(admitted, candidates, declared, selected, arguments, field)
+        return validate_inputs(admitted, candidates, declared, selected, arguments, field,
+            component_selections=component_selections)
     token = identity(candidates, declared, selected)
     if (set(receipt) != {'adapter', 'identity', 'resources', 'feature_reference'} or receipt['adapter'] != 'native-files.v1'
             or receipt['identity'] != token or admitted['kind'] != 'execute' or admitted.get('operation') != 'plan'):
@@ -260,7 +266,7 @@ def requirements(binding, declared, choices, evidence):
     if isinstance(declared, FastqDeclaration) and not missing and not questions:
         try:
             _mapping_inputs(_receipt(declared, evidence, selected))
-        except ResourcePrerequisite as exc:
+        except ScientificInputRequired as exc:
             questions = list(exc.questions)
     return missing + questions, selected
 
@@ -313,11 +319,13 @@ def _preferred_ids(declared, evidence, selected):
     return sorted(key for key,_ in matches) or None
 
 
-def prepare_inputs(owner, session_id, candidates, declared, selected, arguments, evidence):
+def prepare_inputs(owner, session_id, candidates, declared, selected, arguments, evidence, *, component_selections=None):
     from .raw_handoff import FragmentsDeclaration, FastqDeclaration, source_handles
-    token = identity(candidates, declared, selected, adapter='native-inputs.v1')
+    token = identity(candidates, declared, selected, adapter='native-inputs.v1', component_selections=component_selections)
     records = {h:owner.load(candidates.members[int(h.split('.')[1])]['resource_id']) for h in source_handles(declared)}
     receipt = dict(adapter='native-inputs.v1',identity=token,**_receipt(declared,evidence,selected))
+    if component_selections:
+        receipt['component_selections'] = dict(component_selections)
     inputs = _source_inputs(declared, arguments)
     if isinstance(declared,FastqDeclaration):
         resources = _mapping_inputs(receipt)
@@ -344,12 +352,15 @@ def prepare_inputs(owner, session_id, candidates, declared, selected, arguments,
     return binding, receipt
 
 
-def validate_inputs(admitted, candidates, declared, selected, arguments, field):
+def validate_inputs(admitted, candidates, declared, selected, arguments, field, *, component_selections=None):
     from .local_resources import LocalResourceAdmission
     from .raw_handoff import FastqDeclaration
     receipt = admitted[field + '_context']
-    if (set(receipt) != {'adapter','identity','resources','catalog','selected','custom','species','assembly'}
-            or receipt['identity'] != identity(candidates,declared,selected,adapter='native-inputs.v1')
+    scoped = receipt.get('component_selections')
+    if (set(receipt) - {'component_selections'} != {'adapter','identity','resources','catalog','selected','custom','species','assembly'}
+            or scoped is not None and not scoped
+            or component_selections is not None and (scoped or {}) != component_selections
+            or receipt['identity'] != identity(candidates,declared,selected,adapter='native-inputs.v1', component_selections=scoped)
             or receipt['catalog'] != admitted['raw_resource_evidence']
             or receipt['selected'] != _preferred_ids(declared,receipt['catalog'],selected)
             or any(receipt[k] != getattr(declared,k,None) for k in ('species','assembly'))):
@@ -378,7 +389,7 @@ def validate_inputs(admitted, candidates, declared, selected, arguments, field):
         from agent.schemas.run_state import _decode_plan
         try:
             bind_plan(_decode_plan(admitted['native_resource_plan']), receipt)
-        except ResourcePrerequisite:
+        except ScientificInputRequired:
             # Saved prose is immutable presentation, never historical admission
             # authority. Replay verifies the actual missing function input.
             if (not isinstance(admitted['choices'], list) or not admitted['choices']
@@ -406,13 +417,6 @@ def validate_inputs(admitted, candidates, declared, selected, arguments, field):
             or _serialize(bound.resource_choice) != (None if selected is None else selected.resource_choice())
             or values != admitted['inputs']):
         raise ValueError('Native task binding changed')
-
-
-class ResourcePrerequisite(ValueError):
-    def __init__(self, questions, options=()):
-        self.questions = tuple(questions)
-        self.options = tuple(options)
-        super().__init__(' '.join(questions))
 
 
 def public_inputs(receipt):
@@ -450,13 +454,31 @@ def _context_matches(row, receipt):
     return True
 
 
-def _component(receipt, port, description='The exact reference file for this native input.'):
+def _component(receipt, port, description='The exact reference file for this native input.', *, require_assembly=True):
     from .resource_continuation import distinct_choices
-    requested = receipt['selected']
+    from agent.tools.analysis.snapatac_raw import PORTS
+    def missing(messages, options=()):
+        offers = tuple(dict(option, component=_serialize(receipt['catalog'][option['handle'].removeprefix('resource.')]['components'][port])) for option in options)
+        return ScientificInputRequired(ScientificInputRequirement(
+            port, 'reference_path' if port == 'reference' else PORTS[port][0], dependencies=('source:bytes', 'declaration:species', 'declaration:assembly',
+                *(['reference:fasta'] if port == 'chrom_sizes' else []),
+                *('declaration:' + field for field in {
+                    'peaks': ('feature_source', 'feature_category'),
+                    'chrom_sizes': ('genome_source', 'genome_index_source'),
+                    'reference': ('genome_source', 'genome_index_source'),
+                }.get(port, ()))),
+            applicability={key: _serialize(receipt.get(key)) for key in ('species', 'assembly', 'custom', 'resources')},
+            offers=offers, messages=tuple(messages)))
+    if require_assembly and port == 'gene_anno' and not receipt.get('assembly'):
+        raise missing(['Establish the source genome assembly from consistent source metadata or an explicit researcher declaration before selecting a gene annotation reference.'])
+    requested = receipt.get('component_selections', {}).get(port, receipt['selected'])
     selected = {requested} if isinstance(requested,str) else set(requested or ())
     candidates = [(key,row) for key,row in receipt['catalog'].items() if row is not None
-        and _context_matches(row,receipt) and port in row['components']]
+        and _context_matches(row,receipt) and port in row['components']
+        and (port not in receipt.get('eligible_components', {}) or key in receipt['eligible_components'][port])]
     preferred = [(k,r) for k,r in candidates if k in selected]
+    if port in receipt.get('component_selections', {}) and not preferred:
+        raise missing(['The selected reference component conflicts with the current source declarations or is unavailable. Please correct the reference selection.'])
     if preferred: candidates = preferred
     reason = 'explicit' if preferred else 'automatic'
     mapped_fasta = receipt.get('resources',{}).get('reference_sha256')
@@ -465,7 +487,7 @@ def _component(receipt, port, description='The exact reference file for this nat
     if port == 'chrom_sizes' and 'genome' in receipt['custom']:
         candidates = [(k,r) for k,r in candidates if r['components'][port].get('fasta_sha256') == receipt['custom']['genome']['sha256']]
     if preferred and not candidates and port not in receipt['custom']:
-        raise ResourcePrerequisite(['The requested chromosome-size reference has no recorded association with the supplied or mapped genome. Please correct the reference choice or genome input.'])
+        raise missing(['The requested chromosome-size reference has no recorded association with the supplied or mapped genome. Please correct the reference choice or genome input.'])
     chosen = None
     if port in receipt['custom']:
         component = receipt['custom'][port]
@@ -481,12 +503,14 @@ def _component(receipt, port, description='The exact reference file for this nat
         if len(options) != 1:
             label = {'chrom_sizes':'chromosome-size','gene_anno':'gene annotation','peaks':'region feature','reference':'genome FASTA','whitelist':'barcode whitelist'}[port]
             context = ' '.join(str(receipt[key]) for key in ('species', 'assembly') if receipt.get(key) is not None) or 'the supplied source'
+            if port == 'gene_anno':
+                context = 'the supplied source declarations'
             if not options:
-                raise ResourcePrerequisite([f'This operation requires {description} No applicable {label} resource is available for {context}.'])
+                raise missing([f'This operation requires {description} No applicable {label} resource is available for {context}.'])
             descriptions = [row['label'] + (f" ({row['components'][port]['contig_count']} contigs; names, lengths or ordering differ)"
                 if 'contig_count' in row['components'][port] else ' (distinct reference component)') for _,row in options]
-            raise ResourcePrerequisite([f'There are distinct {label} references for {context}. Please identify the reference matching the source data or the requested feature set: ' + ' / '.join(descriptions)],
-                options=[dict(handle='resource.' + key, label=row['label'], description=description)
+            raise missing([f'There are distinct {label} references for {context}. Please identify the reference matching the source data or the requested feature set: ' + ' / '.join(descriptions)],
+                options=[dict(handle='resource.' + key, label=row['label'], description=description, port=port)
                          for (key, row), description in zip(options, descriptions)])
         chosen,row = options[0]
         component = row['components'][port]
@@ -494,42 +518,167 @@ def _component(receipt, port, description='The exact reference file for this nat
     return component, chosen, reason
 
 
-def bind_plan(plan, receipt, *, bindings=None):
-    """Bind only selected native functions, before execution or publication.
+def gene_annotation_component(receipt, source, *, source_sha256=None, supplied=None, supplied_sha256=None, explicit=False):
+    """Qualify a GTF choice against this consumer's source claims and bytes."""
+    from agent.tools._file_identity import checked_file, file_sha256
+    from agent.tools.analysis.sequence_reference import assembly_observations, assembly_labels_match
+    receipt = _serialize(receipt)
+    def missing(message):
+        return ScientificInputRequired(ScientificInputRequirement('gene_anno', 'gene_anno_path',
+            dependencies=('source:bytes', 'declaration:species', 'declaration:assembly'),
+            applicability=dict(assembly=receipt.get('assembly')), messages=(message,)))
+    observations = None
+    if isinstance(source, (str, Path)):
+        observations = assembly_observations(source, source_sha256 or file_sha256(source))
+    mapped = receipt.get('source_reference')
+    mapped_labels = set()
+    if mapped is not None:
+        resources = receipt.get('resources', {})
+        # Mapping changes the coordinate provenance. An installed/default
+        # genome alone cannot supply this fact for an existing coordinate file.
+        if (resources.get('reference_path'), resources.get('reference_sha256')) != (mapped['path'], mapped['sha256']):
+            raise missing('The planned mapping reference differs from its captured source inputs.')
+        for row in receipt['catalog'].values():
+            if row is None or row.get('component_identity_version', 1) < 2:
+                continue
+            components = row['components']
+            fasta, sizes = components.get('reference', {}), components.get('chrom_sizes', {})
+            if ((fasta.get('path'), fasta.get('sha256')) == (mapped['path'], mapped['sha256'])
+                    and sizes.get('fasta_sha256') == mapped['sha256'] and sizes.get('ordered_sizes')
+                    and sizes.get('sha256') and row.get('assembly')):
+                mapped_labels.add(row['assembly'])
+        if mapped_labels:
+            observations = dict(observations or dict(observations=[]), planned_mapping_reference=_serialize(mapped))
+    claims = [] if observations is None else observations['observations']
+    labels = {value for row in claims for value in row['values']}
+    labels.update(mapped_labels)
+    if receipt.get('source_assembly') is not None:
+        labels.add(receipt['source_assembly'])
+    declared_labels = labels | ({receipt['assembly']} if receipt.get('assembly') is not None else set())
+    if not assembly_labels_match(declared_labels, receipt['catalog'].values()):
+        raise missing('Declared assembly conflicts with source assembly observations; no exact qualified reference establishes equivalence.')
+    if labels:
+        if receipt.get('assembly') is None and not mapped_labels and not any(row['complete'] for row in claims if row['values']):
+            raise missing('Incomplete source assembly observations require an explicit researcher assembly declaration.')
+        receipt['assembly'] = receipt.get('assembly') or sorted(labels)[0]
+        receipt.setdefault('eligible_components', {})['gene_anno'] = [key for key,row in receipt['catalog'].items()
+            if row is not None and all(_context_matches(row, dict(receipt, assembly=label)) for label in labels)]
+    requested = receipt.get('component_selections', {}).get('gene_anno', receipt.get('selected'))
+    selected = {requested} if isinstance(requested, str) else set(requested or ())
+    if explicit and not any(row is not None and 'gene_anno' in row['components']
+            and key in selected and _context_matches(row, receipt)
+            for key,row in receipt['catalog'].items()):
+        raise missing('The explicitly selected gene annotation is unavailable or incompatible with this source assembly.')
+    if supplied is not None:
+        # A supplied locator is not compatibility or permission to substitute it.
+        matches = [key for key,row in receipt['catalog'].items() if row is not None
+            and row['components'].get('gene_anno', {}).get('path') == str(supplied)
+            and row['components']['gene_anno']['sha256'] == supplied_sha256
+            and key in receipt.get('eligible_components', {}).get('gene_anno', receipt['catalog'])]
+        if not matches:
+            raise missing('The supplied gene annotation has no applicable exact qualified reference identity for this source.')
+        receipt.setdefault('eligible_components', {})['gene_anno'] = matches
+    component, chosen, reason = _component(receipt, 'gene_anno',
+        'Native Gene Activity requires its applicable gene annotation reference.')
+    checked_file(component['path'], component['sha256'])
+    return component, chosen, reason, observations, receipt['assembly']
 
-    Equivalence is exact component bytes plus declared context, never assembly
-    alone. A full bundle is merely one source of components. No files are opened.
-    """
+
+def bind_operation(tool_name, function, arguments, receipt, *, step_id, bindings=None, qualify_source=True):
+    """Resolve one selected operation's exact native inputs, without a Plan."""
     from agent.tools.analysis.snapatac_raw import APPLIES, PORTS
     from agent.schemas import StepOutputRef, PriorOutputRef
-    steps = []
-    for step in plan.steps:
-        args = dict(step.arguments)
-        if step.tool_name not in ('run_snapatac2', 'run_episcanpy'):
-            steps.append(step); continue
-        function = args.get('function_name')
-        applies = APPLIES if step.tool_name == 'run_snapatac2' else {'tl.geneactivity': ('gene_anno',)}
-        for port in applies.get(function, ()):
-            if port == 'whitelist': continue  # Optional native input; never auto cell calling.
-            path_key,sha_key,_ = PORTS[port]
-            # The compiler/accepted-result binder already owns these exact
-            # scientific inputs. Resource discovery fills unresolved ports only.
-            if isinstance(args.get(path_key), (StepOutputRef, PriorOutputRef)):
-                continue
-            # An explicit native dictionary is already the function's input.
-            if port in args.get('kwargs',{}):
-                requested = receipt['selected']
-                ids = {requested} if isinstance(requested,str) else set(requested or ())
-                if port in receipt['custom'] or any(key in ids and row is not None and port in row['components']
-                        for key,row in receipt['catalog'].items()):
-                    raise ResourcePrerequisite(['Both a native value and an explicit reference supply the same input. Please choose which source should be used.'])
-                continue
-            component,chosen,reason = _component(receipt,port,PORTS[port][2])
-            if bindings is not None:
-                bindings.append(dict(step_id=step.step_id,tool=step.tool_name,function=function,port=port,
-                    resource=chosen,reason=reason,path=component['path'],sha256=component['sha256']))
-            if path_key in args and (args[path_key] != component['path'] or args.get(sha_key) != component['sha256']):
-                raise ValueError('Plan cannot substitute a captured native reference input')
-            args[path_key],args[sha_key] = component['path'],component['sha256']
-        steps.append(replace(step,arguments=args))
-    return replace(plan, steps=tuple(steps))
+    args = dict(arguments)
+    if tool_name not in ('run_snapatac2', 'run_episcanpy'):
+        return args
+    applies = APPLIES if tool_name == 'run_snapatac2' else {'tl.geneactivity': ('gene_anno',)}
+    missing = []
+    resolved = []
+    for port in applies.get(function, ()):
+        if port == 'whitelist':
+            continue  # Optional native input; never auto cell calling.
+        path_key, sha_key, _ = PORTS[port]
+        if isinstance(args.get(path_key), (StepOutputRef, PriorOutputRef)):
+            continue
+        if port in args.get('kwargs', {}):
+            requested = receipt.get('component_selections', {}).get(port, receipt['selected'])
+            ids = {requested} if isinstance(requested, str) else set(requested or ())
+            if port in receipt['custom'] or any(key in ids and row is not None and port in row['components']
+                    for key, row in receipt['catalog'].items()):
+                missing.append(ScientificInputRequirement(port, path_key,
+                    dependencies=('source:bytes',),
+                    messages=('Both a native value and an explicit reference supply the same input. Please choose which source should be used.',)))
+            continue
+        try:
+            if port == 'gene_anno' and qualify_source:
+                source = args.get('input_path')
+                if isinstance(source, PriorOutputRef):
+                    from agent.orchestration.prior_outputs import resolve, validate_binding
+                    validate_binding(source.binding, integrity=True)
+                    source = resolve(source)
+                component, chosen, reason, observations, assembly = gene_annotation_component(receipt, source,
+                    source_sha256=args.get('input_sha256'), supplied=args.get(path_key),
+                    supplied_sha256=args.get(sha_key), explicit=port in receipt.get('component_selections', {}))
+            else:
+                component, chosen, reason = _component(receipt, port, PORTS[port][2], require_assembly=qualify_source)
+        except ScientificInputRequired as exc:
+            missing.extend(exc.requirements)
+            continue
+        if path_key in args and (args[path_key] != component['path'] or args.get(sha_key) != component['sha256']):
+            raise ValueError('Plan cannot substitute a captured native reference input')
+        args[path_key], args[sha_key] = component['path'], component['sha256']
+        resolved.append(dict(step_id=step_id, tool=tool_name, function=function, port=port,
+            resource=chosen, reason=reason, path=component['path'], sha256=component['sha256']))
+        if port == 'gene_anno' and qualify_source:
+            resolved[-1].update(source_observations=observations, assembly=assembly)
+    if missing:
+        raise ScientificInputRequired(*missing, bindings=args)
+    if bindings is not None:
+        bindings.extend(resolved)
+    return args
+
+
+def bind_plan(plan, receipt, *, bindings=None):
+    """Replay saved exact component bindings, without live source qualification.
+
+    Current scientific preparation calls bind_operation directly. Historical
+    plans retain their recorded applicability; reopening cannot inspect files.
+    """
+    return replace(plan, steps=tuple(replace(step, arguments=bind_operation(
+        step.tool_name, step.arguments.get('function_name'), step.arguments, receipt,
+        step_id=step.step_id, bindings=bindings, qualify_source=False)) for step in plan.steps))
+
+
+def prepare_operation(arguments, context):
+    """Selected native/raw owner; only its registered functions need resources."""
+    field = next((f for f in ('fastq','fragments','bam')
+        if context.admitted.get(f + '_context', {}).get('adapter') == 'native-inputs.v1'), None)
+    if field is None:
+        from .input_sets import ScientificInputSet
+        receipt = dict(catalog=resource_evidence(tuple(ScientificInputSet(**_serialize(row))
+            for row in context.admitted.get('resource_catalog', ()))), custom={}, selected=None,
+            species=arguments.get('species'), assembly=arguments.get('assembly'))
+    else:
+        receipt = _serialize(context.admitted[field + '_context'])
+    receipt['component_selections'] = _serialize(receipt.get('component_selections', {}))
+    for answer in context.answers.values():
+        if answer.get('port') and answer['handle'].startswith('resource.'):
+            receipt['component_selections'][answer['port']] = answer['handle'].removeprefix('resource.')
+    mapped = context.planned(arguments.get('input_path')).get('source_reference')
+    if mapped is not None:
+        receipt['source_reference'] = mapped
+    bound = bind_operation(context.tool.name, arguments.get('function_name'), arguments, receipt,
+        step_id=context.step_id, bindings=context.receipts)
+    if context.tool.native_functions is not None:
+        from agent.tools.analysis.native_matrix import PACKAGES
+        owner = next((p for p in PACKAGES if p.package==context.tool.native_functions.package), None)
+        if owner is not None:
+            return owner.prepare_operation(bound, context)
+    return bound
+
+
+def mapped_source_reference(source, selected, registry):
+    """Compatibility projection through the registered producer contract."""
+    from agent.orchestration.scientific_inputs import OperationPreparationContext
+    context=OperationPreparationContext(None,'',registry,selected,{}, {},[],None,None,{})
+    return context.planned(source).get('source_reference')

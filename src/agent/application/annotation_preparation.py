@@ -3,19 +3,14 @@
 The planner selects operations and sources. This owner binds existing qualified
 resources to those selections; the scientific owner still qualifies and executes.
 """
+from agent.orchestration.scientific_inputs import ScientificDiagnostic
 from dataclasses import replace
 from pathlib import Path
 
 from agent.schemas import PriorOutputRef, StepOutputRef
 from agent.schemas.orchestration import _serialize
 from .session_state import digest
-
-
-class AnnotationPrerequisite(ValueError):
-    def __init__(self, questions, options=()):
-        self.questions = tuple(questions)
-        self.options = tuple(options)
-        super().__init__(' '.join(questions))
+from agent.orchestration.semantic_compiler import ScientificInputRequired, ScientificInputRequirement
 
 
 def capture_sources(origin, previous, interaction):
@@ -79,15 +74,13 @@ def admit(sessions, interaction, decision, input_sets):
             or state.interactions[-1].turn_id != interaction.turn_id):
         raise IntentError('invalid_prerequisite')
     validate_arguments(decision.arguments, 'annotation')
-    reference = interaction.snapshot.get('prerequisite')
-    if not initial and (decision.pending != '@roles' or reference is None or reference['field'] != 'annotation'):
+    from .preparation_state import captured_owner
+    if not initial and (decision.pending != '@roles' or captured_owner(interaction, state.interactions[:-1]) != 'annotation'):
         raise IntentError('invalid_prerequisite')
     origin, previous = (interaction, None) if initial else _captured(interaction, state.interactions[:-1])
     rows = catalog(input_sets)
     if previous is not None:
         old_rows = _serialize(previous.admitted['resource_catalog'])
-        if digest(old_rows) != reference['resource_context_sha256']:
-            raise IntentError('invalid_prerequisite')
         rows = _extend_catalog(old_rows, rows)
     addition = getattr(decision, 'annotation', None) or AnnotationDeclaration()
     declared = merge(AnnotationDeclaration() if previous is None else declaration(_serialize(previous.admitted['annotation']), 'annotation'),
@@ -128,13 +121,14 @@ def admit(sessions, interaction, decision, input_sets):
         result.update(_research_intent(interaction, decision))
         result['context'] = decision.context
     else:
-        reference = interaction.snapshot['prerequisite']
-        result['continuation'] = {key: reference[key] for key in ('origin_turn_id', 'binding_turn_id', 'field')}
         if decision.unknown_fields:
             result['unknown_fields'] = list(decision.unknown_fields)
         result['context'] = (origin.admitted or {}).get('context', 'none')
     observed = result.get('annotation_source_evidence')
     questions, options = [], []
+    if (observed is None and not result['inputs'].get('input_path') and result.get('context') != 'current'
+            and not result.get('input_results')):
+        questions = ['Supply and identify the original count dataset to annotate.']
     if observed is not None:
         unknown = [name for name in ('species', 'assembly')
             if getattr(declared, name) is None and observed['declarations'].get(name) is None]
@@ -147,13 +141,10 @@ def admit(sessions, interaction, decision, input_sets):
             options = [dict(handle='annotation-umap:' + action, label=label, description=label)
                 for action, label in (('generate', 'Generate UMAP'), ('skip', 'Skip UMAP'))]
     if questions:
-        result.update(reason='missing_annotation_declarations', choices=questions)
-        if options:
-            result['resource_options'] = options
-        pending = dict(origin_turn_id=origin.turn_id, binding_turn_id=interaction.turn_id,
-            field='annotation', tool=result['tool'], resource_context_sha256=digest(rows))
-        return result, pending
-    return result, None
+        result.update(kind='clarify', reason='missing_annotation_declarations')
+    from .raw_handoff import declaration_need
+    options = [dict(option, value=declaration_dict(AnnotationDeclaration(generate_umap=option['handle'].endswith(':generate')))) for option in options]
+    return result, declaration_need('annotation', result['tool'], questions, options)
 
 
 def umap_available(sessions, interaction, admitted):
@@ -195,10 +186,13 @@ def validate(interaction, preceding):
     from .resource_continuation import catalog
     from .input_sets import ScientificInputSet
     from .raw_handoff import _extend_catalog
+    from .preparation_state import intake_task, observation
+    canonical = interaction.preparation is not None and intake_task((*preceding, interaction), interaction.preparation) == 'annotation'
     captured = _serialize(interaction.snapshot)
-    expected = capture_prerequisite(preceding, interaction.base_revision_id,
+    expected = None if canonical else capture_prerequisite(preceding, interaction.base_revision_id,
         interaction.base_generation, interaction.submission, captured.get('dialogue', {}).get('requested_predecessor'),
-        canonical_sources='source_view' in captured.get('dialogue', {}))
+        canonical_sources='source_view' in captured.get('dialogue', {}),
+            utterance=interaction.utterance if captured.get('dialogue', {}).get('prerequisite_capture_version') == 2 else None)
     if captured.get('prerequisite') != expected:
         raise ValueError('Annotation prerequisite capture changed.')
     origin, previous = _captured(interaction, preceding)
@@ -207,9 +201,9 @@ def validate(interaction, preceding):
         raise ValueError('Annotation resource catalog changed.')
     if previous is not None:
         old_rows = _serialize(previous.admitted['resource_catalog'])
-        if (digest(old_rows) != expected['resource_context_sha256']
+        if (not canonical and digest(old_rows) != expected['resource_context_sha256']
                 or _extend_catalog(old_rows, rows) != rows
-                or value.get('continuation') != {key: expected[key] for key in ('origin_turn_id', 'binding_turn_id', 'field')}):
+                or not canonical and value.get('continuation') != {key: expected[key] for key in ('origin_turn_id', 'binding_turn_id', 'field')}):
             raise ValueError('Annotation continuation changed.')
     declared = merge(AnnotationDeclaration() if previous is None else declaration(_serialize(previous.admitted['annotation']), 'annotation'),
         declaration(value['annotation_addition'], 'annotation'), pending=True, unknown_fields=value.get('unknown_fields', ()))
@@ -229,7 +223,8 @@ def validate(interaction, preceding):
     if value['kind'] == 'clarify' or interaction.status == 'clarification':
         expected = dict(origin_turn_id=origin.turn_id, binding_turn_id=interaction.turn_id,
             field='annotation', tool=value['tool'], resource_context_sha256=digest(value['resource_catalog']))
-        if _serialize(interaction.prerequisite) != expected or not value.get('choices'):
+        if (_serialize(interaction.prerequisite) != (None if canonical else expected)
+                or not ((observation(interaction) or {}).get('requirements') if canonical else value.get('choices'))):
             raise ValueError('Annotation prerequisite lost its exact pending scope.')
 
 def _native_grouping_reference(reference, selected):
@@ -256,7 +251,7 @@ def _native_grouping_reference(reference, selected):
     return reference if isinstance(reference, PriorOutputRef) else None
 
 
-def preparer(sessions, interaction, admitted):
+def preparer(sessions, interaction, admitted, *, requirement_bindings=None, bindings=None):
     """Bind installed evidence and exact selected sources; planning owns methods."""
     def prepare(tool, arguments, selected):
         if tool.name != 'annotate_scATAC_cell_types':
@@ -266,18 +261,43 @@ def preparer(sessions, interaction, admitted):
         from .raw_handoff import AnnotationDeclaration, declaration
         lib = library()
         values = dict(arguments)
+        def missing(port, argument, messages, options=(), *, kind='resource'):
+            return ScientificInputRequired(ScientificInputRequirement(port, argument, kind,
+                dependencies=(('source:bytes', 'declaration:groups_source', 'declaration:groups_result',
+                               'declaration:grouping_strategy', 'declaration:grouping_provenance') if argument in ('group_column', 'grouping_path') else
+                              ('source:bytes', 'declaration:species') if argument == 'species' else
+                              ('source:bytes', 'declaration:species', 'declaration:assembly')),
+                applicability=dict(source=_serialize(values.get('input_path')),
+                    species=values.get('species'), cellmarker_identity=values.get('cellmarker_identity')),
+                offers=tuple(options), messages=tuple(messages)), bindings=values)
         annotation = admitted.get('annotation', admitted.get('downstream_annotation'))
         declared = declaration(_serialize(annotation), 'annotation') if annotation else AnnotationDeclaration()
+        # Exact requirement answers are already bound to this operation. This
+        # scientific owner applies their meanings without changing task-wide
+        # raw declarations or invoking a second answer dispatcher.
+        for argument, answer in (requirement_bindings or {}).items():
+            handle = answer['handle']
+            if argument == 'species' and handle.startswith('annotation-species:'):
+                declared = replace(declared, species=answer['value'])
+                values['species'] = answer['value']
+            elif argument == 'group_column' and handle.startswith('annotation-column:'):
+                from agent.tools._file_identity import file_sha256
+                source = values.get('input_path')
+                if not isinstance(source, (str, Path)) or file_sha256(source) != answer['source_sha256']:
+                    raise ValueError('Selected annotation column source bytes changed.')
+                values['group_column'] = answer['value']
+            elif argument == 'gene_anno_path' and handle.startswith('resource.'):
+                declared = replace(declared, resource=handle)
+        def species_name(value):
+            return value.casefold()
         if declared.species is not None:
-            def species_name(value):
-                return value.casefold()
             if species_name(values.get('species', declared.species)) != species_name(declared.species):
                 raise ValueError('Selected annotation species differs from the captured declaration')
             values['species'] = declared.species
         entries = [entry for entry in lib.entries() if entry['kind'] == 'cellmarker'
                    and ('cellmarker_id' not in values or entry['id'] == values['cellmarker_id'])]
         if len(entries) != 1:
-            raise AnnotationPrerequisite(('Select the installed CellMarker 3.0 evidence resource.',))
+            raise missing('cellmarker_id', 'cellmarker_id', ('Select the installed CellMarker 3.0 evidence resource.',))
         evidence = CellMarkerEvidence(lib, entries[0]['id'])
         if values.get('cellmarker_identity', evidence.identity) != evidence.identity:
             raise ValueError('Captured CellMarker evidence identity changed')
@@ -291,13 +311,13 @@ def preparer(sessions, interaction, admitted):
                 options = [dict(handle='annotation-species:' + str(i), label=species,
                     description='Use the exact CellMarker species value ' + species,
                     value=species) for i, species in enumerate(evidence.metadata['species'])]
-                raise AnnotationPrerequisite((str(exc) + '. Select the sample species from the pinned CellMarker reference.',), options) from exc
+                raise missing('species', 'species', (str(exc) + '. Select the sample species from the pinned CellMarker reference.',), options) from exc
         if declared.groups_result is not None:
             from .annotation_groups import choices
             from agent.orchestration.prior_outputs import bind_output
             rows = [row for row in choices(sessions, interaction) if row['handle'] == declared.groups_result]
             if len(rows) != 1:
-                raise AnnotationPrerequisite(('Select the compatible accepted initial clustering.',))
+                raise missing('groups', 'grouping_path', ('Select the compatible accepted initial clustering.',))
             row = rows[0]
             binding = bind_output(sessions._application.run_store, sessions._application.registry,
                                   row['run_id'], row['step_id'], 'dataset')
@@ -309,60 +329,77 @@ def preparer(sessions, interaction, admitted):
         if supplied is not None and values.get('grouping_path') == values.get('input_path'):
             values.pop('grouping_path', None)
         if supplied is not None and 'grouping_path' in values:
-            raise ValueError('An explicit source grouping must be reused directly; do not plan another initial clustering')
+            raise ScientificDiagnostic('ANNOTATION_GROUP_SOURCE_CONFLICT', 'An explicit source grouping must be reused directly; do not plan another initial clustering')
         if supplied is None and isinstance(values.get('grouping_path'), (StepOutputRef, PriorOutputRef)):
             grouping = _native_grouping_reference(values['grouping_path'], selected)
             if grouping is None:
-                raise AnnotationPrerequisite(('Select compatible accepted native clustering or plan its registered prerequisites.',))
+                raise missing('groups', 'grouping_path', ('Select compatible accepted native clustering or plan its registered prerequisites.',))
             values['grouping_path'] = grouping
-        if supplied is None and not isinstance(values.get('grouping_path'), PriorOutputRef):
-            source = values.get('input_path')
-            observed = admitted.get('annotation_source_evidence')
-            field_offers = () if interaction is None else interaction.snapshot.get('dialogue', {}).get('source_fields', ())
-            if isinstance(source, (str, Path)) and (observed is not None or any(len(row['fields']) > 1 for row in field_offers)):
-                from agent.tools.analysis.annotation_input import observe
-                from agent.tools._file_identity import file_sha256
-                sha = file_sha256(source)
-                if observed is None or observed['source_sha256'] != sha:
-                    observed = observe(source, sha)
-                columns = observed['grouping_columns']
-                if len(columns) > 1:
-                    options = [dict(handle='annotation-column:' + str(i), label=column,
-                        description='Use original obs.' + column + ' as the supplied initial grouping',
-                        argument='group_column', value=column, source_sha256=sha)
-                        for i, column in enumerate(columns)]
-                    raise AnnotationPrerequisite(('Select the original observation grouping column to reuse at level 1.',), options)
         if supplied is None and 'grouping_path' not in values:
-            raise AnnotationPrerequisite(('Select an original obs grouping column, compatible initial clustering, or plan the necessary registered native clustering steps.',))
+            raise missing('group_column', 'group_column', ('Select an original obs grouping column, compatible initial clustering, or plan the necessary registered native clustering steps.',))
         if declared.grouping_strategy == 'reuse_only' and supplied is None:
             if not isinstance(values.get('grouping_path'), PriorOutputRef):
-                raise AnnotationPrerequisite(('Select existing source groups or compatible accepted clustering to honor the request to reuse existing groups.',))
+                raise missing('groups', 'grouping_path', ('Select existing source groups or compatible accepted clustering to honor the request to reuse existing groups.',))
         for name, label in (('grouping_path','initial clustering'),('activity_path','Gene Activity'),('activity_source_path','native Gene Activity source')):
             if name in values and not isinstance(values[name],(PriorOutputRef,StepOutputRef)):
-                raise AnnotationPrerequisite(('Select compatible accepted ' + label + '; a file locator alone does not establish its scientific source identity.',))
+                raise missing({'grouping_path': 'groups', 'activity_path': 'activity', 'activity_source_path': 'activity_source'}[name], name, ('Select compatible accepted ' + label + '; a file locator alone does not establish its scientific source identity.',))
         if 'activity_path' not in values:
             if 'activity_method' not in values:
-                raise AnnotationPrerequisite(('Select compatible accepted Gene Activity or its applicable native construction.',))
-            if 'gene_anno_path' not in values:
-                from .input_sets import ScientificInputSet
-                from .native_raw_handoff import resource_evidence, _component, ResourcePrerequisite
-                catalog = resource_evidence(tuple(ScientificInputSet(**_serialize(row))
-                    for row in admitted.get('resource_catalog', ())))
-                reference_species=declared.species
-                if reference_species is not None:
-                    reference_species=next((key for key in ('human','mouse')
-                        if species_name(reference_species)==species_name(key)),reference_species)
-                receipt = dict(catalog=catalog, custom={}, species=reference_species,
-                    assembly=declared.assembly,
-                    selected=None if declared.resource is None else declared.resource.removeprefix('resource.'))
-                try:
-                    resource, _, _ = _component(receipt, 'gene_anno',
-                        'Native Gene Activity requires its applicable gene annotation reference.')
-                except ResourcePrerequisite as exc:
-                    raise AnnotationPrerequisite(exc.questions, exc.options) from exc
-                values.update(gene_anno_path=resource['path'], gene_anno_sha256=resource['sha256'])
+                raise missing('activity_method', 'activity_method', ('Select compatible accepted Gene Activity or its applicable native construction.',))
+            from .input_sets import ScientificInputSet
+            from .native_raw_handoff import resource_evidence
+            catalog = resource_evidence(tuple(ScientificInputSet(**_serialize(row))
+                for row in admitted.get('resource_catalog', ())))
+            reference_species=values.get('species', declared.species)
+            if reference_species is not None:
+                reference_species=next((key for key in ('human','mouse')
+                    if species_name(reference_species)==species_name(key)),reference_species)
+            receipt = dict(catalog=catalog, custom={}, species=reference_species,
+                assembly=declared.assembly,
+                selected=None if declared.resource is None else declared.resource.removeprefix('resource.'))
+            raw = next((admitted.get(field + '_context', {}) for field in ('fastq', 'fragments', 'bam')
+                if admitted.get(field + '_context', {}).get('adapter') == 'native-inputs.v1'), {})
+            receipt['source_assembly'] = raw.get('assembly')
+            if raw.get('source_reference') is not None:
+                receipt['source_reference'] = _serialize(raw['source_reference'])
+                receipt['resources'] = _serialize(raw.get('resources', {}))
+            if receipt['assembly'] is None:
+                receipt['assembly'] = raw.get('assembly')
+            if declared.resource is None:
+                receipt['selected'] = raw.get('selected')
+                if raw.get('component_selections'):
+                    receipt['component_selections'] = _serialize(raw['component_selections'])
+            # Read claims only from this consumer's exact source (or its
+            # identity-preserving inspection handoff), never another upload.
+            source = values.get('input_path')
+            seen = set()
+            while isinstance(source, StepOutputRef) and source.step_id in (selected or {}) and source.step_id not in seen:
+                seen.add(source.step_id)
+                producer, arguments = selected[source.step_id]
+                if producer != 'inspect_scATAC' or source.output_key != 'input_path':
+                    break
+                source = arguments.get('path')
+            if isinstance(source, PriorOutputRef):
+                from agent.orchestration.prior_outputs import resolve, validate_binding
+                validate_binding(source.binding, integrity=True)
+                source = resolve(source)
+            from .native_raw_handoff import gene_annotation_component
+            resource, chosen, reason, observations, assembly = gene_annotation_component(receipt, source,
+                source_sha256=values.get('input_sha256'), supplied=values.get('gene_anno_path'),
+                supplied_sha256=values.get('gene_anno_sha256'), explicit=declared.resource is not None)
+            values.update(gene_anno_path=resource['path'], gene_anno_sha256=resource['sha256'])
+            if bindings is not None:
+                bindings.append(dict(tool=tool.name, port='gene_anno', resource=chosen, reason=reason,
+                    path=resource['path'], sha256=resource['sha256'], assembly=assembly,
+                    source_declared_assembly=raw.get('assembly'),
+                    source_observations=observations))
             if (values['activity_method'] == 'snapatac2.pp.make_gene_matrix'
                     and not values.get('activity_kwargs', {}).get('use_x') and 'activity_source_path' not in values):
-                raise AnnotationPrerequisite(('Select the accepted fragment/insertion source for native SnapATAC2 Gene Activity.',))
+                raise missing('activity_source', 'activity_source_path', ('Select the accepted fragment/insertion source for native SnapATAC2 Gene Activity.',))
         return values
     return prepare
+
+
+def prepare_operation(arguments, context):
+    return preparer(context.sessions, context.interaction, context.admitted,
+        requirement_bindings=context.answers, bindings=context.receipts)(context.tool, arguments, context.selected)

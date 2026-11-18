@@ -15,8 +15,8 @@ from agent.orchestration.semantic_compiler import compile_semantic_plan, build_s
 
 
 def binding():
-    return PriorOutputBinding('PRIVATE-RUN:run', 'PRIVATE-STEP', 'compute_scATAC_qc',
-        'barcode_qc', 'scatac_barcode_qc.v1', '1'*64, '2'*64, '3'*64)
+    return PriorOutputBinding('PRIVATE-RUN:run', 'PRIVATE-STEP', 'run_scanpy',
+        'dataset', 'native_matrix_h5ad.v1', '1'*64, '2'*64, '3'*64)
 
 
 def context():
@@ -25,30 +25,35 @@ def context():
 
 
 def request():
-    return AgentRequest('request', 'Using the current QC result, select using the supplied thresholds.',
-                        {'min_qc_fragment_records': 10, 'min_tss_enrichment': '2', 'output_dir': '/PRIVATE/OUT'})
+    return AgentRequest('request', 'Scale the current accepted native matrix.',
+                        {'output_dir': '/PRIVATE/OUT'})
 
 
-def wire(handle='ctx.0', target='barcode_qc'):
+def wire(handle='ctx.0', target='dataset'):
     return {'schema_version': 4, 'decision': {'kind': 'plan', 'steps': [{
-        'step_id': 'selection', 'tool': 'select_scATAC_cells',
-        'sources': [{'target': target, 'source': {'kind': 'context', 'handle': handle}}],
+        'step_id': 'selection', 'tool': 'run_scanpy',
+        'sources': [{'target': target, 'source': {'kind': 'context', 'handle': handle}},
+                    {'target': 'function_name', 'source': {'kind': 'registered_choice', 'choice': 'pp.scale'}}],
         'control_dependencies': []}]}}
 
 
 def test_scoped_context_private_identity_never_enters_prompts():
     registry = build_default_tool_registry()
     with planning_context(context()):
-        b = build_semantic_planning_prompt(request(), registry, visible_tool_names=('select_scATAC_cells',))
-        schema = build_semantic_wire_v4_schema(registry, request(), visible_tool_names=('select_scATAC_cells',))
+        b = build_semantic_planning_prompt(request(), registry, visible_tool_names=('run_scanpy',))
+        schema = build_semantic_wire_v4_schema(registry, request(), visible_tool_names=('run_scanpy',))
     for value in (b,json.dumps(schema)):
         for private in ('PRIVATE', 'private-session', 'private-revision', '1'*64, '2'*64, '3'*64):
             assert private not in value
-    assert len(b.encode()) < 10000
-    selectors=schema['$defs']['step']['anyOf'][0]['properties']['sources']['items']['anyOf']
-    context_sources=[v for selector in selectors for v in selector['properties']['source']['anyOf']
-                     if v.get('properties',{}).get('kind',{}).get('enum') == ('context',)]
-    assert [v['properties']['handle']['enum'] for v in context_sources] == [('ctx.0',)]
+    assert len(b.encode()) < 13000  # Current native function catalog, with all privacy checks retained.
+    def context_handles(value):
+        if isinstance(value, dict):
+            if value.get('properties', {}).get('kind', {}).get('enum') == ('context',):
+                yield value['properties']['handle']['enum']
+            for child in value.values(): yield from context_handles(child)
+        elif isinstance(value, (list,tuple)):
+            for child in value: yield from context_handles(child)
+    assert set(context_handles(schema)) == {('ctx.0',)}
 
 
 def test_context_lowering_roundtrip_fingerprint():
@@ -58,7 +63,7 @@ def test_context_lowering_roundtrip_fingerprint():
         plan = compile_semantic_plan(request(), candidate, registry, build_semantic_compiler_contract(registry))
     assert _decode_plan(plan.to_dict()) == plan
     refs = [a for a in plan.steps[0].arguments.values() if isinstance(a, PriorOutputRef)]
-    assert len(refs) == 2 and refs[0].binding == refs[1].binding
+    assert len(refs) == 1 and refs[0].binding == binding()
     assert plan.steps[0].depends_on == ()
     other = replace(binding(), run_id='OTHER:run')
     changed = replace(plan, steps=(replace(plan.steps[0], arguments={
@@ -68,7 +73,7 @@ def test_context_lowering_roundtrip_fingerprint():
     assert fingerprint_plan(_decode_plan(plan.to_dict())) == fingerprint_plan(plan)
 
 
-@pytest.mark.parametrize('handle,target', [('ctx.99','barcode_qc'), ('ctx.0','output_dir')])
+@pytest.mark.parametrize('handle,target', [('ctx.99','dataset'), ('ctx.0','output_dir')])
 def test_unknown_and_incompatible_context_rejected(handle, target):
     registry = build_default_tool_registry()
     with planning_context(context()), pytest.raises(ValueError):

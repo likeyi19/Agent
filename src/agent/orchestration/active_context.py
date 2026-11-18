@@ -8,7 +8,6 @@ from agent.schemas.orchestration import freeze_json_mapping, _serialize
 
 _CONTEXT = ContextVar('active_planning_context', default=None)
 _INPUT_PREPARER = ContextVar('selected_method_input_preparer', default=None)
-_CANDIDATE_CAPTURE = ContextVar('native_semantic_candidate_capture', default=None)
 MAX_CONTEXT_ITEMS = 32
 
 
@@ -66,6 +65,7 @@ class ActivePlanningContext:
             row['reusable_inputs'] = [h for h in row.get('reusable_inputs', ())
                                       if h in {item.handle for item in self.items}]
         task = _serialize(self.task)
+        task.pop('parameter_sources', None)
         if task.get('delivery'):
             task['delivery_status'] = 'deferred'
         return dict(base=None if self.base_revision_id is None else 'captured_current', results=results, task=task)
@@ -76,25 +76,16 @@ def current_context():
 
 
 @contextmanager
-def input_preparation(prepare, *, capture_candidate=None):
+def input_preparation(prepare):
     """Application-owned materialization after semantic source selection."""
     token = _INPUT_PREPARER.set(prepare)
-    capture_token = _CANDIDATE_CAPTURE.set(capture_candidate)
     try:
         yield
     finally:
-        _CANDIDATE_CAPTURE.reset(capture_token)
         _INPUT_PREPARER.reset(token)
 
 
-def capture_semantic_candidate(payload):
-    """Capture parsed selections for pending input binding, without admission."""
-    capture = _CANDIDATE_CAPTURE.get()
-    if capture is not None:
-        capture(payload)
-
-
-def prepare_selected_inputs(tool, arguments, selected):
+def prepare_selected_inputs(tool, arguments, selected, *, step_id=None):
     prepare = _INPUT_PREPARER.get()
     if prepare is None or not tool.application_inputs:
         return arguments

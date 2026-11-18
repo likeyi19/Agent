@@ -128,10 +128,10 @@ def multi_input_work():
         'production.epizoo': epizoo_embedding.epizoo_backend.embed_cells,
         'verification.clustering': SNAPATAC2.publication.verify_result.__func__,
         'verification.evaluation': verifier._verify_clustering_evaluation,
-        'compiler': semantic_compiler.compile_semantic_plan,
+        'compiler': semantic_compiler.compile_analysis,
         'preflight': PlanExecutor.preflight,
         'interpreter': turn_decisions.interpret,
-        'planner': LLMPlanner._plan_detailed,
+        'planner': LLMPlanner.acquire_candidate,
     }
     codes = {function.__code__: name for name, function in functions.items()}
     counts, lock = Counter(), threading.Lock()
@@ -476,7 +476,7 @@ def test_missing_label_continuation_preserves_original_selected_roles(tmp_path, 
             pending = execute(client, multi_body(selected, utterance=OBJECTIVE))
         assert_no_owner(first)
         assert pending['response']['kind'] == 'clarify', pending
-        assert pending['response']['clarification']['choices'] == ['label_key']
+        assert pending['response']['clarification']['choices'] == ['evaluation.label_key']
         original = harness.service._application.sessions.load('session').interactions[0]
         with multi_input_work() as resumed:
             result = execute(client, multi_body(selected if resubmit_selection else None,

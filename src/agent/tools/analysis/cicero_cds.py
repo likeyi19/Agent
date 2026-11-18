@@ -106,9 +106,9 @@ def unpack(source, target):
     # This member contains scientific axes/data, not a control-plane request.
     # Keep the existing strict JSON parser; kernel memory and archive disk
     # budgets govern its decoding instead of an axis-size proxy.
-    from .sequence_prediction import io
+    from agent.tools._file_identity import read_json
     path = target / 'object.json'
-    obj = io.read_json(path, limit=path.stat().st_size)
+    obj = read_json(path, limit=path.stat().st_size)
     if obj.get('format') != 'cicero-cds-exchange.v1' or obj.get('storage') not in ('dense', 'sparse'):
         raise ValueError('Unsupported Cicero exchange format')
     observations, regions = obj['observations']['ids'], obj['regions']['ids']
@@ -236,3 +236,25 @@ result = publication.result
 verify_publication = publication.verify_publication
 verify_result = publication.verify_result
 recover = publication.recover
+
+
+def prepare_operation(arguments, context):
+    """Selected scientific owner exposes typed prerequisites on the actual input."""
+    from agent.orchestration.scientific_inputs import parameter_requirements, ScientificInputRequired
+    arguments=dict(arguments)
+    if arguments.get('function_name')=='make_cicero_cds' and not arguments.get('reduced_coordinates_key'):
+        props=context.planned(arguments.get('input_path'))
+        representation=props.get('produced_representation')
+        if not representation and len(props.get('representations',()))==1:
+            representation=props['representations'][0]
+        if representation:
+            arguments['reduced_coordinates_key']=representation
+    observed_args = dict(arguments)
+    source = context.existing(arguments.get('input_path'))
+    if source is not None:
+        observed_args['input_path'] = source.path
+    names = parameter_prerequisites(observed_args)
+    needs = parameter_requirements(context.tool, names)
+    if needs:
+        raise ScientificInputRequired(*needs, bindings=arguments)
+    return arguments

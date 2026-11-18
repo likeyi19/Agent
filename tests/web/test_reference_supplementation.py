@@ -100,14 +100,26 @@ def test_reference_question_does_not_offer_unrelated_generic_companions(referenc
     assert next_pending['choices']
     turn=client.get('/api/v1/sessions/second').json()['turns'][-1]
     offered=refs.input_set(promoted)
-    assert [(c['handle'],c['label']) for c in turn['clarification_choices']]==[
+    assert [(c['choice_identity'],c['label']) for c in turn['clarification_choices']]==[
         ('resource.'+offered.input_set_id,offered.label)]
     assert not admitted
 
 
-def test_generate_qualify_continue_share_and_reopen(reference_web,monkeypatch):
+def test_generate_qualify_continue_share_and_reopen(reference_web,monkeypatch,guidance=False):
     client,backend,uploads,source,start,admitted=reference_web
     pending=start();assert not pending['choices']
+    if guidance:
+        monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / 'application'))
+        from test_scientific_guidance import Model, decision
+        class FailedInterpretation:
+            def complete(self, **kwargs):
+                return json.dumps(dict(turn_schema_version=1,decision=dict(kind='invalid_fixture_decision')))
+        answer=backend.service._application.sessions.respond('session','advice','What evidence is still needed?',
+            interpreter=FailedInterpretation() if guidance=='failed' else Model(decision(),tools=('adapt_epizoo_species',),direct=True))
+        assert answer.status==('failed' if guidance=='failed' else 'answered'),answer
+        carrier=backend.service._application.sessions.load('session').interactions[-1]
+        assert carrier.preparation is None and carrier.snapshot['preparation']
+        assert client.get('/api/v1/sessions/session/reference-prerequisite').json()['pending']==pending
     from agent.tools.data import regulatory_feature_reference as owner
     original=owner.build_regulatory_feature_reference;calls=[]
     def counted(**kwargs):calls.append(1);return original(**kwargs)
@@ -125,6 +137,13 @@ def test_generate_qualify_continue_share_and_reopen(reference_web,monkeypatch):
     assert promoted['resource']['genome']['fasta']['sha256'] == refs.check_record(uploads.resources,private).genome.fasta.sha256
     assert Path(promoted['resource']['genome']['fasta']['path']).is_relative_to(uploads.resources.library.root)
     assert client.get('/api/v1/sessions/second/reference-prerequisite').json()['pending']['choices']
+    task = client.get('/api/v1/sessions/session/turns/first').json()['preparation_task_id']
+    response = client.post('/api/v1/sessions/session/turns',json=dict(turn_id='recapture',
+        expected_generation=0,utterance='',resume_task_id=task))
+    assert response.status_code==202,response.text
+    recaptured=wait_turn(client,'recapture')
+    assert recaptured['status']=='clarification' and recaptured['clarification_choices']
+    assert not admitted  # Recapture never executes or acquires a candidate.
     body=submission(turn='answer',resource_id=source['resource_id'],input_set_id='fish',utterance='Use the qualified reference and continue.')
     assert client.post('/api/v1/sessions/session/turns',json=body).status_code==202
     result=wait_turn(client,'answer');assert result['status']=='failed',result
@@ -318,3 +337,8 @@ def test_shared_genome_does_not_authorize_incompatible_regions(reference_web, tm
     start('second'); origin = backend.service._application.sessions.load('second').interactions[0]
     with pytest.raises(ValueError):
         refs.select(uploads.resources, 'second', origin, 'resource.'+refs.input_set(genome).input_set_id)
+
+
+@pytest.mark.parametrize('carrier', ['guidance','failed'])
+def test_reference_supplement_survives_guidance_carrier(reference_web,monkeypatch,carrier):
+    test_generate_qualify_continue_share_and_reopen(reference_web,monkeypatch,guidance=carrier)

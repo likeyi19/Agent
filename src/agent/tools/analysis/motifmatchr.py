@@ -97,7 +97,7 @@ def parameter_prerequisites(inputs):
         return missing
     # Catalog discovery only. Execution still checks exact closure, coordinates
     # and compatibility through the existing resource owner.
-    entries = library().entries()
+    entries = sequence_reference.qualified_genome_entries()
     taxonomy = effective.get('taxonomy_id')
     if effective.get('genome_path'):
         if taxonomy is None:
@@ -284,3 +284,54 @@ DELIVERY_FILES = {
     'metadata.json': ('Native motif matching source, parameters and resources', 'application/json'),
     'native-receipt.json': ('Native matchMotifs completion and software versions', 'application/json'),
 }
+
+
+
+def preparation_requirements(arguments, context):
+    from dataclasses import replace
+    from agent.orchestration.scientific_inputs import parameter_requirements
+    observed_args = dict(arguments)
+    source = context.existing(arguments.get('input_path'))
+    if source is not None:
+        observed_args['input_path'] = source.path
+    names = parameter_prerequisites(observed_args)
+    requirements = parameter_requirements(context.tool, names)
+    if source is None:
+        return requirements
+    _, effective = declarations(source.path, observed_args)
+    entries = sequence_reference.qualified_genome_entries() if (effective.get('taxonomy_id') is not None or effective.get('genome_resource') or any(n in ('genome_resource','motif_collection') for n in names)) else ()
+    taxonomy = effective.get('taxonomy_id')
+    genomes = [e for e in entries if e['kind']=='genome' and e['resource']['assembly']==effective.get('assembly')
+        and (not effective.get('genome_resource') or effective['genome_resource'] in (e['id'],e['label']))]
+    if len(genomes)==1:
+        native_taxonomy=genomes[0]['resource']['species']['taxonomy_id']
+        if taxonomy is not None and taxonomy!=native_taxonomy:
+            from agent.orchestration.scientific_inputs import ScientificDiagnostic
+            raise ScientificDiagnostic('REFERENCE_TAXONOMY_CONFLICT','Declared species differs from the selected qualified genome.')
+        taxonomy=native_taxonomy
+    result=[]
+    for req in requirements:
+        options=[]
+        if req.argument=='genome_resource':
+            choices=genomes
+        elif req.argument=='motif_collection':
+            choices=[e for e in entries if e['kind']=='motif_collection' and taxonomy in e['resource']['applicable_taxonomy_ids']]
+        else:
+            choices=[]
+        for entry in choices:
+            options.append(dict(handle='installed.'+entry['id'],label=entry['label'],
+                argument=req.argument,value=entry['id'], qualified_resource=dict(id=entry['id'],files=entry['files'])))
+        dependencies = req.dependencies
+        if req.argument in ('genome_resource','motif_collection'):
+            dependencies += tuple('declaration:'+name for name in ('assembly','taxonomy_id','genome_resource','genome_path'))
+        result.append(replace(req,kind='resource' if options else req.kind,
+            offers=tuple(options),dependencies=dependencies))
+    return tuple(result)
+
+
+def prepare_operation(arguments, context):
+    from agent.orchestration.scientific_inputs import ScientificInputRequired
+    needs = preparation_requirements(arguments, context)
+    if needs:
+        raise ScientificInputRequired(*needs, bindings=arguments)
+    return arguments

@@ -54,8 +54,8 @@ def test_missing_file_request_retains_explicit_accepted_parameter_reference():
 
 
 @pytest.mark.parametrize('field,target', [
-    ('fastq', 'prepare_scATAC_fragments'), ('bam', 'prepare_scATAC_bam_fragments'),
-    ('fragments', 'import_scATAC_fragments'), ('annotation', 'annotate_scATAC_cell_types'),
+    ('fastq', 'run_chromap'), ('bam', 'run_snapatac2'),
+    ('fragments', 'run_snapatac2'), ('annotation', 'annotate_scATAC_cell_types'),
     ('epizoo', 'epizoo_embed_cells'), (None, 'inspect_scATAC'),
 ])
 def test_role_prerequisite_retains_the_same_precise_research_intent(field, target):

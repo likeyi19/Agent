@@ -66,6 +66,18 @@ class _ScientificMatrixArtifact:
     manifest_sha256: str | None = None
 
 
+def _selected_attachment_sources(admitted, members):
+    """Project exact registered role members into a displayed attachment group."""
+    # source.N indices alone do not survive derived/repacked bindings.
+    role_sources = {role['source'] for role in admitted.get('roles', ())}
+    def identity(member):
+        return tuple(member.get(key) for key in (
+            'resource_id', 'record_sha256', 'source_path', 'source_sha256'))
+    selected = {identity(member) for i, member in enumerate(
+        (admitted.get('registered_input') or {}).get('members', ())) if f'source.{i}' in role_sources}
+    return {f'source.{i}' for i, member in enumerate(members) if identity(member) in selected}
+
+
 class InteractiveBoundaryError(ValueError):
     """A safe boundary error; the original typed exception remains its cause."""
 
@@ -510,10 +522,10 @@ class InteractiveAgentApplication:
 
     def _checked_submission(self, session_id, turn_id, utterance, *, expected_generation,
                             execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                            registered_input=None, attachment_ids=(), clarification_choice=None, parameter_overrides=(), candidate_selection=None, selected_results=(), rerun_revision_id=None):
+                            registered_input=None, attachment_ids=(), clarification_choice=None, parameter_overrides=(), candidate_selection=None, selected_results=(), rerun_revision_id=None, resume_task_id=None):
         _identifier(turn_id)
         if (type(expected_generation) is not int or expected_generation < 0
-                or type(utterance) is not str or (not utterance.strip() and not rerun_revision_id and not parameter_overrides and not clarification_choice) or len(utterance) > 4096):
+                or type(utterance) is not str or (not utterance.strip() and not resume_task_id and not rerun_revision_id and not parameter_overrides and not clarification_choice) or len(utterance) > 4096):
             raise _fail('INTERACTIVE_INPUT_INVALID')
         if predecessor_turn_id is not None:
             _identifier(predecessor_turn_id)
@@ -544,6 +556,11 @@ class InteractiveAgentApplication:
             settings = declarations(parameter_overrides, self._application.registry)
         except (ValueError, TypeError, KeyError) as exc:
             raise _fail('INTERACTIVE_INPUT_INVALID') from exc
+        if resume_task_id is not None:
+            _identifier(resume_task_id)
+            if utterance or settings or candidate_selection or clarification_choice or selected_results or rerun_revision_id or inputs:
+                raise _fail('INTERACTIVE_INPUT_INVALID')
+            submission['resume_task_id'] = resume_task_id
         if rerun_revision_id is not None:
             _identifier(rerun_revision_id)
             if utterance or not settings or candidate_selection or clarification_choice or selected_results or attachment_ids or registered_input or inputs:
@@ -574,10 +591,10 @@ class InteractiveAgentApplication:
             raise _fail('INTERACTIVE_INPUT_INVALID') from exc
         state = self._load(session_id)
         existing = next((i for i in state.interactions if i.turn_id == turn_id), None)
-        if existing is None and not utterance.strip() and not rerun_revision_id and not clarification_choice:
+        if existing is None and not utterance.strip() and not resume_task_id and not rerun_revision_id and not clarification_choice:
             from .dialogue_execution import capture_prerequisite
             pending = capture_prerequisite(state.interactions, state.active_revision_id,
-                state.generation, submission, predecessor_turn_id)
+                state.generation, submission, predecessor_turn_id, live=True)
             if pending is None or pending['field'] != 'parameters':
                 raise _fail('INTERACTIVE_INPUT_INVALID')
         single_h5ad = (type(registered_input) is RegisteredInput and registered_input.tool_name == 'inspect_scATAC'
@@ -597,7 +614,8 @@ class InteractiveAgentApplication:
                 for key in ('available_input', 'available_input_overflow'):
                     if key in (existing.submission or {}):
                         submission[key] = _serialize(existing.submission[key])
-            elif not state.interactions or state.interactions[-1].prerequisite is None:
+            elif not state.interactions or (state.interactions[-1].prerequisite is None
+                    and (state.interactions[-1].admitted or {}).get('preparation_result', {}).get('status') != 'NEEDS_INPUT'):
                 # Current offers keep their exact positions; history only adds
                 # candidates. A selected H5AD remains the selected primary source.
                 current = ([dict(resource_id=registered_input.resource_id,
@@ -645,7 +663,7 @@ class InteractiveAgentApplication:
 
     def validate_submission(self, session_id, turn_id, utterance, *, expected_generation,
                             execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                            registered_input=None, input_sets=(), attachment_ids=(), clarification_choice=None, parameter_overrides=(), candidate_selection=None, selected_results=(), rerun_revision_id=None):
+                            registered_input=None, input_sets=(), attachment_ids=(), clarification_choice=None, parameter_overrides=(), candidate_selection=None, selected_results=(), rerun_revision_id=None, resume_task_id=None):
         """Check a submission without providers, persistence, or execution.
 
         The normalized fingerprint permits a local transport to coalesce in-flight
@@ -654,7 +672,7 @@ class InteractiveAgentApplication:
         """
         _, _, submission, _, duplicate = self._checked_submission(session_id, turn_id, utterance,
             expected_generation=expected_generation, execution_inputs=execution_inputs,
-            predecessor_turn_id=predecessor_turn_id, profile_id=profile_id, registered_input=registered_input, attachment_ids=attachment_ids, clarification_choice=clarification_choice, parameter_overrides=parameter_overrides, candidate_selection=candidate_selection, selected_results=selected_results, rerun_revision_id=rerun_revision_id)
+            predecessor_turn_id=predecessor_turn_id, profile_id=profile_id, registered_input=registered_input, attachment_ids=attachment_ids, clarification_choice=clarification_choice, parameter_overrides=parameter_overrides, candidate_selection=candidate_selection, selected_results=selected_results, rerun_revision_id=rerun_revision_id, resume_task_id=resume_task_id)
         if not duplicate and registered_input is not None:
             self.resources.validate_binding(registered_input)
         return digest(dict(session_id=session_id, turn_id=turn_id,
@@ -662,11 +680,11 @@ class InteractiveAgentApplication:
 
     def submit_turn(self, session_id, turn_id, utterance, *, expected_generation,
                     execution_inputs=None, predecessor_turn_id=None, profile_id=None,
-                    registered_input=None, input_sets=(), attachment_ids=(), clarification_choice=None, parameter_overrides=(), candidate_selection=None, selected_results=(), rerun_revision_id=None):
+                    registered_input=None, input_sets=(), attachment_ids=(), clarification_choice=None, parameter_overrides=(), candidate_selection=None, selected_results=(), rerun_revision_id=None, resume_task_id=None):
         profile, inputs, submission, state, duplicate = self._checked_submission(
             session_id, turn_id, utterance, expected_generation=expected_generation,
             execution_inputs=execution_inputs, predecessor_turn_id=predecessor_turn_id,
-            profile_id=profile_id, registered_input=registered_input, attachment_ids=attachment_ids, clarification_choice=clarification_choice, parameter_overrides=parameter_overrides, candidate_selection=candidate_selection, selected_results=selected_results, rerun_revision_id=rerun_revision_id)
+            profile_id=profile_id, registered_input=registered_input, attachment_ids=attachment_ids, clarification_choice=clarification_choice, parameter_overrides=parameter_overrides, candidate_selection=candidate_selection, selected_results=selected_results, rerun_revision_id=rerun_revision_id, resume_task_id=resume_task_id)
         if duplicate:
             return self.turn(session_id, turn_id)
         sessions = self._application.sessions
@@ -703,11 +721,21 @@ class InteractiveAgentApplication:
                         reference_resources=self.resources)
                     presentation = _present(outcome, self._load(session_id), turn_id=turn_id)
                 except SessionConflictError as exc:
+                    latest = self._load(session_id)
+                    captured = next((i for i in latest.interactions if i.turn_id == turn_id), None)
                     code = ('INTERACTIVE_GENERATION_CONFLICT'
-                        if self._load(session_id).generation != expected_generation
-                        and not any(i.turn_id == turn_id for i in self._load(session_id).interactions)
+                        if latest.generation != expected_generation and captured is None
                         else 'INTERACTIVE_TURN_CONFLICT')
-                    raise _fail(code) from exc
+                    if (captured is None or any(t.turn_id == turn_id for t in latest.turns)
+                            or captured.utterance != utterance or _serialize(captured.submission) != submission):
+                        raise _fail(code) from exc
+                    # A captured losing answer is a completed rejection, not an
+                    # interrupted scientific Run or authority to retry it.
+                    sessions._store._update(session_id, lambda state: replace(state, interactions=tuple(
+                        replace(i, status='failed') if i.turn_id == turn_id else i for i in state.interactions)))
+                    error = _fail(code).error
+                    presentation = PresentedResponse(kind='execute', status='failed',
+                        text=error.message, error=error)
                 except Exception as exc:
                     # Sanitized completion is stored only for a captured turn.
                     if not any(i.turn_id == turn_id for i in self._load(session_id).interactions):
@@ -844,6 +872,7 @@ class InteractiveAgentApplication:
             metadata = raw[field + '_sources']
             from .raw_handoff import declaration, source_handles
             offered = set(source_handles(declaration(_serialize(raw[field]), field)))
+            offered.update(_selected_attachment_sources(raw, metadata['members']))
             captured_attachments = [dict(resource_id=m['resource_id'], label=m['label'],
                 input_type=m['input_type'], use='offered_for_analysis' if f'source.{i}' in offered else 'staged')
                 for i, m in enumerate(metadata['members'])]
@@ -864,6 +893,20 @@ class InteractiveAgentApplication:
         if interaction is not None and state.interactions[-1].turn_id == turn_id and status == 'clarification':
             from .structured_parameters import scope_choices
             choices = scope_choices(interaction) or choices
+        if interaction is not None and interaction.preparation is not None and status == 'clarification':
+            from .preparation_state import choices as preparation_choices, head
+            if head(state.interactions, interaction.preparation['task_id']) == interaction:
+                choices = preparation_choices(interaction)
+        recheck=None
+        if interaction is not None and interaction.preparation is not None:
+            from .preparation_state import head,choices as preparation_choices,observation
+            task_id=interaction.preparation['task_id']
+            task_turns={i.turn_id for i in state.interactions if i.preparation is not None and i.preparation['task_id']==task_id}
+            recheck=(head(state.interactions,task_id)==interaction and status in ('answered','failed','clarification')
+                and not any(t.turn_id in task_turns for t in state.turns))
+            if (recheck and status=='answered' and interaction.base_generation==state.generation
+                    and (observation(interaction) or {}).get('status')=='READY'):
+                choices=preparation_choices(interaction)
         return TurnView(session_id=state.session_id, turn_id=turn_id,
             utterance='' if interaction is None else interaction.utterance,
             base_generation=turn.base_generation if interaction is None else interaction.base_generation,
@@ -873,6 +916,8 @@ class InteractiveAgentApplication:
             status=status, response=response, error=error, steps=steps, state_revision=state_revision,
             attachments=tuple(attachments), export_requested=True if admitted.get('export') else None,
             rerun_revision_id=None if interaction is None else (interaction.submission or {}).get('rerun_revision_id'),
+            preparation_recheck=recheck,
+            preparation_task_id=None if interaction is None or interaction.preparation is None else interaction.preparation['task_id'],
             clarification_choices=choices or None)
 
     def turn(self, session_id, turn_id):

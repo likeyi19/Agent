@@ -127,6 +127,15 @@ def prepare_input(args, stage, *, source=None):
     if args.get('cell_subset') is not None:
         matrix, membership = subset_input(matrix, args, source or file_closure([args['input_path']])[0])
         effective['_cell_subset'] = membership
+    if args.get('function_name')=='tl.dpt' and args.get('root_cell') is None:
+        root=matrix.uns.get('iroot')
+        if (args.get('cell_subset') is not None or orientation=='features_by_cells'
+                or not isinstance(root,(int,np.integer)) or isinstance(root,(bool,np.bool_)) or not 0<=root<matrix.n_obs):
+            raise ValueError('DPT requires an explicit root_cell after row adaptation or a valid source uns.iroot.')
+    if args.get('root_cell') is not None:
+        if args.get('function_name')!='tl.dpt' or not matrix.obs_names.is_unique or args['root_cell'] not in matrix.obs_names:
+            raise ValueError('DPT root_cell must name one exact input observation.')
+        matrix.uns['iroot']=int(matrix.obs_names.get_loc(args['root_cell']))
     matrix.write_h5ad(stage / 'input.h5ad')
     return matrix, effective
 
@@ -180,10 +189,177 @@ def _installed_parameter_metadata(executable, package, function):
         return {}
 
 
+def selected_root_axis(path, arguments):
+    """Read only the explicitly selected root axis and optional subset field."""
+    from .categorical import _series
+    from .peak_h5ad import metadata_item
+    with h5py.File(path,'r') as handle:
+        axis='var' if arguments.get('input_orientation')=='features_by_cells' else 'obs'
+        group=metadata_item(handle,axis)
+        index_path=axis+'/'+group.attrs['_index']
+        selection=arguments.get('cell_subset')
+        paths=[index_path]+([axis+'/'+selection['groupby']] if selection is not None and selection.get('groupby') else [])
+        peak_h5ad.inspect(handle,require_matrix=False,metadata_paths=paths)
+        ids=list(map(str,_series(metadata_item(handle,index_path))))
+        selection=arguments.get('cell_subset')
+        if selection is not None:
+            positions=selection.get('positions')
+            if positions is None and selection.get('groupby'):
+                values=_series(metadata_item(handle,axis+'/'+selection['groupby']))
+                positions=np.flatnonzero(values.isin(selection['groups'])).tolist()
+            if positions is not None:
+                ids=[ids[i] for i in positions]
+        return ids
+
+
 class MatrixPackage:
     """One package interface, several compatible public functions, one lifecycle."""
     FACT_FIELDS, RESULT_FIELDS, DELIVERY_FILES = FACT_FIELDS, RESULT_FIELDS, DELIVERY_FILES
     arguments = staticmethod(arguments)
+
+    def input_properties(self, arguments, context, *, seen=()):
+        props=dict(self._input_properties(arguments,context,seen=seen))
+        if arguments.get('cell_subset') is not None or arguments.get('input_orientation')=='features_by_cells':
+            props.update(root=False,graphs=())
+            if arguments.get('input_orientation')=='features_by_cells':props['representations']=()
+        return props
+
+    def _input_properties(self, arguments, context, *, seen=()):
+        """Shallow existing metadata and symbolic promises remain distinguishable."""
+        from agent.schemas import StepOutputRef
+        source=arguments.get('input_path')
+        observed=context.existing(source)
+        if observed is None and isinstance(source,StepOutputRef):
+            return context.planned(source,seen=seen)
+        if observed is None:
+            return {}
+        from agent.tools._file_identity import checked_file
+        checked_file(observed.path,observed.sha256)
+        with h5py.File(observed.path,'r') as handle:
+            from .peak_h5ad import metadata_item
+            representations=metadata_item(handle,'obsm')
+            reps=tuple(representations) if isinstance(representations,h5py.Group) else ()
+            graphs=[]
+            uns=metadata_item(handle,'uns')
+            if isinstance(uns,h5py.Group):
+                for key in uns:
+                    item=metadata_item(handle,'uns/'+key)
+                    if isinstance(item,h5py.Group) and all(n in item for n in ('connectivities_key','distances_key')):
+                        selected_paths=['uns/'+key+'/'+n for n in ('connectivities_key','distances_key')]
+                        peak_h5ad.inspect(handle,require_matrix=False,metadata_paths=selected_paths,max_logical_bytes=1024**2)
+                        names=[read_elem(metadata_item(handle,name)) for name in selected_paths]
+                        if all(isinstance(n,str) and metadata_item(handle,'obsp/'+n) is not None for n in names):
+                            # Presence is a native schema check, never package
+                            # provenance or scientific graph qualification.
+                            graphs.append('scanpy:'+key)
+            root=metadata_item(handle,'uns/iroot')
+            valid_root=isinstance(root,h5py.Dataset) and root.shape==() and root.dtype.kind in 'iu' and 0<=int(root[()])<len(handle['obs'][handle['obs'].attrs['_index']])
+            if metadata_item(handle,'obsp/distances') is not None:
+                graphs.append('snapatac2:distances')
+        checked_file(observed.path,observed.sha256)
+        if arguments.get('cell_subset') is not None or arguments.get('input_orientation')=='features_by_cells':
+            valid_root=False
+            graphs=[]
+        return dict(representations=reps,graphs=tuple(graphs),root=valid_root,observed=True)
+
+    def planned_output_properties(self, arguments, port, context, *, seen=()):
+        if port not in ('dataset','fragments'):
+            return {}
+        function=arguments.get('function_name');kwargs=arguments.get('kwargs',{})
+        from .cell_result import grouping_key, planned_count_preservation, representation_key
+        from .snapatac_raw import FUNCTIONS as RAW_FUNCTIONS
+        if self.package=='snapatac2' and function in RAW_FUNCTIONS:
+            inherited=context.planned(arguments.get('input_path'),seen=seen)
+            return {'source_reference':inherited['source_reference']} if inherited.get('source_reference') else {}
+        inherited=self.input_properties(arguments,context,seen=seen)
+        # Slot retention and count preservation are distinct native properties.
+        # Reviewed matrix functions retain cell slots unless the input adapter
+        # changes the observation axis. Raw ingestion is handled above.
+        retains_slots=(self.package in ('scanpy','episcanpy','snapatac2')
+            and function in self.FUNCTIONS and arguments.get('cell_subset') is None
+            and arguments.get('input_orientation','cells_by_features')=='cells_by_features')
+        props=dict(inherited) if retains_slots else {}
+        props.pop('observed',None)
+        props.pop('produced_representation',None)
+        if inherited.get('source_reference'):
+            props['source_reference']=inherited['source_reference']
+        props['preserves_counts']=planned_count_preservation(context.tool.name,arguments)
+        inplace=kwargs.get('inplace',True) is not False
+        reps=set(props.get('representations',()))
+        if inplace:
+            rep = representation_key(self.package,function,kwargs)
+            if rep:
+                reps.add(rep)
+                props['produced_representation']=rep
+            group=grouping_key(self.package,function,kwargs)
+            if group:props.update(grouping_key=group,grouping_step=context.step_id)
+            graphs=set(props.get('graphs',()))
+            if function=='pp.neighbors' and self.package in ('scanpy','episcanpy'):
+                graphs.add('scanpy:'+kwargs.get('key_added','neighbors'))
+            if function=='pp.knn' and self.package=='snapatac2':graphs.add('snapatac2:distances')
+            props['graphs']=tuple(sorted(graphs))
+        props['representations']=tuple(sorted(reps))
+        return props
+
+    def prepare_operation(self, arguments, context):
+        """Preparable presence checks; native numerical/graph validation still runs."""
+        from agent.orchestration.scientific_inputs import ScientificDiagnostic, ScientificInputRequired, parameter_requirements
+        function=arguments.get('function_name');kwargs=arguments.get('kwargs',{})
+        if function is not None and not self.parameter_selection_applicable(arguments):
+            raise ScientificDiagnostic('NATIVE_PARAMETER_SELECTION_NOT_APPLICABLE',
+                'Parameter selection applies only to the six adapted native clustering functions.')
+        if arguments.get('root_cell') is not None and function!='tl.dpt':
+            raise ScientificDiagnostic('NATIVE_ROOT_NOT_APPLICABLE','root_cell applies only to DPT.')
+        if self.package not in ('scanpy','episcanpy','snapatac2') or function is None or 'input_path' not in arguments:
+            return arguments
+        from .snapatac_raw import FUNCTIONS as RAW_FUNCTIONS
+        if self.package=='snapatac2' and function in RAW_FUNCTIONS:
+            return arguments
+        props=self.input_properties(arguments,context)
+        representations=props.get('representations',())
+        rep=kwargs.get('use_rep',arguments.get('use_rep'))
+        if self.package=='episcanpy' and function in ('tl.kmeans','tl.hc'):rep='X_pca'
+        if self.package=='snapatac2' and function in ('pp.knn','tl.umap','tl.dbscan') and rep is None:rep='X_spectral'
+        if rep is not None and rep!='X' and rep not in representations:
+            raise ScientificDiagnostic('NATIVE_REPRESENTATION_REQUIRED','The selected native function requires the existing or planned representation '+str(rep)+'. Include its native producer or supply a compatible input.')
+        graph=None
+        if self.package in ('scanpy','episcanpy') and function in ('tl.leiden','tl.louvain','tl.umap','tl.dpt','tl.diffmap','tl.paga') and not kwargs.get('obsp'):
+            graph='scanpy:'+kwargs.get('neighbors_key','neighbors')
+        if self.package=='snapatac2' and function=='tl.leiden':graph='snapatac2:distances'
+        if graph is not None and graph not in props.get('graphs',()):
+            raise ScientificDiagnostic('NATIVE_GRAPH_REQUIRED','The selected native function requires a compatible existing or planned '+graph+' graph. Include its native neighbors producer or supply that graph; no package graph is substituted.')
+        metadata=self.parameter_metadata(function)
+        missing=[name for name in self.FUNCTIONS.get(function,()) if metadata.get(name,{}).get('required') and name not in kwargs]
+        # The authorized ASW adapter resolves these native count operands after
+        # selected-method execution; an explicit native-default request cannot.
+        if function in ('tl.kmeans','tl.hc') and arguments.get('parameter_selection')!='native_defaults':
+            missing=[name for name in missing if name!='num_clusters']
+        values=dict(arguments);bound_kwargs=dict(kwargs);needs=[]
+        for name in missing:
+            known=context.planned_parameter_value(arguments,metadata[name])
+            if known is not None:
+                bound_kwargs[name]=known
+                continue
+            from agent.orchestration.scientific_inputs import ScientificInputRequirement
+            observed=context.existing(arguments.get('input_path'))
+            choices=observed.fields('obs') if observed is not None and name in ('groupby','groups','batch') else ()
+            needs.append(ScientificInputRequirement('kwargs','kwargs','scalar',member=name,
+                choices=tuple(choices),dependencies=('source:bytes',),
+                applicability=dict(expected_types=metadata.get(name,{}).get('types',()),native_required=True),
+                messages=('Supply the native required '+name+' for '+function+'.',)))
+        if bound_kwargs!=kwargs:values['kwargs']=bound_kwargs
+        if needs:raise ScientificInputRequired(*needs,bindings=values)
+        arguments=values
+        if function=='tl.dpt':
+            if arguments.get('root_cell'):
+                observed=context.existing(arguments.get('input_path'))
+                if observed is not None:
+                    ids=selected_root_axis(observed.path,arguments)
+                    if ids.count(arguments['root_cell'])!=1:
+                        raise ScientificDiagnostic('NATIVE_ROOT_INVALID','DPT root_cell must identify one observation in the selected input population.')
+            elif not props.get('root'):
+                raise ScientificInputRequired(*parameter_requirements(context.tool,('root_cell',)),bindings=arguments)
+        return arguments
 
     def __init__(self, package, version, runtime, functions, native_arguments, guidance):
         self.package, self.version, self.runtime = package, version, runtime
@@ -225,6 +401,23 @@ class MatrixPackage:
         for name in ('load', 'result', 'verify_publication', 'verify_result', 'recover'):
             setattr(self, name, getattr(self.publication, name))
 
+    def output_available(self, args, output_key):
+        """Static publication availability from the same native output owner."""
+        if self.package != 'snapatac2':
+            return True
+        from .snapatac_raw import outputs
+        produced = outputs({'arguments': args})
+        for name in ('matrix', 'fragments'):
+            if output_key in (name + '_path', name + '_sha256'):
+                return produced[name] is not None
+        return True
+
+    def parameter_selection_applicable(self, args):
+        from .native_clustering import ELIGIBLE
+        selection = args.get('parameter_selection')
+        return selection is None or ((self.package, args.get('function_name')) in ELIGIBLE
+            and selection in ('asw', 'native_defaults'))
+
     def native_arguments(self, args):
         function = args.get('function_name')
         kwargs = native_kwargs(self.FUNCTIONS, args)
@@ -234,10 +427,8 @@ class MatrixPackage:
             from .snapatac_raw import FUNCTIONS
             if function in FUNCTIONS and any(k in args for k in ('gene_activity', 'cell_subset', 'input_orientation')):
                 raise ValueError('AnnData input adaptations apply to native matrix consumers, not raw functions')
-        if args.get('parameter_selection') is not None:
-            from .native_clustering import ELIGIBLE
-            if (self.package, function) not in ELIGIBLE or args['parameter_selection'] not in ('asw', 'native_defaults'):
-                raise ValueError('Parameter selection applies only to the six adapted native clustering functions')
+        if not self.parameter_selection_applicable(args):
+            raise ValueError('Parameter selection applies only to the six adapted native clustering functions')
         if args.get('use_rep') is not None:
             if 'use_rep' not in self.FUNCTIONS[function]:
                 raise ValueError('Representation selection requires a native use_rep parameter')
@@ -299,7 +490,11 @@ class MatrixPackage:
             return {}
         if not executable.is_file():
             return {}
-        return _installed_parameter_metadata(str(executable), self.package, function)
+        metadata=_installed_parameter_metadata(str(executable), self.package, function)
+        # Required grouping operands may use a registered producer's guaranteed
+        # grouping key. This same rule owns preparation and final scope checks.
+        return {name:({**item,'value_from_planned_input':dict(port='dataset',property='grouping_key')}
+            if name in ('groupby','groups') and item.get('required') else item) for name,item in metadata.items()}
 
     def native(self, args, stage, matrix):
         is_r = self.package == 'Signac'
@@ -579,7 +774,7 @@ class MatrixPackage:
             current().register_execution(self.KIND, root, execution_identity)
         return self.verify_publication(path, expected_sha256=sha)
 
-    def invoke(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, use_rep=None, parameter_selection=None,
+    def invoke(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, use_rep=None, parameter_selection=None, root_cell=None,
                gene_activity=None, cell_subset=None, input_orientation=None, grouping_path=None, group_column=None):
         return self.execute({k: v for k, v in locals().items() if k != "self" and v is not None})
 
@@ -587,7 +782,7 @@ class MatrixPackage:
         return self.execute({k: v for k, v in locals().items() if k != 'self' and v is not None})
 
     def invoke_episcanpy(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None,
-                         matrix_semantics=None, use_rep=None, parameter_selection=None, gene_anno_path=None,
+                         matrix_semantics=None, use_rep=None, parameter_selection=None, root_cell=None, gene_anno_path=None,
                          gene_anno_sha256=None, species=None, assembly=None, gene_activity=None, cell_subset=None, input_orientation=None):
         return self.execute({k: v for k, v in locals().items() if k != 'self' and v is not None})
 

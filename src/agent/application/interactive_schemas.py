@@ -325,8 +325,12 @@ class TurnView(_JsonModel):
     rerun_revision_id: str | None = dataclass_field(default=None, metadata={'omit_none': True})
     export_requested: bool | None = dataclass_field(default=None, metadata={'omit_none': True})
     clarification_choices: object = dataclass_field(default=None, metadata={'omit_none': True})
+    preparation_task_id: str | None = dataclass_field(default=None, metadata={'omit_none': True})
+    preparation_recheck: bool | None = dataclass_field(default=None, metadata={'omit_none': True})
 
     def __post_init__(self):
+        _optional_identifier(self.preparation_task_id, 'preparation_task_id')
+        if self.preparation_recheck is not None:_boolean(self.preparation_recheck,'preparation_recheck')
         if self.clarification_choices is not None:
             object.__setattr__(self, 'clarification_choices', freeze_json_mapping(
                 {'choices': self.clarification_choices}, 'clarification choices')['choices'])

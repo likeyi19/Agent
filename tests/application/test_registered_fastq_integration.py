@@ -179,7 +179,7 @@ def test_registered_fastq_first_acceptance_requires_actual_exact_inspection_memb
         forged = replace(step, resolved_arguments=dict(step.resolved_arguments, raw_input_paths=actual))
         with pytest.raises(ResourceAdmissionError) as error:
             app.resources.validate_result(submission, (forged,))
-        assert error.value.code == 'LOCAL_RESOURCE_BINDING_INVALID'
+        assert error.value.code == 'FASTQ_SOURCE_MISMATCH'
     assert app._application.sessions.load('session') == state
     assert calls == {'intake': 1} and len(models) == 1
 
@@ -328,6 +328,9 @@ def test_registered_fastq_drift_before_first_acceptance_is_atomic(fastqs, tmp_pa
     assert state.turn('analysis').status == state.interactions[0].status == 'failed'
     assert submit(app, binding) == view
     assert calls == {'intake': 1} and len(models) == 1
+    assert [next(k for k in ('turn_schema_version','semantic_prompt_version','output_selection_schema_version')
+        if k in prompt) for prompt in models[0].calls]==[
+            'turn_schema_version','semantic_prompt_version','output_selection_schema_version']
 
 
 class Interrupted(BaseException):
@@ -380,7 +383,7 @@ def test_registered_fastq_rechecks_drift_during_later_first_acceptance_validatio
             records = original_records(*args, **kwargs)
             if acceptance['active']:
                 acceptance['record_reads'] += 1
-                if acceptance['record_reads'] == 2:
+                if acceptance['record_reads'] == 1:
                     change_beyond_intake_prefix(source)
                     mutations.append(phase)
             return records

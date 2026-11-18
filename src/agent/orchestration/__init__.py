@@ -89,7 +89,6 @@ from .semantic_compiler import (
     SemanticSourceSelection,
     SemanticStepOutputSource,
     StepOutputChannelRule,
-    build_m92_semantic_compiler_contract,
     build_semantic_compiler_contract,
     compile_semantic_plan,
 )
@@ -226,7 +225,6 @@ __all__ = [
     "VerificationCheck",
     "VerificationResult",
     "build_default_tool_registry",
-    "build_m92_semantic_compiler_contract",
     "build_semantic_compiler_contract",
     "build_semantic_planning_catalog",
     "build_semantic_planning_prompt",

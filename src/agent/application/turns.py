@@ -9,6 +9,7 @@ from agent.orchestration.planning_model import PlanningModelError
 from agent.orchestration.error_policy import BUILTIN_ERROR_CODES, safe_message_for
 from .session_state import Interaction, SessionConflictError, digest
 from .turn_context import snapshot, public_context
+from .preparation_state import captured_owner as captured_source_owner
 from agent.orchestration.planning_diagnostics import log_operation_event
 from .turn_decisions import (Execute, ExecuteCandidate, Navigate, Clarify, Answer, SpeciesAnswer, ParameterAnswer, RequestRoles, RoleAnswer, RequestResources, ResourceAnswer, IntentError, interpret, clauses,
                              resolve_relation)
@@ -31,6 +32,12 @@ class TurnOutcome:
 
 def _update(sessions, turn_id, **changes):
     def change(state):
+        record = changes.get('preparation')
+        if record is not None and record['previous'] is not None:
+            from .preparation_state import head
+            previous = head(tuple(i for i in state.interactions if i.turn_id != turn_id), record['task_id'])
+            if previous is None or previous.turn_id != record['previous']:
+                raise SessionConflictError('Preparation answer raced with another continuation.')
         return replace(state, interactions=tuple(replace(i, **changes) if i.turn_id == turn_id else i
                                                   for i in state.interactions))
     return sessions._store._update(sessions_id(sessions), change)
@@ -58,23 +65,9 @@ def _terminal(sessions, interaction, clarification):
     species_reason = clarification.reason in {'missing_species', 'ambiguous_species', 'unsupported_species', 'conflicting_species'}
     parameter_reason = clarification.reason in {'conflicting_scientific_parameter', 'invalid_parameter_value', 'ungrounded_operand'}
     reference = captured.get('prerequisite')
-    if reference is not None and reference['field'] in {'parameters', 'roles', 'resources', 'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
+    if reference is not None and reference['field'] == 'parameters' and reference.get('native_failure'):
         prerequisite = {k: _serialize(v) for k, v in reference.items() if k != 'predecessor_turn_id'}
-        if reference['field'] == 'parameters':
-            choices = tuple(reference['missing'])
-        elif reference['field'] in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}:
-            from .raw_handoff import public
-            choices = tuple(public(interaction, sessions.load(sessions_id(sessions)).interactions)['missing'])
-        elif reference['field'] == 'resources':
-            from .resource_continuation import public
-            choices = tuple(c['label'] for c in public(interaction, sessions.load(sessions_id(sessions)).interactions)['choices'])
-        else:
-            from .dialogue_execution import prerequisite_public
-            pending = prerequisite_public(interaction, sessions.load(sessions_id(sessions)).interactions)
-            choices = tuple(r['tool'] + '.' + r['port'] for r in pending['missing_roles'])
-    elif (species_reason or parameter_reason) and reference is not None:
-        prerequisite = {k: reference[k] for k in ('origin_turn_id', 'field', 'resource_context_sha256')}
-        choices = ('human', 'mouse') if species_reason else ('Leiden resolution',)
+        choices = tuple(reference['missing'])
     elif species_reason:
         if clarification.reason == 'missing_species':
             # Only compiler diagnosis creates a new durable missing declaration.
@@ -145,7 +138,7 @@ def _outcome(sessions, interaction, answerer=None):
             if not any(error.code == 'AMBIGUOUS_PARAMETER_SCOPE' for error in run.errors):
                 raise IntentError('invalid_prerequisite')
             return TurnOutcome('clarify', 'clarification', Clarify('ambiguous_parameter',
-                parameter_scope_choices(admitted, state.interactions)))
+                parameter_scope_choices(admitted, state.interactions,interaction=interaction)))
         if interaction.prerequisite is not None and admitted.get('kind') == 'execute':
             if interaction.prerequisite['field'] == 'resources':
                 from .resource_continuation import offers
@@ -207,13 +200,29 @@ class _AdmittedPlanner:
         return delegated
 
 
+def _prepare_research(sessions, interaction, admitted, *, record=None, intake_needs=None, intake_owner=None):
+    from .scientific_preparation import prepare
+    admitted, pending, error, plan = prepare(sessions, interaction, admitted, record=record, intake_needs=intake_needs, intake_owner=intake_owner)
+    result = admitted.get('preparation_result', {})
+    if plan is not None:
+        return admitted, plan, None
+    if result.get('status') == 'NEEDS_INPUT':
+        _update(sessions, interaction.turn_id, admitted=admitted, prerequisite=pending, status='clarification')
+        names = tuple(r['step_id'] + '.' + r['argument'] for r in result['requirements'])
+        return admitted, None, TurnOutcome('clarify', 'clarification',
+            Clarify('missing_parameter_value', names, True))
+    _update(sessions, interaction.turn_id, admitted=admitted, status='failed')
+    return admitted, None, TurnOutcome('execute', 'failed', error=error,
+        text='Scientific preparation failed; execution has not started.' if error is None else error.message)
+
+
 def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_generation=None,
             answerer=None, predecessor_turn_id=None, execution_inputs=None, submission=None,
             epizoo_resources=(), input_sets=(), reference_resources=None):
     # AnalysisSessions.respond supplies a per-call facade over the shared store.
     sessions._interaction_session_id = session_id
     answerer = interpreter if answerer is None else answerer
-    if type(utterance) is not str or (not utterance.strip() and not (submission or {}).get('rerun_revision_id') and not (submission or {}).get('parameter_overrides') and not (submission or {}).get('clarification_choice')) or len(utterance) > 4096:
+    if type(utterance) is not str or (not utterance.strip() and not (submission or {}).get('resume_task_id') and not (submission or {}).get('rerun_revision_id') and not (submission or {}).get('parameter_overrides') and not (submission or {}).get('clarification_choice')) or len(utterance) > 4096:
         raise ValueError('A bounded nonempty utterance is required.')
     try:
         state = sessions.load(session_id)
@@ -243,17 +252,46 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
     if any(t.turn_id == turn_id for t in state.turns): raise SessionConflictError('Turn identity already used.')
     generation = state.generation if expected_generation is None else expected_generation
     if generation != state.generation: raise SessionConflictError('Session generation changed.')
+    from .epizoo_handoff import captured_models
+    input_sets = tuple(input_sets) + captured_models(sessions, state)
+    if reference_resources is not None:
+        from .shared_resources import discover
+        input_sets = tuple(input_sets) + discover(reference_resources, session_id)
+    sessions._input_sets = input_sets
+    sessions._epizoo_resources = tuple(epizoo_resources)
     try:
         tool_names = {}
         captured = snapshot(sessions, state, tool_names=tool_names)
         from .scientific_dialogue import capture as dialogue_capture
         captured['dialogue'] = dialogue_capture(sessions, state, captured, predecessor_turn_id, tool_names=tool_names)
-        from .dialogue_execution import capture_prerequisite
-        pending = capture_prerequisite(state.interactions, state.active_revision_id, generation,
-                                      submission, predecessor_turn_id, execution_inputs=execution_inputs,
-                                      canonical_sources=True)
-        if pending is not None:
-            captured['prerequisite'] = pending
+        captured['dialogue']['prerequisite_capture_version'] = 2
+        if (submission or {}).get('resume_task_id'):
+            from .resource_continuation import catalog
+            from .preparation_state import head, intake_task
+            previous = head(state.interactions, submission['resume_task_id'])
+            resources = dict(catalog=catalog(input_sets), models=[asdict(r) for r in epizoo_resources])
+            if previous is not None and 'raw_resource_evidence' in (previous.admitted or {}):
+                field = intake_task(state.interactions, previous.preparation)
+                if field in {'fastq', 'bam', 'fragments'}:
+                    from .native_raw_handoff import resource_evidence
+                    resources['evidence'] = resource_evidence(input_sets, field=field)
+            captured['preparation_resources'] = resources
+        if not (submission or {}).get('resume_task_id'):
+            from .dialogue_execution import capture_prerequisite
+            pending = capture_prerequisite(state.interactions, state.active_revision_id, generation,
+                                          submission, predecessor_turn_id, execution_inputs=execution_inputs,
+                                          canonical_sources=True, utterance=utterance, live=True)
+            if pending is not None:
+                captured['prerequisite'] = pending
+                if pending.get('native_failure'):
+                    from .preparation_state import capture_intake
+                    intake=capture_intake(state.interactions,generation,state.active_revision_id,submission,predecessor_turn_id)
+                    if intake is not None:captured['preparation']=intake
+            else:
+                from .preparation_state import capture_intake
+                intake = capture_intake(state.interactions, generation, state.active_revision_id, submission, predecessor_turn_id)
+                if intake is not None:
+                    captured['preparation'] = intake
         from .dialogue_execution import captured_input_group
         from .local_resources import source_field_choices
         selected = captured_input_group(Interaction(turn_id, utterance, state.active_revision_id,
@@ -275,6 +313,32 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             raise SessionConflictError('Interaction capture raced with another turn.')
         return replace(current, interactions=current.interactions+(interaction,))
     sessions._store._update(session_id, capture)
+    if (submission or {}).get('resume_task_id'):
+        from .scientific_preparation import resume
+        return resume(sessions, interaction, submission['resume_task_id'])
+    try:
+        from .scientific_preparation import typed_answer
+        scalar_admitted = typed_answer(sessions, interaction)
+        interaction = next(i for i in sessions.load(session_id).interactions if i.turn_id == turn_id)
+        if scalar_admitted is not None:
+            admitted, answer_record, needs, owner = scalar_admitted
+            if admitted.get('native_failure'):
+                from .dialogue_execution import execute as execute_request
+                from .preparation_state import question
+                admitted=dict(admitted,preparation_result=question(answer_record,interaction,(),status='READY'))
+                _update(sessions,turn_id,preparation=answer_record,admitted=admitted,status='admitted')
+                return execute_request(sessions,interaction,admitted,interpreter)
+            admitted, prepared_plan, outcome = _prepare_research(sessions, interaction, admitted, record=answer_record, intake_needs=needs, intake_owner=owner)
+            if outcome is not None:
+                return outcome
+            _update(sessions, turn_id, admitted=admitted, status='admitted')
+            from .dialogue_execution import execute as execute_request
+            return execute_request(sessions, interaction, admitted, interpreter, prepared_plan=prepared_plan)
+    except Exception as exc:
+        log_operation_event(logger, 'turn.boundary_failed', context=(session_id, turn_id),
+                            stage='exact_preparation', error=exc)
+        _failed_admission(sessions, interaction, None)
+        raise
     if (submission or {}).get('rerun_revision_id'):
         from .structured_parameters import prepare_result_edit, ParameterEditUnavailable
         from .dialogue_execution import execute as execute_request
@@ -285,21 +349,21 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         except ParameterEditUnavailable as exc:
             _update(sessions, turn_id, status='failed')
             return TurnOutcome('execute', 'failed', text=str(exc))
+    prepared_plan = None
     decision = None
     diagnostic_context = (session_id, turn_id)
     diagnostic_stage = 'preparation'
     try:
-        from .epizoo_handoff import captured_models
-        input_sets = tuple(input_sets) + captured_models(sessions, state)
-        if reference_resources is not None:
-            from .shared_resources import discover
-            input_sets = tuple(input_sets) + discover(reference_resources, session_id)
         visible = public_context(captured)
         context, _ = sessions.planning_context_for_interaction(session_id, turn_id, integrity=False)
         from .scientific_dialogue import public as dialogue_public
         visible['dialogue'] = dialogue_public(captured, state, sessions._application.registry,
                                               sessions=sessions, utterance=utterance,
                                               execution_inputs=execution_inputs, context=context)
+        from .turn_context import ordinary_clarification
+        ordinary = ordinary_clarification(captured, state)
+        if ordinary:
+            visible['dialogue']['ordinary_clarification'] = ordinary
         from .dialogue_execution import prerequisite_public
         pending_public = prerequisite_public(interaction, state.interactions)
         if pending_public is not None and reference_resources is not None:
@@ -357,34 +421,13 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 visible['dialogue']['epizoo_resources'] = raw_offers(input_sets, 'epizoo')
         from .annotation_groups import public_choices
         visible['dialogue']['annotation_group_results'] = public_choices(sessions, interaction)
+        if 'preparation' in captured:
+            from .preparation_state import intake_context, choices as preparation_choices
+            _, pending_task = intake_context(interaction, state.interactions)
+            visible['dialogue']['pending_preparation'] = dict(task_id=pending_task.preparation['task_id'],
+                choices=[_serialize(c) for c in preparation_choices(pending_task)])
         if context is not None and context.items:
             visible['dialogue']['planning_context'] = list(context.public_items())
-        # Project owner observations of the exact offered inputs, never a workflow.
-        # Registered bindings retain source integrity; no observation becomes authority.
-        offered = (role_submission or {}).get('registered_input', {})
-        members = offered.get('members', ())
-        if members and (context is None or not context.items or (submission or {}).get('attachments')):
-            from .local_resources import LocalResourceAdmission
-            owner = LocalResourceAdmission(sessions._application._workspace, registry=sessions._application.registry)
-            motif_requirements = []
-            for index, member in enumerate(members):
-                record = owner.load(member['resource_id'])
-                if record.input_type != 'h5ad':
-                    continue
-                try:
-                    owner._verify_records([record])
-                except (ValueError, OSError):
-                    continue
-                from agent.tools.analysis.chromvar import observe_input
-                try:
-                    motif_observation = observe_input(record.source_path)
-                    from .dialogue_evidence import _unsafe_fact_value
-                    if not _unsafe_fact_value(motif_observation):
-                        motif_requirements.append(dict(source=f'source.{index}', **motif_observation))
-                except (ValueError, OSError, KeyError, TypeError):
-                    pass
-            if motif_requirements:
-                visible['dialogue']['motif_input_declarations'] = motif_requirements
         settings = (submission or {}).get('parameter_overrides', ())
         if settings:
             visible['dialogue']['structured_parameters'] = [
@@ -402,8 +445,7 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 'The researcher selected these exact accepted results through the interface. '
                 'Their identities are already resolved. Use them for the current task; do not guess another result.')
         diagnostic_stage = 'interpretation'
-        from .structured_parameters import selected_scope
-        scoped_admitted = selected_scope(sessions, interaction, state.interactions)
+        scoped_admitted = None
         from .resource_continuation import selected_answer
         from .guidance_selection import selected_candidate
         decision = (Execute(scoped_admitted['tool']) if scoped_admitted is not None else
@@ -431,6 +473,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             else:
                 raise IntentError('unsupported_intent')
         diagnostic_stage = 'admission'
+        if isinstance(decision, RequestResources) or isinstance(decision, RequestRoles) and decision.required_roles:
+            raise IntentError('invalid_decision')
         if interaction.base_revision_id is None:
             if not (isinstance(decision, (ExecuteCandidate, Clarify, SpeciesAnswer, ParameterAnswer, RequestRoles, RoleAnswer, RequestResources, ResourceAnswer))
                     or isinstance(decision, Execute)
@@ -446,9 +490,10 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
                 raise IntentError('unsupported_intent')
         if isinstance(decision, Clarify):
             from .turn_decisions import PARAMETER_CLARIFICATION_REASONS
-            if decision.choices and decision.reason in PARAMETER_CLARIFICATION_REASONS:
-                offered_parameters = {p['tool']+'.'+p['argument'] for p in visible['dialogue'].get('scientific_parameters',())}
-                if any('.' in name and name not in offered_parameters for name in decision.choices):
+            if decision.reason in PARAMETER_CLARIFICATION_REASONS:
+                from .turn_decisions import parameter_choice_offers
+                offered_parameters = parameter_choice_offers(visible)
+                if not decision.choices or any(name not in offered_parameters for name in decision.choices):
                     raise IntentError('invalid_decision')
             if decision.reason == 'unavailable_model_condition':
                 conditions = tuple(model['family'] + ': ' + ', '.join(model['conditions'])
@@ -458,45 +503,55 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         if scoped_admitted is not None:
             admitted = scoped_admitted
         elif isinstance(decision, RequestResources):
-            from .resource_continuation import request, offers
-            admitted, prerequisite = request(sessions, interaction, decision, input_sets)
-            options = offers(submission, input_sets)
-            reason = 'missing_resources'
-            if 'reference_requirement' in admitted:
-                from .reference_supplementation import choices as reference_choices, input_set as reference_input_set
-                options = [dict(handle='resource.' + choice.input_set_id, label=choice.label)
-                    for choice in (reference_input_set(r) for r in reference_choices(reference_resources, session_id,
-                        admitted['reference_requirement'], origin_turn_id=turn_id))] if reference_resources else []
-                reason = 'missing_reference'
-            admitted['resource_options'] = [dict(option, description=option['label']) for option in options]
-            _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
-            choices = tuple(option['label'] for option in options)
-            return TurnOutcome('clarify', 'clarification', Clarify(reason, choices, True))
+            from .resource_continuation import request
+            admitted = request(sessions, interaction, decision, input_sets)
+            return _prepare_research(sessions, interaction, admitted)[2]
         elif isinstance(decision, ResourceAnswer):
-            from .resource_continuation import answer
-            admitted = answer(sessions, interaction, decision, input_sets, reference_resources=reference_resources)
+            from .scientific_preparation import interpreted_resource
+            admitted, answer_record = interpreted_resource(sessions, interaction, decision)
+            admitted, prepared_plan, outcome = _prepare_research(sessions, interaction, admitted, record=answer_record)
+            if outcome is not None:
+                return outcome
+            _update(sessions, turn_id, admitted=admitted, status='admitted')
+            from .dialogue_execution import execute as execute_request
+            return execute_request(sessions, interaction, admitted, interpreter, prepared_plan=prepared_plan)
         elif isinstance(decision, (RequestRoles, RoleAnswer)) and (
-                decision.fastq is not None or decision.bam is not None or decision.fragments is not None or decision.annotation is not None or decision.epizoo is not None or isinstance(decision, RoleAnswer) and (captured.get('prerequisite') or {}).get('field') in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}):
-            from .raw_handoff import admit as admit_raw
-            admitted, prerequisite = admit_raw(sessions, interaction, decision, input_sets,
-                                               reference_resources=reference_resources)
-            if prerequisite is not None:
-                _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
-                return TurnOutcome('clarify', 'clarification', Clarify(admitted['reason'], tuple(admitted['choices']), True))
+                decision.fastq is not None or decision.bam is not None or decision.fragments is not None or decision.annotation is not None or decision.epizoo is not None or isinstance(decision, RoleAnswer) and captured_source_owner(interaction, state.interactions) in {'fastq', 'bam', 'fragments', 'annotation', 'epizoo'}):
+            from .scientific_preparation import source_admission, interpreted_source
+            if isinstance(decision, RoleAnswer):
+                admitted, answer_record, needs, owner = interpreted_source(sessions, interaction, decision)
+            else:
+                admitted, needs = source_admission(sessions, interaction, decision)
+                owner = next(field for field in ('fastq','bam','fragments','annotation','epizoo') if field in admitted)
+                answer_record = None
+            admitted, prepared_plan, outcome = _prepare_research(sessions, interaction, admitted,
+                record=answer_record, intake_needs=needs, intake_owner=owner)
+            if outcome is not None:
+                return outcome
+            _update(sessions, turn_id, admitted=admitted, status='admitted')
+            from .dialogue_execution import execute as execute_request
+            return execute_request(sessions, interaction, admitted, interpreter, prepared_plan=prepared_plan)
         elif isinstance(decision, RequestRoles):
             from .dialogue_execution import admit_role_request
-            admitted, prerequisite, choices = admit_role_request(sessions, interaction, decision, epizoo_resources)
-            _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
-            return TurnOutcome('clarify', 'clarification', Clarify('missing_input_roles', choices, True))
+            admitted = admit_role_request(sessions, interaction, decision, epizoo_resources)
+            return _prepare_research(sessions, interaction, admitted)[2]
         elif isinstance(decision, RoleAnswer):
-            from .dialogue_execution import admit_roles
-            admitted, prerequisite = admit_roles(sessions, interaction, decision, epizoo_resources)
-            if prerequisite is not None:
-                _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
-                return TurnOutcome('clarify', 'clarification', Clarify('missing_input_roles', tuple(admitted['choices']), True))
-        elif isinstance(decision, SpeciesAnswer):
-            from .dialogue_execution import admit_species
-            admitted = admit_species(sessions, interaction, decision, epizoo_resources)
+            if 'preparation' in captured:
+                from .scientific_preparation import interpreted_roles
+                admitted, answer_record = interpreted_roles(sessions, interaction, decision)
+                admitted, prepared_plan, outcome = _prepare_research(sessions, interaction, admitted, record=answer_record)
+                if outcome is not None:
+                    return outcome
+                _update(sessions, turn_id, admitted=admitted, status='admitted')
+                from .dialogue_execution import execute as execute_request
+                return execute_request(sessions, interaction, admitted, interpreter, prepared_plan=prepared_plan)
+            raise IntentError('invalid_prerequisite')
+        elif isinstance(decision, ParameterAnswer) and 'preparation' in captured:
+            from .scientific_preparation import interpreted_parameters
+            admitted, answer_record = interpreted_parameters(sessions, interaction, decision)
+            admitted, prepared_plan, outcome = _prepare_research(sessions, interaction, admitted, record=answer_record)
+            if outcome is not None:
+                return outcome
         elif isinstance(decision, ParameterAnswer):
             from .dialogue_execution import admit_parameters
             admitted = admit_parameters(sessions, interaction, decision, epizoo_resources, execution_inputs=execution_inputs)
@@ -517,59 +572,35 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             from .guidance_selection import admit as admit_candidate
             admitted = admit_candidate(sessions, interaction, decision, execution_inputs)
         elif isinstance(decision, Execute):
-            from .dialogue_execution import admit as admit_execution, missing_file_request, admit_role_request
-            pending_request = missing_file_request(sessions._application.registry, interaction, decision, execution_inputs)
-            if pending_request is not None:
-                admitted, prerequisite, choices = admit_role_request(sessions, interaction, pending_request, epizoo_resources)
-                _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
-                return TurnOutcome('clarify', 'clarification', Clarify('missing_input_roles', choices, True))
+            from .dialogue_execution import admit as admit_execution
             if decision.target == 'annotate_scATAC_cell_types':
                 from .annotation_preparation import admit as admit_annotation
-                admitted, _ = admit_annotation(sessions, interaction, decision, input_sets)
+                admitted, needs = admit_annotation(sessions, interaction, decision, input_sets)
+                admitted, prepared_plan, outcome = _prepare_research(sessions, interaction, admitted,
+                    intake_needs=needs, intake_owner='annotation')
+                if outcome is not None:
+                    return outcome
             else:
                 admitted = admit_execution(sessions, interaction, decision, execution_inputs,
                                            epizoo_resources=epizoo_resources)
-            selected_tool = sessions._application.registry.get(admitted['tool'])
-            from .shared_resources import scientific_resource_scope
-            from agent.orchestration.native_parameters import prerequisite_inputs
-            prerequisite_values = prerequisite_inputs(selected_tool, admitted['inputs'])
-            reference_owner = getattr(sessions, '_reference_resources', None)
-            with scientific_resource_scope(None if reference_owner is None else reference_owner.library):
-                owner_missing = (() if selected_tool.parameter_prerequisites is None or prerequisite_values is None else
-                                 selected_tool.parameter_prerequisites(prerequisite_values))
-            from .dialogue_execution import _missing_parameter_inputs
-            missing_parameters = tuple(_missing_parameter_inputs(sessions._application.registry, admitted['tool'],
-                tuple(dict.fromkeys(owner_missing)), admitted['inputs'])) + decision.missing_parameters
-            from agent.orchestration.native_parameters import missing_clustering_parameters
-            missing_parameters += missing_clustering_parameters(selected_tool, admitted['inputs'])
-            if missing_parameters:
-                from .dialogue_execution import request_parameters
-                admitted, prerequisite = request_parameters(sessions, interaction, admitted,
-                    missing_parameters, epizoo_resources)
-                _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=prerequisite)
-                choices = tuple(prerequisite['missing'])
-                return TurnOutcome('clarify', 'clarification', Clarify('missing_parameter_value', choices, True))
             if visible['dialogue'].get('resource_source'):
                 from .resource_continuation import catalog
                 admitted['resource_catalog'] = catalog(input_sets)
+        elif isinstance(decision, SpeciesAnswer):
+            # Retained wire decoding grants no retired species-only continuation.
+            raise IntentError('invalid_prerequisite')
         else:
             admitted = admit(sessions, interaction, decision)
-        from .structured_parameters import bound_records
-        if (any(admitted.get(f + '_context', {}).get('adapter') == 'native-inputs.v1' for f in ('fastq','fragments','bam'))
-                or admitted.get('kind') == 'execute' and (admitted.get('tool') == 'annotate_scATAC_cell_types'
-                    or bound_records(admitted, state.interactions, sessions._application.registry, current_utterance=interaction.utterance))):
-            from .dialogue_execution import prepare_native_task
-            admitted, pending, error = prepare_native_task(sessions, interaction, admitted)
-            if pending is not None:
-                _update(sessions, turn_id, admitted=admitted, status='clarification', prerequisite=pending)
-                return TurnOutcome('clarify', 'clarification', Clarify('missing_resources', tuple(admitted['choices']), True))
-            if 'parameter_scope' in admitted:
-                _update(sessions, turn_id, admitted=admitted, status='clarification')
-                return TurnOutcome('clarify', 'clarification', Clarify('ambiguous_parameter'))
-            if 'native_plan' not in admitted:
+        if admitted.get('kind') == 'execute' and admitted.get('operation') == 'plan' and 'native_failure' not in admitted and prepared_plan is None:
+            try:
+                admitted, prepared_plan, preparation_outcome = _prepare_research(sessions, interaction, admitted)
+            except Exception:
+                # Retain exact admitted intent when context validation or
+                # candidate acquisition fails before a preparation observation.
                 _update(sessions, turn_id, admitted=admitted)
-                _failed_admission(sessions, interaction, decision)
-                return TurnOutcome('execute', 'failed', error=error, text='' if error is None else error.message)
+                raise
+            if preparation_outcome is not None:
+                return preparation_outcome
     except Exception as exc:
         log_operation_event(logger, 'turn.boundary_failed', context=diagnostic_context,
             stage=diagnostic_stage, error=exc, kind=None if decision is None else type(decision).__name__,
@@ -602,16 +633,19 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
             value = dict(kind='execute_plan', **_serialize(asdict(candidate)))
             raw_rejection = json.dumps(dict(turn_schema_version=1, decision=value))
         if raw_rejection is not None and captured.get('prerequisite') is None:
-            from .dialogue_execution import request_parameter_repair
+            from .dialogue_execution import admit_parameter_correction
             try:
-                admitted, pending = request_parameter_repair(sessions, interaction,
+                admitted = admit_parameter_correction(sessions, interaction,
                     raw_rejection, execution_inputs, epizoo_resources)
             except (ValueError, TypeError, KeyError):
                 pass  # An unsafe or unsupported objective stays an ordinary clarification.
             else:
-                _update(sessions, turn_id, status='clarification', admitted=admitted, prerequisite=pending)
-                return TurnOutcome('clarify', 'clarification',
-                    Clarify(reason, tuple(pending['missing']), True))
+                admitted, prepared_plan, outcome = _prepare_research(sessions, interaction, admitted)
+                if outcome is not None:
+                    return outcome
+                _update(sessions, turn_id, admitted=admitted, status='admitted')
+                from .dialogue_execution import execute as execute_request
+                return execute_request(sessions, interaction, admitted, interpreter, prepared_plan=prepared_plan)
         if (reason in {'invalid_decision', 'invalid_reference', 'invalid_prerequisite',
                        'unsupported_intent', 'unavailable_context'}
                 and getattr(exc, 'diagnostic_reason', None) != 'incompatible_scientific_reference'):
@@ -651,8 +685,8 @@ def respond(sessions, session_id, turn_id, utterance, *, interpreter, expected_g
         if admitted.get('operation') == 'plan':
             from .dialogue_execution import execute as execute_request
             if epizoo_resources:
-                return execute_request(sessions, interaction, admitted, interpreter, epizoo_resources=epizoo_resources)
-            return execute_request(sessions, interaction, admitted, interpreter)
+                return execute_request(sessions, interaction, admitted, interpreter, epizoo_resources=epizoo_resources, prepared_plan=prepared_plan)
+            return execute_request(sessions, interaction, admitted, interpreter, prepared_plan=prepared_plan)
         raise IntentError('unsupported_intent')
     except Exception:
         _update(sessions, turn_id, status='failed')

@@ -71,7 +71,7 @@ def main(request_path):
         # AI publication's specialized scientific slots remain separate owners.
         from native_callable_worker import functions
         from native_clustering import invoke, valid_graphs, graph_record
-        from cell_result import grouping_key
+        from cell_result import grouping_key, representation_key
         function = functions(package)[name]
         activity = package == 'episcanpy' and name == 'tl.geneactivity'
         call_kwargs = kwargs
@@ -168,6 +168,9 @@ def main(request_path):
             elif name == 'tl.spectral': slots += ['obsm.X_spectral', 'uns.spectral_eigenvalue']
             elif name == 'pp.knn': slots += ['obsp.distances']
             elif name == 'pp.mnc_correct': slots += ['obsm.' + (kwargs.get('key_added') or kwargs.get('use_rep', 'X_spectral') + '_mnn')]
+        representation=representation_key(package,name,kwargs)
+        if not independent and representation:
+            slots=list(dict.fromkeys([*slots,'obsm.'+representation]))
         layer_semantics = {}; measurement = None
         if activity:
             slots = ['X'] + ['var.' + key for key in a.var]

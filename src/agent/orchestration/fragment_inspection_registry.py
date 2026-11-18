@@ -29,7 +29,7 @@ def tool_spec():
             (member('path', prefix + '_path'), member('sha256', prefix + '_sha256')), mandatory,
             request_sources=(request(prefix + '_path', input_member('path', prefix + '_path'),
                 input_member('sha256', prefix + '_sha256')),)))
-    return ToolSpec(name='inspect_scATAC_fragments', function=inspect_scATAC_fragments,
+    return ToolSpec(source_encodings={'source':('fragments',),'source_index':('tabix',)}, source_input_types={'source':('external_fragments','attachment'), 'source_index':('attachment',)}, name='inspect_scATAC_fragments', function=inspect_scATAC_fragments,
         required_arguments=required, optional_arguments=optional,
         result_contract=ResultContract('FragmentStructureInspection', FIELDS,
             planning_fields={k: _planning_result(description, bindable=k == 'source_sha256')

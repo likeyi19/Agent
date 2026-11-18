@@ -21,7 +21,7 @@ def isolated_binding_catalog(monkeypatch):
         accepted_upstream_types=('raw_scatac_dataset.v1','scatac_matrix_h5ad.v1','native_matrix_h5ad.v1'))
     def forbidden(input_path, output_dir, n_components=None):
         pytest.fail('Generic binding fixture reached scientific execution')
-    spec = r.ToolSpec(name='mock_embed_cells',function=forbidden,exception_classifier=r._classify_analysis_exception,
+    spec = r.ToolSpec(source_input_types={'dataset':('h5ad',)}, name='mock_embed_cells',function=forbidden,exception_classifier=r._classify_analysis_exception,
         required_arguments={key:native.required_arguments[key] for key in ('input_path','output_dir')},
         optional_arguments={'n_components':r._planning_argument((int,type(None)),
             'Explicit numeric value for binding tests only.',scientific_parameter=True)},
@@ -50,8 +50,6 @@ def isolated_binding_catalog(monkeypatch):
             continue
         if callable(getattr(module,'build_default_tool_registry',None)):
             monkeypatch.setattr(module,'build_default_tool_registry',factory)
-    monkeypatch.setattr(local_resources,'_GROUP_PORTS',local_resources._GROUP_PORTS+(('mock_embed_cells','dataset'),))
-    monkeypatch.setattr(local_resources,'_H5AD_COMPANION_TOOLS',local_resources._H5AD_COMPANION_TOOLS+('mock_embed_cells',))
     try:
         yield
     finally:

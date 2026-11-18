@@ -54,6 +54,15 @@ PORTS = {'reference': 'reference_path', 'index': 'index_path', 'read1': 'read1_p
     'barcode': 'barcode_path', 'whitelist': 'whitelist_path'}
 
 
+def output_available(arguments, output_key):
+    """Function-specific file availability from this owner's publication shape."""
+    if output_key in ('fragments_path', 'fragments_sha256'):
+        return arguments.get('function_name') == 'map'
+    if output_key in ('index_path', 'index_sha256'):
+        return arguments.get('function_name') == 'index'
+    return True
+
+
 def arguments(values):
     lanes = {key: values[key] for key in ('read1_path', 'read2_path', 'barcode_path') if isinstance(values.get(key), (list, tuple))}
     args = path_arguments({key: value for key, value in values.items() if key not in lanes})
@@ -175,3 +184,9 @@ def execute(values, execution_identity=None):
 def invoke(reference_path, output_dir, function_name, index_path=None, read1_path=None, read2_path=None,
            barcode_path=None, whitelist_path=None, kwargs=None, reference_sha256=None, index_sha256=None, whitelist_sha256=None):
     return execute({k: v for k, v in locals().items() if v is not None})
+
+
+def planned_output_properties(arguments, port, context, *, seen=()):
+    if port=='fragments' and arguments.get('function_name')=='map' and arguments.get('reference_path') and arguments.get('reference_sha256'):
+        return dict(source_reference=dict(step_id=context.step_id,path=arguments['reference_path'],sha256=arguments['reference_sha256']))
+    return {}

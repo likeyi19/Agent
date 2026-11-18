@@ -146,6 +146,8 @@ class FileSessionStore:
                     raise SessionConflictError('Captured interaction cannot change.')
                 if old.admitted is not None and old.admitted != new.admitted:
                     raise SessionConflictError('Admitted intent cannot change.')
+                if old.preparation is not None and old.preparation != new.preparation:
+                    raise SessionConflictError('Canonical preparation history cannot change.')
                 if old.prerequisite is not None and old.prerequisite != new.prerequisite:
                     raise SessionConflictError('Pending scientific declaration cannot change.')
                 if old.guidance_candidates is not None and old.guidance_candidates != new.guidance_candidates:

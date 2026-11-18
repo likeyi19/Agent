@@ -62,9 +62,17 @@ def test_spectral_authority_report_and_restart_graph_reuse(tmp_path,monkeypatch,
     before={p:p.read_bytes() for root in (paths.scientific,paths.evidence,paths.report) for p in root.rglob('*') if p.is_file()}
     model=Model(later=True)
     later=ResearchAgentApplication(tmp_path/'app',planner=LLMPlanner(model))
-    from test_captured_planning_context import capture
+    from dataclasses import replace
+    from agent.application.turn_context import snapshot
+    from agent.application.scientific_dialogue import capture
+    from agent.application.session_state import Interaction
     from agent.orchestration.active_context import planning_context
-    capture(later.sessions,'analysis');context,_=later.sessions.planning_context_for_interaction('analysis','future')
+    current=later.sessions.load('analysis')
+    captured=snapshot(later.sessions,current)
+    captured['dialogue']=capture(later.sessions,current,captured,None)
+    interaction=Interaction('future','Cluster the same graph.',current.active_revision_id,current.generation,captured)
+    later.sessions._store._update('analysis',lambda state:replace(state,interactions=(*state.interactions,interaction)))
+    context,_=later.sessions.planning_context_for_interaction('analysis','future')
     model.graph_handle=next(i.handle for i in context.items if i.binding.step_id=='umap' and i.binding.source_port=='dataset')
     # Only downstream native Leiden is allowed: native code cannot be invoked
     # for feature selection, Spectral or KNN during accepted-result reuse.

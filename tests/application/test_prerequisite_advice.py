@@ -110,6 +110,7 @@ def test_advice_rejects_empirical_fabrication_and_retains_whole_review(app, monk
     assert interaction.guidance_candidates is None and interaction.status == 'failed'
 
 
+@pytest.mark.usefixtures('native_research_subprocess')
 @pytest.mark.parametrize('field', ['annotation', 'epizoo'])
 @pytest.mark.parametrize('review_fails', [False, True])
 def test_raw_owner_requirements_unknown_advice_restart_and_explicit_reply(app, monkeypatch, field, review_fails):
@@ -159,7 +160,7 @@ def test_raw_owner_requirements_unknown_advice_restart_and_explicit_reply(app, m
     result = reopened.sessions.respond('session', 'reply', 'I can now supply this documented declaration.', interpreter=Model(reply))
     assert result.status == 'clarification'
     state = reopened.sessions.load('session')
-    assert state.interactions[-1].prerequisite['origin_turn_id'] == 'first'
+    assert state.interactions[-1].preparation['task_origin'] == 'first'
     assert state.interactions[-1].admitted[field]['source'] == 'source.0'
     assert state.interactions[-1].admitted[field]['matrix_semantics' if field == 'epizoo' else 'context'] == (
         'binary_accessibility' if field == 'epizoo' else 'reported study context')

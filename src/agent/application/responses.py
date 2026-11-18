@@ -26,14 +26,17 @@ def summarize(sessions, session_id, turn_id, outcome, *, model=None):
     from . import scientific_dialogue as dialogue
     state = sessions.load(session_id)
     interaction = next((i for i in state.interactions if i.turn_id == turn_id), None)
+    if interaction is not None and interaction.presentation is not None:
+        from .turns import _outcome
+        return _outcome(sessions, interaction)
     if outcome.kind == 'answer':
         # The common owner has already attempted generation; never recurse.
         return dialogue.status_outcome(outcome, outcome.error.code) if outcome.error is not None else outcome
     if outcome.kind == 'navigate':
-        return replace(outcome, text='Result activated.' if outcome.status == 'activated' else 'Result activation unavailable.')
+        return replace(outcome, text='')
     if outcome.kind == 'execute' and outcome.status in {'activated', 'stale'}:
         if interaction is not None and (interaction.admitted or {}).get('result_edit'):
-            return replace(outcome, text='Analysis accepted.')
+            return replace(outcome, text='')
         return dialogue.completion(sessions, session_id, turn_id, outcome, model=model)
     if outcome.kind == 'execute' and outcome.status == 'failed' and outcome.error is None:
         turn = next((t for t in state.turns if t.turn_id == turn_id), None)
@@ -43,20 +46,17 @@ def summarize(sessions, session_id, turn_id, outcome, *, model=None):
                 from .interactive_schemas import ClientError
                 from agent.orchestration.error_policy import public_error_message
                 outcome = replace(outcome, error=ClientError(run.errors[0].code, public_error_message(run.errors[0])))
+    if interaction is not None and (interaction.submission or {}).get('resume_task_id'):
+        return replace(outcome, text='')
     if interaction is not None and any((interaction.submission or {}).get(k) for k in (
-            'clarification_choice', 'parameter_overrides', 'candidate_selection', 'rerun_revision_id')):
-        if outcome.status == 'failed':
-            return dialogue.status_outcome(outcome, outcome.error.code if outcome.error else 'EXECUTION_FAILED')
-    if outcome.error is not None and dialogue.language_failure(outcome.error.code):
+            'clarification_choice', 'parameter_overrides', 'candidate_selection', 'rerun_revision_id', 'resume_task_id')):
+        # Exact buttons/forms are deterministic transport. Their structured
+        # outcome remains visible without a new conversational completion.
+        from .preparation_state import choices
+        if outcome.kind != 'clarify' or interaction.preparation is not None and choices(interaction):
+            return replace(outcome, text='')
+    if outcome.error is not None and dialogue.language_failure(outcome.error.code) and outcome.error.code != 'INTERACTIVE_REFERENCE_INVALID':
         return dialogue.status_outcome(outcome, outcome.error.code)
-    if outcome.kind == 'clarify' and interaction is not None:
-        from .resource_continuation import pending_choices
-        from .structured_parameters import scope_choices
-        options = pending_choices(interaction.prerequisite, state.interactions)
-        if any(row['handle'].startswith('annotation-umap:') for row in options):
-            return replace(outcome, text='Generate UMAP?\n\nNo compatible UMAP coordinates were found. Would you like to compute UMAP for visualization? This will run an additional scientific analysis.')
-        if options or scope_choices(interaction):
-            return replace(outcome, text='Input required: ' + outcome.clarification.reason)
     if interaction is not None and (outcome.kind == 'clarify' or outcome.status == 'failed'):
         return dialogue.explain_outcome(sessions, session_id, interaction, outcome, model)
-    return replace(outcome, text='Status: ' + outcome.status)
+    return replace(outcome, text='')

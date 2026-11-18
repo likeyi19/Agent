@@ -209,10 +209,11 @@ class Interaction:
     submission: object = None
     presentation: object = None
     prerequisite: object = None
+    preparation: object = None
 
     def __post_init__(self):
         text(self.turn_id)
-        if self.utterance != '' or not self.submission or not (self.submission.get('rerun_revision_id') or self.submission.get('parameter_overrides') or self.submission.get('clarification_choice')):
+        if self.utterance != '' or not self.submission or not (self.submission.get('resume_task_id') or self.submission.get('rerun_revision_id') or self.submission.get('parameter_overrides') or self.submission.get('clarification_choice')):
             text(self.utterance)
         if self.base_revision_id is not None: text(self.base_revision_id)
         natural(self.base_generation)
@@ -221,6 +222,8 @@ class Interaction:
         object.__setattr__(self, 'snapshot', freeze_json_mapping(self.snapshot, 'interaction.snapshot'))
         if self.admitted is not None:
             object.__setattr__(self, 'admitted', freeze_json_mapping(self.admitted, 'interaction.admitted'))
+        if self.preparation is not None:
+            object.__setattr__(self, 'preparation', freeze_json_mapping(self.preparation, 'interaction.preparation'))
         if self.guidance_candidates is not None:
             refs = freeze_json_mapping({'refs': self.guidance_candidates}, 'guidance references')['refs']
             object.__setattr__(self, 'guidance_candidates', refs)
@@ -234,7 +237,7 @@ class Interaction:
         if self.prerequisite is not None:
             frozen = freeze_json_mapping(self.prerequisite, 'interaction.prerequisite')
             legacy = set(frozen) == {'origin_turn_id', 'field', 'resource_context_sha256'} and frozen['field'] == 'species'
-            parameters = (set(frozen) - {'native_failure'} == {'origin_turn_id', 'field', 'resource_context_sha256',
+            parameters = (set(frozen) - {'native_failure','preparation_question'} == {'origin_turn_id', 'field', 'resource_context_sha256',
                                          'binding_turn_id', 'tool', 'missing'} and frozen['field'] == 'parameters')
             roles = (set(frozen) == {'origin_turn_id', 'field', 'resource_context_sha256',
                                     'binding_turn_id', 'tool', 'required_roles'} and frozen['field'] == 'roles')
@@ -254,6 +257,8 @@ class Interaction:
                 except (ValueError, TypeError) as exc:
                     raise SessionError('Invalid missing scientific roles.') from exc
             if parameters:
+                if 'preparation_question' in frozen and 'native_failure' not in frozen:
+                    raise SessionError('A post-native canonical question requires its failed-Run anchor.')
                 if 'native_failure' in frozen:
                     failure = frozen['native_failure']
                     if (set(failure) != {'run_id', 'step_id', 'function_name', 'plan_sha256', 'diagnostic_sha256'}
@@ -361,9 +366,27 @@ class AnalysisSession:
                     or history[interaction.base_generation] != interaction.base_revision_id):
                 raise SessionError('Invalid captured interaction base.')
             captured = _serialize(interaction.snapshot)
+            if 'preparation_resources' in captured:
+                resources = captured.pop('preparation_resources')
+                if (not (interaction.submission or {}).get('resume_task_id')
+                        or 'catalog' not in resources or set(resources) - {'catalog','evidence','models'}):
+                    raise SessionError('Resource recapture requires explicit preparation resume.')
+                from .input_sets import ScientificInputSet
+                from .resource_continuation import catalog
+                if catalog(tuple(ScientificInputSet(**row) for row in resources['catalog'])) != resources['catalog']:
+                    raise SessionError('Invalid recaptured scientific resource catalog.')
+                if 'models' in resources:
+                    from .local_resources import QualifiedEpiZooResource, qualified_epizoo_resources
+                    models = qualified_epizoo_resources(tuple(QualifiedEpiZooResource(**row) for row in resources['models']))
+                    if [asdict(r) for r in models] != resources['models']:
+                        raise SessionError('Invalid recaptured qualified model catalog.')
             if set(captured) not in ({'relations', 'bases'}, {'relations', 'bases', 'dialogue'},
-                                     {'relations', 'bases', 'dialogue', 'prerequisite'}):
+                                     {'relations', 'bases', 'dialogue', 'prerequisite'},
+                                     {'relations', 'bases', 'dialogue', 'preparation'},
+                                     {'relations','bases','dialogue','prerequisite','preparation'}):
                 raise SessionError('Invalid interaction snapshot.')
+            if 'preparation' in captured and 'prerequisite' in captured and not captured['prerequisite'].get('native_failure'):
+                raise SessionError('Dual question capture requires the existing failed-native authority.')
             expected = {} if interaction.base_revision_id is None else {'current': interaction.base_revision_id}
             parent = None if interaction.base_revision_id is None else revisions[interaction.base_revision_id].parent_revision_id
             if parent is not None: expected['parent'] = parent
@@ -378,6 +401,8 @@ class AnalysisSession:
             if 'dialogue' in captured:
                 from .scientific_dialogue import validate_capture
                 validate_capture(self, interaction, self.interactions[:interaction_index])
+            from .preparation_state import validate_record
+            validate_record(self.session_id, interaction, self.interactions[:interaction_index])
             from .dialogue_execution import validate_prerequisite
             validate_prerequisite(interaction, self.interactions[:interaction_index])
             failure = (interaction.prerequisite or {}).get('native_failure')
@@ -402,7 +427,7 @@ class AnalysisSession:
                  for f in fields(self) if f.name != 'interactions'}
         if self.interactions:
             value['interactions'] = tuple({f.name: _serialize(getattr(i, f.name)) for f in fields(i)
-                if f.name not in {'guidance_candidates', 'submission', 'presentation', 'prerequisite'}
+                if f.name not in {'guidance_candidates', 'submission', 'presentation', 'prerequisite', 'preparation'}
                 or getattr(i, f.name) is not None} for i in self.interactions)
         for turn in value['turns']:
             for selection in turn['selections']:
@@ -430,7 +455,7 @@ class AnalysisSession:
                 data = dict(data, retained_outputs=[])
             if model is Interaction and type(data) is dict:
                 data = dict(data)
-                for key in ('guidance_candidates', 'submission', 'presentation', 'prerequisite'):
+                for key in ('guidance_candidates', 'submission', 'presentation', 'prerequisite', 'preparation'):
                     data.setdefault(key, None)
             if type(data) is not dict or set(data) != set(model.__dataclass_fields__):
                 raise SessionError('Invalid session record shape.')

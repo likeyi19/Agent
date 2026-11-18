@@ -244,14 +244,23 @@ def test_new_science_routes_to_existing_planner_and_executor(app, tmp_path):
     path = tmp_path / 'input.h5ad'
     ad.AnnData(sparse.csr_matrix([[1,0],[0,2]])).write_h5ad(path)
     calls = []
-    class Planner:
-        def plan(self, request, registry):
+    from agent.orchestration import LLMPlanner
+    class ScientificModel(Model):
+        model_id='scripted/inspection'
+        def complete(self,*,prompt,response_schema):
+            value=json.loads(prompt)
+            if 'semantic_prompt_version' in value:
+                self.calls.append(value)
+                return json.dumps(dict(schema_version=4,decision=dict(kind='plan',steps=[dict(
+                    step_id='inspect',tool='inspect_scATAC',sources=[],control_dependencies=[])])))
+            return super().complete(prompt=prompt,response_schema=response_schema)
+    model = ScientificModel(dict(kind='execute_plan',target='inspect_scATAC'))
+    class Planner(LLMPlanner):
+        def acquire_candidate(self,request,registry,**kwargs):
             calls.append(request)
-            return AgentPlan('inspect-plan',request.request_id,'Explicit inspection.',
-                (PlanStep('inspect','inspect_scATAC',dict(path=request.inputs['path'])),))
-    app = ResearchAgentApplication(app.workspace_root, planner=Planner())
-    model = Model(dict(kind='execute_plan',target='inspect_scATAC'))
-    result = ask(app, 'science', 'Inspect the supplied matrix.', model, execution_inputs={'path':str(path)})
+            return super().acquire_candidate(request,registry,**kwargs)
+    app = ResearchAgentApplication(app.workspace_root, planner=Planner(model))
+    result = ask(app, 'science', 'Inspect the supplied matrix.', model, execution_inputs={'input_path':str(path)})
     assert result.kind == 'execute' and result.status == 'activated', result
     assert len(calls) == 1 and calls[0].prompt == 'Inspect the supplied matrix.'
     assert all('dialogue_schema_version' not in p for p in model.calls)

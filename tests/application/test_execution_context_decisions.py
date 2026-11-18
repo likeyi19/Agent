@@ -163,9 +163,9 @@ def test_prerequisite_task_rebinds_group_handles_by_exact_captured_source():
                accepted_step_sha256='a'*64, tool='compute_cell_umap')
     other = dict(handle='r0', revision_id='other-revision', output_name='other',
                  accepted_step_sha256='b'*64, tool='build_cell_neighbors')
-    origin = SimpleNamespace(turn_id='original', admitted=dict(delivery=['comparison'], references=['g0']),
+    origin = SimpleNamespace(turn_id='original', preparation=None, admitted=dict(delivery=['comparison'], references=['g0']),
         snapshot=dict(dialogue=dict(outputs=[old])))
-    child = SimpleNamespace(turn_id='answer', admitted=dict(parameter_continuation=dict(origin_turn_id='original')),
+    child = SimpleNamespace(turn_id='answer', preparation=None, admitted=dict(parameter_continuation=dict(origin_turn_id='original')),
         snapshot=dict(dialogue=dict(outputs=[other, dict(old, handle='r1')])))
     state = SimpleNamespace(revisions=revisions, interactions=(origin, child))
     assert planning_task(child, state) == dict(delivery=['comparison'], references=['g1'])
@@ -185,7 +185,7 @@ def test_separable_unfulfilled_requirement_is_bound_planned_and_disclosed_withou
     registry = ToolRegistry((replace(build_default_tool_registry().get('inspect_scATAC'), function=forbidden),))
     decision = parse_decision(wire(dict(kind='execute_plan', target='inspect_scATAC',
         delivery=['explanation'], unfulfilled=[omitted])))
-    interaction = SimpleNamespace(turn_id='original', utterance=utterance, snapshot={}, submission=None,
+    interaction = SimpleNamespace(turn_id='original', utterance=utterance, snapshot={}, submission=None, preparation=None,
                                   base_revision_id=None)
     sessions = SimpleNamespace(_application=SimpleNamespace(registry=registry), _interaction_session_id='session')
     interaction.admitted = admit(sessions, interaction, decision, dict(input_path='/private/input.h5ad'))

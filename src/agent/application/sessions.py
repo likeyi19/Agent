@@ -626,13 +626,13 @@ class AnalysisSessions:
             task = dict(task, input_results=list(selected))
         reuse = bool(selected) or value.get('context') == 'current'
         context, locators = self.planning_context_for_interaction(session_id, turn_id,
-            reuse=reuse, selected_outputs=outputs)
+            reuse=reuse, selected_outputs=outputs, admitted=value)
         if reuse and (context is None or not context.items):
             raise IntentError('unavailable_context')
         return (replace(context, task=task) if context is not None else None), locators
 
     def planning_context_for_interaction(self, session_id, turn_id, *, integrity=True, reuse=True,
-                                         selected_outputs=None):
+                                         selected_outputs=None, admitted=None):
         """Project captured descriptions and, when requested, executable outputs.
 
         Metadata projection grants no scientific readiness. Execution requests
@@ -653,6 +653,8 @@ class AnalysisSessions:
         if len(matches) != 1:
             raise SessionError('Unknown captured interaction for planning context.')
         interaction = matches[0]
+        if admitted is not None:
+            interaction = replace(interaction, admitted=admitted)
         from .dialogue_execution import planning_task
         task = planning_task(interaction, state, self._application.registry)
         if interaction.base_revision_id is None:

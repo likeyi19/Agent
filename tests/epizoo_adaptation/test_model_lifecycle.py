@@ -155,3 +155,39 @@ def test_posttraining_rejects_wrong_parent_before_model_execution(matrix_factory
         train.expand(dict(matrix_manifest_path=pin['manifest_path'],matrix_manifest_sha256=pin['manifest_sha256'],
             target_model_manifest_path=str(tmp_path/'parent.json'),target_model_manifest_sha256='a'*64,
             output_dir=str(tmp_path/'output')))
+
+
+def test_preparation_accepts_atomic_model_checksums_and_rejects_cross_binding(matrix_factory,tmp_path,monkeypatch):
+    """Controlled manifest-observer transport; no accepted model/training claim.
+
+    Genuine RunStore matrix authentication is covered by species integration;
+    here valid matrix metadata and controlled parent metadata isolate atomic refs.
+    """
+    from dataclasses import replace
+    from agent.tools.models import epizoo_posttraining as train
+    from agent.tools.data.neutral_matrix_binding import reference_binding,matrix_semantics
+    from agent.schemas import PriorOutputBinding,PriorOutputRef
+    from agent.application.source_observations import ExistingObject
+    from agent.orchestration import build_default_tool_registry
+    from agent.orchestration.scientific_inputs import OperationPreparationContext,ScientificDiagnostic
+    pin=matrix_factory();value=c.read_json(pin['manifest_path'])
+    parent=dict(contract_version=c.LIFECYCLE_CONTRACT,
+        arguments=dict(profile=dict(purpose='initialization',matrix_semantics=matrix_semantics(value))),
+        reference=dict(species=value['species'],target_assembly=value['assembly'],reference_identity_sha256=reference_binding(value)['identity_sha256']),
+        preprocessing=dict(ordered_feature_sha256=value['ordered_feature_sha256']))
+    parent_file=c.write_json(tmp_path/'parent.json',parent)
+    registry=build_default_tool_registry()
+    bindings=[PriorOutputBinding('fixture','matrix','adopt_scATAC_cell_by_features','matrix','scatac_cell_by_features.external.v1','a'*64,'b'*64,'c'*64,'scientific-authority.v2'),
+        PriorOutputBinding('fixture','parent','adapt_epizoo_species','model','epizoo_target_model.v1','d'*64,'e'*64,'f'*64,'scientific-authority.v2')]
+    objects={PriorOutputRef(bindings[0],'manifest_path'):ExistingObject(pin['manifest_path'],pin['manifest_sha256'],bindings[0]),
+        PriorOutputRef(bindings[1],'manifest_path'):ExistingObject(parent_file['path'],parent_file['sha256'],bindings[1])}
+    monkeypatch.setattr(OperationPreparationContext,'existing',lambda self,ref:objects.get(ref))
+    monkeypatch.setattr(train.owner,'load_manifest',lambda path,sha:parent)
+    ctx=OperationPreparationContext(registry.get('posttrain_epizoo_model'),'train',registry,{}, {},{},[],None,None,{})
+    args=dict(matrix_manifest_path=PriorOutputRef(bindings[0],'manifest_path'),matrix_manifest_sha256=PriorOutputRef(bindings[0],'manifest_sha256'),
+        target_model_manifest_path=PriorOutputRef(bindings[1],'manifest_path'),target_model_manifest_sha256=PriorOutputRef(bindings[1],'manifest_sha256'))
+    assert train.prepare_operation(args,ctx)==args
+    for invalid in [PriorOutputRef(bindings[0],'manifest_sha256'),PriorOutputRef(bindings[1],'manifest_path'),PriorOutputRef(replace(bindings[1],run_id='unrelated'),'manifest_sha256')]:
+        with pytest.raises(ScientificDiagnostic,match='identity'):train.prepare_operation(dict(args,target_model_manifest_sha256=invalid),ctx)
+    parent['arguments']['profile']['purpose']='posttraining'
+    with pytest.raises(ScientificDiagnostic,match='initialized'):train.prepare_operation(args,ctx)

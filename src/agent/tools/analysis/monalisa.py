@@ -170,3 +170,13 @@ result = publication.result
 verify_publication = publication.verify_publication
 verify_result = publication.verify_result
 recover = publication.recover
+
+
+def prepare_operation(arguments, context):
+    """Supplied sequence bins plus the shared exact motif-resource owner."""
+    from agent.orchestration.scientific_inputs import parameter_requirements, ScientificInputRequired
+    bins = () if arguments.get('bin_key') or arguments.get('bins_path') else ('bin_key',)
+    needs = parameter_requirements(context.tool, bins) + motifmatchr.preparation_requirements(arguments, context)
+    if needs:
+        raise ScientificInputRequired(*needs, bindings=arguments)
+    return arguments

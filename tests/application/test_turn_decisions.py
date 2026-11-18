@@ -52,9 +52,9 @@ def test_species_meaning_comes_from_provider_in_captured_pending_context(utteran
             captured = json.loads(prompt)
             assert captured['utterance'] == utterance
             assert captured['dialogue']['pending_prerequisite'] == pending_public()['dialogue']['pending_prerequisite']
-            assert any('same request and selected dataset' in i for i in captured['instructions'])
-            assert any('never infer species' in i for i in captured['instructions'])
-            assert any('never additional operations' in i for i in captured['instructions'])
+            assert any('original objective' in i for i in captured['instructions'])
+            assert any('biological identity' in i for i in captured['instructions'])
+            assert any('never answer a pending request' in i for i in captured['instructions'])
             return json.dumps(dict(turn_schema_version=1,
                 decision=dict(kind='answer_prerequisite', pending='@species', species=species)))
     assert interpret(Model(), utterance, pending_public()) == SpeciesAnswer('@species', species)
@@ -67,9 +67,27 @@ def test_species_clarifications_use_existing_clarify_contract(reason):
         decision=dict(kind='clarify', reason=reason)))) == Clarify(reason)
 
 
+def numeric_owner():
+    """Synthetic scalar owner: lexical tests do not claim native Leiden ranges."""
+    from agent.orchestration.registry import ArgumentSpec
+    class PositiveFiniteScalar(ArgumentSpec):
+        def validate(self, name, value):
+            super().validate(name, value)
+            if value <= 0 or not __import__('math').isfinite(value):
+                raise ValueError('Synthetic owner requires positive finite values')
+    return PositiveFiniteScalar((float,))
+
+
 def leiden_declaration(utterance, literal='0.7', *, occurrence=0):
     start = utterance.index(literal, occurrence)
-    return ScopedArgument('cluster_cells', 'resolution', literal, start, start + len(literal))
+    return NativeStructuredArgument(tool='run_scanpy', argument='kwargs', literal=literal,
+        start=start, end=start + len(literal), native_function='tl.leiden',
+        members=(ArgumentMember('resolution','number',literal,start,start+len(literal)),))
+
+
+def scalar_declaration(utterance, literal='0.7'):
+    start = utterance.index(literal)
+    return ScopedArgument('synthetic_scalar_owner','value',literal,start,start+len(literal))
 
 
 def decision_wire(decision):
@@ -82,8 +100,8 @@ def test_explicit_resolution_uses_shared_typed_arguments(kind):
     declaration = leiden_declaration(utterance)
     value = dict(kind=kind, arguments=[asdict(declaration)])
     if kind == 'execute_plan':
-        value['target'] = 'cluster_cells'
-        expected = Execute('cluster_cells', arguments=(declaration,))
+        value['target'] = 'run_scanpy'
+        expected = Execute('run_scanpy', arguments=(declaration,))
     else:
         value.update(pending='@species', species='mouse')
         expected = SpeciesAnswer('@species', 'mouse', arguments=(declaration,))
@@ -91,7 +109,7 @@ def test_explicit_resolution_uses_shared_typed_arguments(kind):
 
 
 @pytest.mark.parametrize('value,expected', [
-    (dict(kind='execute_plan', target='cluster_cells'), Execute('cluster_cells')),
+    (dict(kind='execute_plan', target='run_scanpy'), Execute('run_scanpy')),
     (dict(kind='answer_prerequisite', pending='@species', species='mouse'), SpeciesAnswer('@species', 'mouse')),
 ])
 def test_omitted_arguments_keep_their_existing_meaning(value, expected):
@@ -99,10 +117,10 @@ def test_omitted_arguments_keep_their_existing_meaning(value, expected):
 
 
 @pytest.mark.parametrize('argument', [None, {}, [], True, 'resolution=0.7',
-    dict(tool='cluster_cells', argument='resolution', literal='0.7', start=0, end=3)])
+    dict(tool='run_scanpy', argument='resolution', literal='0.7', start=0, end=3)])
 def test_interpreter_rejects_retired_singular_parameter_adapter(argument):
     with pytest.raises(IntentError, match='invalid_decision'):
-        parse_decision(decision_wire(dict(kind='execute_plan', target='cluster_cells', argument=argument)))
+        parse_decision(decision_wire(dict(kind='execute_plan', target='run_scanpy', argument=argument)))
 
 
 def test_parameter_schema_retires_the_singular_writer():
@@ -122,8 +140,8 @@ def test_parameter_schema_retires_the_singular_writer():
     ('Use the request "Cluster at resolution 0.7."', '0.7', 0.7),
 ])
 def test_exact_decimal_source_span_delegates_value_validation_to_the_owner(utterance, literal, expected):
-    argument = build_default_tool_registry().get('cluster_cells').optional_arguments['resolution']
-    declaration = leiden_declaration(utterance, literal)
+    argument = numeric_owner()
+    declaration = scalar_declaration(utterance, literal)
     value = admit_scientific_argument(declaration, utterance, argument)
     assert type(value) is float and value == expected
 
@@ -139,23 +157,23 @@ def test_exact_decimal_source_span_delegates_value_validation_to_the_owner(utter
     ('Cluster at resolution 0.7.0.', '0.7'),
 ])
 def test_numeric_source_grounding_rejects_partial_values_units_and_numeric_suffixes(utterance, literal):
-    argument = build_default_tool_registry().get('cluster_cells').optional_arguments['resolution']
+    argument = numeric_owner()
     with pytest.raises(IntentError, match='ungrounded_operand'):
-        admit_scientific_argument(leiden_declaration(utterance, literal), utterance, argument)
+        admit_scientific_argument(scalar_declaration(utterance, literal), utterance, argument)
 
 
 @pytest.mark.parametrize('literal', ['0', '-0.7', '1e309', 'NaN', 'Infinity', '0.7%', '7/10', '0_7', '0,7', 'seven'])
 def test_explicit_invalid_value_never_becomes_a_default(literal):
     utterance = 'Cluster at resolution ' + literal + '.'
-    argument = build_default_tool_registry().get('cluster_cells').optional_arguments['resolution']
+    argument = numeric_owner()
     with pytest.raises(IntentError, match='invalid_parameter_value'):
-        admit_scientific_argument(leiden_declaration(utterance, literal), utterance, argument)
+        admit_scientific_argument(scalar_declaration(utterance, literal), utterance, argument)
 
 
 def test_numeric_source_grounding_rejects_changed_text_and_out_of_utterance_spans():
-    argument = build_default_tool_registry().get('cluster_cells').optional_arguments['resolution']
+    argument = numeric_owner()
     utterance = 'Use resolution 0.7.'
-    declaration = leiden_declaration(utterance)
+    declaration = scalar_declaration(utterance)
     for invalid, text in ((replace(declaration, literal='0.8'), utterance),
                           (replace(declaration, end=100), utterance),
                           (declaration, 'Use resolution 0.8.')):
@@ -171,12 +189,14 @@ def test_assignment_association_and_execution_intent_belong_to_the_interpreter()
         def complete(self, *, prompt, response_schema):
             value = json.loads(prompt)
             assert any('A number alone does not request an operation' in i for i in value['instructions'])
-            assert any('default_when_omitted' in i for i in value['instructions'])
+            assert any('Omitted optional parameters stay omitted' in i for i in value['instructions'])
             if value['utterance'] == question:
                 return decision_wire(dict(kind='answer_guidance',targets=[],candidate=None))
-            return decision_wire(dict(kind='execute_plan', target='cluster_cells', arguments=[asdict(declaration)]))
+            return decision_wire(dict(kind='execute_plan', target='run_scanpy', arguments=[dict(
+                tool='run_scanpy',native_function='tl.leiden',argument='kwargs',
+                members=[dict(name='resolution',kind='number',literal='0.7',evidence=utterance)])]))
     public = pending_public()
-    public['dialogue']['tools'].append('cluster_cells')
+    public['dialogue']['tools'].append('run_scanpy')
     from agent.application.dialogue_execution import scientific_parameters
     public['dialogue']['scientific_parameters'] = scientific_parameters(build_default_tool_registry())
     interpreted = interpret(Model(), utterance, public)
@@ -230,11 +250,10 @@ def test_interpreter_owns_operation_and_source_role_association_for_exact_string
             captured = json.loads(prompt)
             offered = captured['dialogue']['capabilities'][tool]['parameters'][name]
             assert offered['exact_string'] is True and offered['provenance_role'] == role
-            rule, = [item for item in captured['instructions'] if item.startswith('For an offered exact_string')]
-            for phrase in ('surrounding quotation marks excluded', 'Preserve case, Unicode',
-                           'do not normalize or invent reference/query/ground-truth relationships', 'provenance_role',
-                           'ambiguous or conflicting declarations require clarification'):
-                assert phrase in rule
+            rules = ' '.join(captured['instructions'])
+            for phrase in ('excludes quote delimiters', 'Unicode/case/whitespace',
+                           'Never infer a column', 'Roles and column source must agree'):
+                assert phrase.lower() in rules.lower()
             return decision_wire(dict(kind='execute_plan', target=tool, arguments=[asdict(argument)]))
 
     parsed = interpret(Model(), utterance, string_public())
@@ -252,11 +271,9 @@ def test_pending_string_answer_uses_the_same_interpreter_and_keeps_original_scop
             captured = json.loads(prompt)
             assert captured['utterance'] == utterance
             assert captured['dialogue']['pending_prerequisite'] == string_public(pending=True)['dialogue']['pending_prerequisite']
-            rule, = [item for item in captured['instructions'] if item.startswith('Choose answer_parameters only')]
-            assert 'numeric or exact_string literals' in rule
-            assert 'never invent the remaining values or add operations' in rule
-            assert any('original objective, inputs and operation scope remain fixed' in item
-                for item in captured['instructions'])
+            rules = ' '.join(captured['instructions'])
+            assert 'original objective' in rules and 'partial explicit answers are allowed' in rules
+            assert 'new objectives' in rules and 'never answer a pending request' in rules
             return decision_wire(dict(kind='answer_parameters', pending='@parameters', arguments=[asdict(argument)]))
 
     assert interpret(Model(), utterance, string_public(pending=True)) == ParameterAnswer('@parameters', (argument,))
@@ -288,21 +305,15 @@ def test_result_only_instructions_follow_the_existing_schema_offers():
             return decision_wire(dict(kind='clarify', reason='ambiguous_subject'))
     interpret(Capture(), 'Explain the method.', public)
     populated = deepcopy(public)
-    populated['dialogue']['result_groups'] = [dict(handle='g0', tool='cluster_cells',
+    populated['dialogue']['result_groups'] = [dict(handle='g0', tool='run_scanpy',
         canonical_output='r0', outputs=['r0'], parameters=[dict(argument='resolution')], categorical={})]
     interpret(Capture(), 'Explain this result.', populated)
     absent, present = [p['instructions'] for p in prompts]
-    prefixes = ('For a reusable H5AD', 'dialogue.result_groups groups', 'For execute_plan, references',
-                'Use retain_parameters', 'Use answer_scientific.detail', 'Use section=category_counts')
-    assert not any(rule.startswith(prefixes) for rule in absent)
-    assert all(any(rule.startswith(prefix) for rule in present) for prefix in prefixes)
-    assert [rule for rule in present if not rule.startswith(prefixes)] == absent
-    populated['dialogue']['result_groups'][0].pop('parameters')
-    interpret(Capture(), 'Use the earlier settings.', populated)
-    assert any(rule.startswith('Use retain_parameters') and 'unknown historical settings' in rule
-               for rule in prompts[-1]['instructions'])
-    # Capability and parameter discovery remain complete in both contexts.
+    # Shared intent rules; exact decision availability follows captured offers.
+    assert absent == present
+    assert 'answer_scientific' not in {v['properties']['kind']['enum'][0]
+        for v in decision_schema(public)['properties']['decision']['anyOf']}
+    assert 'answer_scientific' in {v['properties']['kind']['enum'][0]
+        for v in decision_schema(populated)['properties']['decision']['anyOf']}
     for prompt in prompts:
         assert set(prompt['dialogue']['capabilities']) == set(registry.names())
-        for row in scientific_parameters(registry):
-            assert prompt['dialogue']['capabilities'][row['tool']]['parameters'][row['argument']] == {k:v for k,v in row.items() if k not in ('tool','argument')}

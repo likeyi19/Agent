@@ -104,6 +104,22 @@ def test_adaptation_application(integration,tmp_path,monkeypatch):
             build_analysis_evidence(result.run_result,tmp_path/'debug',registry=build_default_tool_registry())
     assert result.status.value=='SUCCEEDED',(result.run_result.errors,result.error)
     assert counts==dict(production=1,owner=1) and matrix_calls==[1]
+    # Real accepted atomic matrix port, simulated model backend only. Preparation
+    # observes the exact published manifest without requalifying or retraining it.
+    from types import SimpleNamespace
+    from agent.orchestration.prior_outputs import bind_output
+    from agent.schemas import PriorOutputRef
+    from agent.orchestration.scientific_inputs import OperationPreparationContext,ScientificDiagnostic
+    from agent.tools.models import species_adaptation
+    binding=bind_output(app.run_store,app.registry,result.run_id,'adopt','matrix')
+    args=dict(matrix_manifest_path=PriorOutputRef(binding,'manifest_path'),
+        matrix_manifest_sha256=PriorOutputRef(binding,'manifest_sha256'),
+        adaptation_spec_path=inputs['adaptation_spec_path'],adaptation_spec_sha256=inputs['adaptation_spec_sha256'])
+    context=OperationPreparationContext(app.registry.get('adapt_epizoo_species'),'adapt',app.registry,{}, {},{},[],
+        SimpleNamespace(_application=app),None,{})
+    assert species_adaptation.prepare_operation(args,context)==args
+    with pytest.raises(ScientificDiagnostic):
+        species_adaptation.prepare_operation(dict(args,matrix_manifest_sha256=PriorOutputRef(binding,'manifest_path')),context)
     assert result.report and result.evidence and not result.visualization
     assert 'applied optimizer steps' in Path(result.report.path).read_text()
     assert all(s.verification.artifact_authority['schema_version']==2 for s in result.run_result.steps)

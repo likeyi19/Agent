@@ -27,6 +27,20 @@ def grouping_key(package, function, kwargs):
     return key
 
 
+def representation_key(package, function, kwargs):
+    """Written native representation names shared by promises and publication."""
+    if kwargs.get('inplace',True) is False:
+        return None
+    if function in ('pp.pca','tl.pca'):return 'X_pca'
+    if function=='tl.spectral':return 'X_spectral'
+    if function=='tl.diffmap':return 'X_diffmap'
+    if function=='tl.tsne':return 'X_tsne'
+    if function=='pp.lsi':return 'X_lsi'
+    if function=='tl.umap':return 'X_'+(kwargs.get('key_added') or 'umap') if package=='snapatac2' else 'X_umap'
+    if function=='pp.mnc_correct':return kwargs.get('key_added') or kwargs.get('use_rep','X_spectral')+'_mnn'
+    return None
+
+
 def describe(tool, result):
     """Describe actual produced slots; retained fields are not new computations."""
     if tool not in TOOLS:

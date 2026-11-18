@@ -87,10 +87,10 @@ def assert_role_pending(harness, view, *, turn='first', missing=REQUIRED_ROLES):
     assert not view['steps']
     state = harness.service._application.sessions.load('session')
     record = next(item for item in state.interactions if item.turn_id == turn)
-    assert record.prerequisite['field'] == 'roles'
+    assert record.preparation['task']['context']['intake_owner'] == 'roles'
     assigned = {(role['tool'], role['port']) for role in record.admitted['roles']}
-    assert [role for role in _serialize(record.prerequisite['required_roles'])
-            if (role['tool'], role['port']) not in assigned] == missing
+    assert [dict(tool=r['tool_name'],port=r['port']) for r in record.admitted['preparation_result']['requirements']
+            if (r['tool_name'], r['port']) not in assigned] == missing
     assert not state.revisions and state.generation == 0
     return record
 
@@ -258,8 +258,8 @@ def test_changed_web_input_set_cannot_retarget_pending_role_answer(tmp_path):
         changed = multi_body(selected, turn='changed', utterance=ROLE_ANSWER) | dict(input_set_id=second.input_set_id)
         with multi_input_work() as calls:
             result = execute(client, changed)
-        assert result['revision_id'] is None and result['response']['status'] == 'failed'
-        assert result['response']['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID'
+        assert result['revision_id'] is None and result['status'] == 'failed'
+        assert result['error']['code'] == 'INTERACTIVE_TURN_CONFLICT'
         assert_no_owner(calls)
         assert not harness.service._application.sessions.load('session').revisions
         assert harness.service._application.sessions.load('session').interactions[0] == origin
@@ -280,9 +280,9 @@ def test_role_then_exact_string_clarification_uses_original_objective_and_same_s
             unresolved = execute(client, multi_body(turn='roles', utterance=ROLE_ANSWER))
         assert_no_owner(roles)
         assert unresolved['response']['kind'] == 'clarify'
-        assert unresolved['response']['clarification']['choices'] == ['label_key']
+        assert unresolved['response']['clarification']['choices'] == ['evaluation.label_key']
         middle = harness.service._application.sessions.load('session').interactions[-1]
-        assert middle.prerequisite['field'] == 'parameters'
+        assert [r['argument'] for r in middle.admitted['preparation_result']['requirements']]==['label_key']
         assert sorted(_serialize(middle.admitted['roles']), key=lambda r:r['tool']) == sorted(ROLES, key=lambda r:r['tool'])
         with multi_input_work() as completed:
             result = execute(client, multi_body(turn='label', utterance=LABEL_ANSWER))

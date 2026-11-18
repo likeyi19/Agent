@@ -53,11 +53,14 @@ def stop_before_planning(app, monkeypatch):
     monkeypatch.setattr(semantic_compiler, 'compile_semantic_plan', forbidden)
     monkeypatch.setattr(PlanExecutor, 'preflight', forbidden)
 
-    def stop(sessions, interaction, admitted, model, *, epizoo_resources=()):
+    def stop(sessions, interaction, admitted, **kwargs):
+        from agent.application.turns import _update
         reached.append((interaction, _serialize(admitted)))
-        return TurnOutcome('execute', 'admitted')
+        _update(sessions, interaction.turn_id, admitted=admitted, status='admitted')
+        return admitted, None, TurnOutcome('execute', 'admitted')
 
-    monkeypatch.setattr(dialogue_execution, 'execute', stop)
+    from agent.application import turns
+    monkeypatch.setattr(turns, '_prepare_research', stop)
     return app, reached, forbidden_calls
 
 

@@ -121,37 +121,6 @@ def test_role_answer_retains_reviewed_scalar_choice_wire():
 
 
 
-@pytest.mark.parametrize('tool,ports', [
-    ('inspect_scATAC', {'dataset'}), ('mock_embed_cells', {'dataset'}),
-    ('run_signac', {'dataset'}), ('run_episcanpy', {'dataset'}), ('run_snapatac2', {'dataset'}),
-    ('run_scanpy', {'dataset'}), ('run_cicero_cds', {'dataset'}),
-    ('transfer_cell_labels', {'reference_dataset', 'query_dataset'}),
-    ('evaluate_cell_clustering', {'analysis', 'ground_truth_dataset'}),
-])
-def test_absent_files_are_registry_requirements_not_language_rules(tool, ports):
-    from dataclasses import dataclass, field
-    from agent.application.dialogue_execution import missing_file_request
-    @dataclass
-    class Capture:
-        submission: dict
-        snapshot: dict = field(default_factory=dict)
-    registry = build_default_tool_registry()
-    decision = parse_decision(wire(dict(kind='execute_plan', target=tool)))
-    interaction = Capture(submission=dict(execution_inputs={}))
-    result = missing_file_request(registry, interaction, decision)
-    assert isinstance(result, RequestRoles) and result.target == tool
-    assert {r.port for r in result.required_roles} == ports
-    assert not result.roles
-    # A supplied source or explicitly selected result is never replaced by an upload prompt.
-    assert missing_file_request(registry, Capture(submission={
-        'execution_inputs': {'input_path': '/selected/source'}}), decision) is None
-    assert missing_file_request(registry, interaction, replace(decision, context='current')) is None
-    assert missing_file_request(registry, interaction, replace(decision, target='not_registered')) is None
-    with pytest.raises(IntentError, match='ambiguous_subject'):
-        missing_file_request(registry, Capture(submission={
-            'execution_inputs': {}, 'available_input_overflow': True}), decision)
-
-
 def test_interpreter_gets_safe_original_roles_and_no_keyword_repair():
     class Model:
         def complete(self, *, prompt, response_schema):
@@ -165,8 +134,8 @@ def test_interpreter_gets_safe_original_roles_and_no_keyword_repair():
     assert model.prompt['utterance'] == answer
     assert model.prompt['dialogue']['pending_prerequisite'] == public(pending=True)['dialogue']['pending_prerequisite']
     instructions = ' '.join(model.prompt['instructions'])
-    assert 'Previously admitted roles cannot be reassigned' in instructions
-    assert 'only the original task' in instructions
+    assert 'offered question and original objective' in instructions
+    assert 'No stale or cross-task identity is valid' in instructions
     assert '/unopened/' not in json.dumps(model.prompt)
 
 
@@ -250,78 +219,97 @@ def test_existing_complete_group_binding_does_not_accept_partial_pending_associa
 
 
 @pytest.mark.parametrize('association_stage', ['initial', 'answer'])
-def test_partial_role_source_mutation_is_rejected_during_durable_session_decode(tmp_path, association_stage):
-    from agent.application.session_state import AnalysisSession, SessionError
-    from agent.schemas.orchestration import _serialize
+def test_ordinary_preplan_role_arrangements_are_rejected_without_science(tmp_path, association_stage):
+    """Historical complete-role wires grant no current pre-Candidate authority."""
     from test_role_declaration_continuation import (
-        OBJECTIVE, REFERENCE, REFERENCE_ANSWER, transfer_continuation_harness, pending, request, submit,
+        OBJECTIVE, REFERENCE, transfer_continuation_harness, request, submit,
     )
-    decisions = {OBJECTIVE: request(roles=[REFERENCE])} if association_stage == 'initial' else None
-    app, _, group, executor, _, _ = transfer_continuation_harness(tmp_path, decisions=decisions)
-    first = submit(app, group=group)
-    if association_stage == 'answer':
-        pending(app, first)
-        result = submit(app, turn='partial', utterance=REFERENCE_ANSWER)
-        record = pending(app, result, turn='partial', missing=[
-            dict(tool='transfer_cell_labels', port='query_dataset')])
-    else:
-        record = pending(app, first, missing=[dict(tool='transfer_cell_labels', port='query_dataset')])
-    state = app._application.sessions.load('session')
+    decision=request(roles=[REFERENCE] if association_stage=='initial' else [])
+    assert isinstance(parse_decision(wire(decision)),RequestRoles)
+    app, _, group, executor, calls, _=transfer_continuation_harness(tmp_path,
+        decisions={OBJECTIVE:decision})
+    result=submit(app,group=group)
+    assert result['error']['code']=='INTERACTIVE_INTENT_BINDING_INVALID'
+    state=app._application.sessions.load('session')
     assert not state.turns and not state.revisions and not executor.plans
-    assert _serialize(record.admitted['registered_input']['roles']) == [REFERENCE]
-    assert not state.interactions[0].submission['registered_input']['roles']
-    before = _serialize(state.to_dict())
-    assert AnalysisSession.from_dict(before) == state
-    forged = _serialize(state.to_dict())
-    forged['interactions'][-1]['admitted']['roles'][0]['source'] = 'source.1'
-    with pytest.raises(SessionError, match='pending scientific role binding'):
-        AnalysisSession.from_dict(forged)
-    assert _serialize(app._application.sessions.load('session').to_dict()) == before
-    assert not executor.plans
+    assert state.interactions[-1].preparation is None
+    assert state.interactions[-1].submission['registered_input']['members']==group.members
+    assert len(calls)==1
+
+
+def candidate_transfer_harness(tmp_path):
+    from test_multi_input_role_admission import TransferBindingModel, transfer_binding_harness, PROFILE, LABEL
+    from test_response_contracts import OutcomeModel
+    from agent.application.session_state import AnalysisSession,SessionError
+    from agent.schemas.orchestration import _serialize
+    original,records,group,executor,calls,companions=transfer_binding_harness(tmp_path)
+    token=dict(input_set_id='operator',definition_sha256='a'*64)
+    group=replace(group,attachment_candidates=True,resource_choice=token)
+    class CandidateModel(TransferBindingModel):
+        def complete(self,*,prompt,response_schema):
+            value=json.loads(prompt)
+            if 'turn_schema_version' in value:
+                self.calls.append(dict(value=value))
+                return wire(dict(kind='execute_plan',target='transfer_cell_labels',roles=[],arguments=[]))
+            if value.get('focus')=='outcome' or 'grounding_review_version' in value:
+                return OutcomeModel('Please select the required input.').complete(prompt=prompt,response_schema=response_schema)
+            result=json.loads(super().complete(prompt=prompt,response_schema=response_schema))
+            if 'semantic_prompt_version' in value:
+                result['decision']['steps'][0]['sources']=[s for s in result['decision']['steps'][0]['sources']
+                    if s['target'] not in {'reference_dataset','query_dataset'}]
+            return json.dumps(result)
+    from agent.application import InteractiveAgentApplication
+    from agent.providers import PlanningModelFactoryRegistry
+    app=InteractiveAgentApplication(original._application.workspace_root,registry=original._application.registry,executor=executor,
+        model_profiles=(PROFILE,),default_profile_id=PROFILE.profile_id,approved_source_roots=(tmp_path/'approved',),
+        planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted':lambda _:CandidateModel(calls)}))
+    return app,records,group,executor,calls,companions
 
 
 @pytest.mark.parametrize('reselect_original', [False, True])
-def test_reference_query_roles_then_column_answer_retains_exact_sources_and_resource_choice(tmp_path, reselect_original):
-    from dataclasses import replace
-    from agent.application.session_state import AnalysisSession, SessionError
+def test_candidate_sources_then_exact_column_retain_identity_and_resource_choice(tmp_path,reselect_original):
+    from agent.application.session_state import AnalysisSession,SessionError
     from agent.schemas.orchestration import _serialize
-    from test_role_declaration_continuation import (
-        LABEL, ROLES, ROLE_ANSWER, assert_withheld, label_declaration,
-        transfer_continuation_harness, pending, request, submit,
-    )
-    objective = 'Transfer labels between these two selected datasets.'
-    reply = f'Use the reference column "{LABEL}".'
-    decisions = {objective: request(declarations=[]), reply: dict(kind='answer_parameters',
-        pending='@parameters', arguments=[label_declaration(reply)])}
-    app, records, group, executor, calls, companions = transfer_continuation_harness(tmp_path, decisions=decisions)
-    token = dict(input_set_id='operator', definition_sha256='a'*64)
-    group = replace(group, resource_choice=token)
-    first = pending(app, submit(app, group=group, utterance=objective))
-    middle_view = submit(app, turn='roles', utterance=ROLE_ANSWER)
-    assert middle_view['response']['kind'] == 'clarify', middle_view
-    state = app._application.sessions.load('session')
-    middle = state.interactions[-1]
-    assert middle.prerequisite['field'] == 'parameters'
-    assert list(middle.prerequisite['missing']) == ['reference_label_key']
-    assert not executor.plans and not state.revisions
-    final_view = submit(app, turn='column', utterance=reply, group=group if reselect_original else None)
-    assert_withheld(final_view, executor, records, companions)
-    state = app._application.sessions.load('session')
-    final = state.interactions[-1]
-    assert state.interactions[0] == first and state.interactions[1] == middle
-    assert _serialize(final.admitted['roles']) == ROLES
-    assert final.admitted['registered_input']['resource_choice'] == token
-    assert _serialize(final.admitted['registered_input']['members']) == _serialize(group.members)
-    run = app._application.run_store.load(final_view['run_id'])
-    assert run.request.prompt == objective and run.request.inputs['reference_label_key'] == LABEL
-    decoded = _serialize(state.to_dict())
-    assert AnalysisSession.from_dict(decoded) == state
-    decoded['interactions'][-1]['admitted'].pop('registered_input')
-    with pytest.raises(SessionError, match='pending scientific parameter binding'):
-        AnalysisSession.from_dict(decoded)
-    counts = len(calls), len(executor.plans)
-    assert submit(app, turn='column', utterance=reply, group=group if reselect_original else None) == final_view
-    assert counts == (len(calls), len(executor.plans))
+    from test_multi_input_role_admission import LABEL
+    app,records,group,executor,calls,companions=candidate_transfer_harness(tmp_path)
+    token=_serialize(group.resource_choice)
+    question=app.submit_turn('session','task','Transfer labels; let me choose sources and the reference label field.',
+        expected_generation=0,registered_input=group)
+    state=app._application.sessions.load('session');origin=state.interactions[-1]
+    assert origin.preparation['candidate_id'] is not None and question.status=='clarification',question.to_dict()
+    assert origin.admitted['registered_input'] is None
+    from agent.application.source_observations import apply_source_choices
+    assert apply_source_choices(dict(origin.admitted),[],{},app._application.registry,
+        captured_group=group.attribution())==dict(origin.admitted)
+    for index,(argument,label) in enumerate([('reference_h5ad_path','Selected reference'),('query_h5ad_path','Selected query')]):
+        choice=next(c for c in question.clarification_choices if c.get('source_input') and c['argument']==argument and c['label']==label)
+        question=app.submit_turn('session','source'+str(index),'',expected_generation=0,
+            clarification_choice=dict(question_turn_id=question.turn_id,handle=choice['handle']))
+        if index==0:
+            bound=app._application.sessions.load('session').interactions[-1].admitted
+            assert bound['registered_input']['resource_choice']==token
+            assert len(bound['registered_input']['roles'])==1
+            assert bound['registered_input']['roles'][0]['port']=='reference_dataset'
+    assert question.status=='clarification',question.to_dict()
+    choice=next(c for c in question.clarification_choices if c.get('source_field') and c['value']==LABEL)
+    result=app.submit_turn('session','column','',expected_generation=0,
+        clarification_choice=dict(question_turn_id=question.turn_id,handle=choice['handle']),
+        registered_input=group if reselect_original else None)
+    assert result.error.code=='TEST_SCIENCE_WITHHELD',result.to_dict()
+    step=executor.plans[0].steps[0]
+    assert step.arguments['reference_h5ad_path']==records[0].source_path
+    assert step.arguments['query_h5ad_path']==records[1].source_path
+    assert step.arguments['reference_label_key']==LABEL
+    assert all(step.arguments[k]==v for k,v in companions.items())
+    state=app._application.sessions.load('session')
+    assert state.interactions[0]==origin
+    assert state.interactions[-1].admitted['registered_input']['resource_choice']==token
+    assert len({i.preparation['candidate_id'] for i in state.interactions})==1
+    assert sum('semantic_prompt_version' in c.get('value',{}) for c in calls)==1
+    assert sum('turn_schema_version' in c.get('value',{}) for c in calls)==1
+    assert AnalysisSession.from_dict(_serialize(state.to_dict()))==state
+    forged=_serialize(state.to_dict());forged['interactions'][-1]['admitted']['roles'][0]['source']='source.1'
+    with pytest.raises((SessionError,ValueError)):AnalysisSession.from_dict(forged)
 
 
 def test_role_request_cannot_bypass_existing_candidate_selection_guard(tmp_path, monkeypatch):
@@ -341,7 +329,7 @@ def test_role_request_cannot_bypass_existing_candidate_selection_guard(tmp_path,
     monkeypatch.setattr('agent.application.scientific_guidance.references_candidate', candidate_reference)
     app, _, group, executor, calls, _ = transfer_continuation_harness(tmp_path)
     result = submit(app, group=group)
-    assert seen == [('first', OBJECTIVE, None)]
+    assert seen == []  # Retired ordinary role wire is rejected before candidate admission.
     assert result['status'] == 'failed'
     assert result['error']['code'] == 'INTERACTIVE_INTENT_BINDING_INVALID'
     state = app._application.sessions.load('session')

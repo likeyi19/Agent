@@ -7,7 +7,7 @@ import pytest
 from agent.application import annotation_preparation
 from agent.application.dialogue_execution import admit, execution_submission, _validate_argument_record
 from agent.application.local_resources import LocalResourceAdmission, ResourceAdmissionError
-from agent.application.raw_handoff import AnnotationDeclaration, AnnotationUploads
+from agent.application.raw_handoff import AnnotationDeclaration
 from agent.application.session_state import Interaction
 from agent.application.turn_decisions import Execute, InputRole, RequestRoles
 from agent.orchestration import build_default_tool_registry
@@ -137,23 +137,24 @@ def test_invalid_selected_registration_and_roles_fail_closed(sources, bad):
             owner.bind_group(pool, roles)
 
 
-def test_reference_only_selection_keeps_exact_reference_checks_without_dataset_guard(sources, monkeypatch):
+def test_grouping_only_selection_keeps_exact_source_checks_without_dataset_guard(sources, monkeypatch):
     owner, records, pool, item, sessions = sources
-    declared = AnnotationDeclaration(uploaded=AnnotationUploads(gene_source='source.0', signature_source='source.2'))
+    declared = AnnotationDeclaration(groups_source='source.2')
     seen = []
-    original = LocalResourceAdmission.validate_members
-    def checked(self, members, **kwargs):
-        seen.extend(m['resource_id'] for m in members)
-        return original(self, members, **kwargs)
-    monkeypatch.setattr(LocalResourceAdmission, 'validate_members', checked)
+    original = LocalResourceAdmission._verify_records
+    def checked(self, selected):
+        seen.extend(r.resource_id for r in selected)
+        return original(self, selected)
+    monkeypatch.setattr(LocalResourceAdmission, '_verify_records', checked)
     decision = RequestRoles('annotate_scATAC_cell_types', (), annotation=declared)
-    value, pending = annotation_preparation.admit(sessions, item, decision, ())
-    assert value['registered_input'] is None and not value['inputs'] and pending is None
+    value, needs = annotation_preparation.admit(sessions, item, decision, ())
+    assert 'input_path' not in value['inputs'] and needs
+    assert value['inputs']['grouping_path'] == records[2].source_path
     assert value['annotation_sources'] == pool.attribution()
-    assert seen == [records[0].resource_id, records[2].resource_id]
-    assert 'registered_input' not in execution_submission(replace(item, admitted=value))
+    assert seen == [records[2].resource_id]
+    assert value['registered_input']['roles'] == [dict(tool='annotate_scATAC_cell_types',port='groups',source='source.2')]
     from pathlib import Path
-    Path(records[2].source_path).write_bytes(b'Changed selected reference')
+    Path(records[2].source_path).write_bytes(b'Changed selected grouping')
     with pytest.raises(ResourceAdmissionError):
         annotation_preparation.admit(sessions, item, decision, ())
 
@@ -177,8 +178,8 @@ def test_real_execution_acceptance_installs_only_the_selected_upload_guard(sourc
     value = admit(sessions, item, Execute('inspect_scATAC',
         roles=(InputRole('inspect_scATAC', 'dataset', 'source.1'),)), {})
     path = records[0].source_path if variant == 'wrong_consumer_path' else records[1].source_path
-    value['native_plan'] = AgentPlan('plan', value['request_id'], item.utterance,
-        (PlanStep('inspect', 'inspect_scATAC', dict(path=path)),)).to_dict()
+    prepared = AgentPlan('plan', value['request_id'], item.utterance,
+        (PlanStep('inspect', 'inspect_scATAC', dict(path=path)),))
     item = replace(item, admitted=value, status='admitted')
     sessions._store._write(replace(state, interactions=(item,)))
     events = []
@@ -213,7 +214,7 @@ def test_real_execution_acceptance_installs_only_the_selected_upload_guard(sourc
     monkeypatch.setattr(LocalResourceAdmission, 'validate_group_consumer', check_consumer)
     monkeypatch.setattr(_native_process, 'call', lambda *a, **k: pytest.fail('Native dispatch prohibited'))
     def run():
-        return dialogue_execution.execute(sessions, item, value, Model())
+        return dialogue_execution.execute(sessions, item, value, Model(), prepared_plan=prepared)
     if variant == 'selected':
         with pytest.raises(StoppedBeforeScience):
             result = run()

@@ -29,10 +29,11 @@ def test_retired_execution_and_answer_grammar_removed():
         parse_decision(json.dumps(dict(turn_schema_version=1,decision=dict(kind='execute',base='current',operation='op.0',target='selection',delta=None))))
     from agent.orchestration import build_default_tool_registry
     registry=build_default_tool_registry()
+    from agent.orchestration.registry import UnknownToolError
     for name in ('select_scATAC_cells','build_scATAC_cell_by_ccre','build_scATAC_cell_by_features','pca_embed_cells'):
         assert name not in registry.names()
-        assert registry.get(name).name == name
-        assert not hasattr(registry.get(name), 'function')
+        with pytest.raises(UnknownToolError):
+            registry.get(name)
 
 
 class OutcomeModel:
@@ -48,9 +49,21 @@ class OutcomeModel:
 
 
 def outcome_session():
-    interaction=N(turn_id='q',utterance='请用中文说明原因。',admitted={'tool':'run_snapatac2'},prerequisite=None,submission=None)
+    interaction=N(turn_id='q',utterance='请用中文说明原因。',admitted={'tool':'run_snapatac2'},prerequisite=None,submission=None,presentation=None,preparation=None)
     state=N(interactions=(interaction,),turns=())
     return N(load=lambda _:state),interaction
+
+
+def test_durable_failure_presentation_is_reused_without_generation():
+    from agent.application.interactive_schemas import PresentedResponse
+    sessions,interaction=outcome_session()
+    saved=PresentedResponse(kind='execute',status='failed',text='Exact saved source rejection.',
+        error=ClientError('LOCAL_RESOURCE_INTEGRITY_INVALID','Original source changed.'))
+    interaction.presentation=saved.to_dict()
+    model=OutcomeModel(fail=True)
+    result=summarize(sessions,'s','q',TurnOutcome('execute','failed',error=saved.error),model=model)
+    assert result.presentation==saved and result.text==saved.text and result.error==saved.error
+    assert not model.calls and interaction.presentation==saved.to_dict()
 
 
 @pytest.mark.parametrize('outcome', [TurnOutcome('clarify','clarification',Clarify('invalid_parameter_value',('run_snapatac2.kwargs',),True)),
@@ -96,7 +109,7 @@ def test_reviewed_answer_and_exact_result_edit_do_not_generate_again():
     reviewed=TurnOutcome('answer','answered',text='已有回答',scientific=object())
     assert summarize(sessions,'s','q',reviewed,model=model) is reviewed
     interaction.admitted={'result_edit':True}
-    assert summarize(sessions,'s','q',TurnOutcome('execute','activated'),model=model).text=='Analysis accepted.'
+    assert summarize(sessions,'s','q',TurnOutcome('execute','activated'),model=model).text==''
     assert not model.calls
 
 

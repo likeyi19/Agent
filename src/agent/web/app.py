@@ -92,6 +92,7 @@ class SubmitTurn(_Body):
     predecessor_turn_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
     clarification_choice: ClarificationChoice | None = None
     rerun_revision_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
+    resume_task_id: StrictStr | None = Field(default=None, min_length=1, max_length=256)
     parameter_overrides: list[dict] = Field(default_factory=list, max_length=32)
     candidate_selection: dict[str, str] | None = None
     selected_results: list[dict] = Field(default_factory=list, max_length=32)
@@ -185,7 +186,7 @@ class _LocalWorkers:
                 input_sets=self.input_sets,
                 predecessor_turn_id=payload.predecessor_turn_id, attachment_ids=payload.attachment_ids,
                 clarification_choice=None if payload.clarification_choice is None else payload.clarification_choice.model_dump(),
-                rerun_revision_id=payload.rerun_revision_id, parameter_overrides=payload.parameter_overrides, candidate_selection=payload.candidate_selection,
+                rerun_revision_id=payload.rerun_revision_id, resume_task_id=payload.resume_task_id, parameter_overrides=payload.parameter_overrides, candidate_selection=payload.candidate_selection,
                 selected_results=payload.selected_results,
                 **self._input_arguments(inputs))
         except InteractiveBoundaryError as exc:
@@ -263,7 +264,7 @@ class _LocalWorkers:
             input_sets=self.input_sets,
             predecessor_turn_id=payload.predecessor_turn_id, attachment_ids=payload.attachment_ids,
             clarification_choice=None if payload.clarification_choice is None else payload.clarification_choice.model_dump(),
-                rerun_revision_id=payload.rerun_revision_id, parameter_overrides=payload.parameter_overrides, candidate_selection=payload.candidate_selection,
+                rerun_revision_id=payload.rerun_revision_id, resume_task_id=payload.resume_task_id, parameter_overrides=payload.parameter_overrides, candidate_selection=payload.candidate_selection,
                 selected_results=payload.selected_results,
             **self._input_arguments(inputs))
         key = (session_id, payload.turn_id)

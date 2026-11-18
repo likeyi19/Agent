@@ -78,6 +78,91 @@ def declaration_input(registry, declaration, ordinary):
     return name
 
 
+def parameter_matches(steps, row, registry, admitted):
+    from agent.application.turn_decisions import IntentError
+    selected = [s for s in steps if s.tool_name == row['tool']
+                and (row.get('native_function') is None or s.arguments.get('function_name') == row['native_function'])]
+    if row.get('port') is not None:
+        from agent.application.local_resources import _group_port, plan_source_path
+        members = (admitted.get('registered_input') or {}).get('members', ())
+        index = int(row['source'].split('.')[1])
+        role = {k: row[k] for k in ('tool', 'port', 'source')}
+        roles = admitted.get('roles', ())
+        # Raw declarations retain their original attachment identities outside
+        # the derived native-science registration. They select the native input
+        # port without creating H5AD group roles or granting derived-file scope.
+        if (admitted.get('registered_input') or {}).get('composition') == 'native-science.v1':
+            raw = [field for field in ('bam', 'fragments')
+                if admitted.get(field + '_context', {}).get('adapter') == 'native-inputs.v1'
+                and admitted.get(field, {}).get('source') == row['source']]
+            if len(raw) == 1 and row['tool'] == 'run_snapatac2' and row['port'] == 'dataset':
+                members = admitted.get(raw[0] + '_sources', {}).get('members', ())
+                roles = (role,)
+        if index >= len(members) or role not in roles:
+            raise IntentError('invalid_reference')
+        port, _, _ = _group_port(registry, row['tool'], row['port'])
+        selected = [s for s in selected if plan_source_path(s.arguments.get(port.members[0].field_name), steps)
+                    == members[index]['source_path']]
+    if row.get('step_id') is not None:
+        selected = [s for s in selected if s.step_id == row['step_id']]
+    failure = admitted.get('native_failure')
+    if (failure is not None and row['tool'] == 'run_episcanpy' and row['argument'] == 'kwargs'
+            and row.get('native_function') == failure['function_name'] and 'num_clusters' in row['value']):
+        selected = [s for s in selected if s.step_id == failure['step_id']]
+    return selected
+
+
+def resolved_parameter(steps, row, registry, admitted, value, *, prepared_values=()):
+    """One exact consumer/effective-value projection shared by bind and assert."""
+    from agent.application.turn_decisions import IntentError
+    from agent.schemas.orchestration import _serialize
+    selected=parameter_matches(steps,row,registry,admitted)
+    if len(selected)!=1:
+        raise IntentError('ambiguous_parameter' if selected else 'invalid_reference')
+    step=selected[0]
+    overrides=[r for r in prepared_values if r['step_id']==step.step_id and r['tool']==step.tool_name
+        and r.get('native_function')==step.arguments.get('function_name') and r['argument']==row['argument']]
+    if len(overrides)>1:raise IntentError('invalid_reference')
+    if overrides:
+        value=({**value,**overrides[0]['value']} if row['argument']=='kwargs' else overrides[0]['value'])
+    return step, _serialize(value)
+
+
+def assert_native_parameter_scopes(steps, rows, registry, admitted):
+    """Protect explicitly scoped kwarg members from unrelated native calls.
+
+    Omission preserves native defaults. A separately owned consumer retains its
+    own assertion; a supplied unowned member needs the actual installed default.
+    Same names in different registered tools confer no shared scope.
+    """
+    from agent.application.turn_decisions import IntentError
+    from agent.schemas.orchestration import _serialize
+    protected={};owned=set()
+    for row in rows:
+        tool=registry.get(row['tool'])
+        if row['argument']!='kwargs' or tool.native_functions is None:continue
+        selected=parameter_matches(steps,row,registry,admitted)
+        if len(selected)!=1:raise IntentError('ambiguous_parameter')
+        protected.setdefault(tool.name,set()).update(row['value'])
+        owned.update((selected[0].step_id,key) for key in row['value'])
+    for step in steps:
+        keys=protected.get(step.tool_name,set()) & set(step.arguments.get('kwargs',{}))
+        missing=[key for key in keys if (step.step_id,key) not in owned]
+        if not missing:continue
+        native=registry.get(step.tool_name).native_functions
+        metadata={} if native.parameter_metadata is None else native.parameter_metadata(step.arguments.get('function_name'))
+        from .scientific_inputs import OperationPreparationContext
+        context=OperationPreparationContext(registry.get(step.tool_name),step.step_id,registry,
+            {s.step_id:(s.tool_name,s.arguments) for s in steps},admitted,{},[],None,None,{},observe_existing=False)
+        for key in missing:
+            item=metadata.get(key,{})
+            actual=_serialize(step.arguments['kwargs'][key])
+            if 'default_when_omitted' in item and actual==_serialize(item['default_when_omitted']):continue
+            promised=context.planned_parameter_value(step.arguments,item)
+            if promised is not None and actual==_serialize(promised):continue
+            raise IntentError('ambiguous_parameter')
+
+
 def bind_structured_parameters(selected, settings, registry, request_inputs):
     """Bind captured scalar values before selected-method input preparation.
 
@@ -87,15 +172,22 @@ def bind_structured_parameters(selected, settings, registry, request_inputs):
     """
     bound = {step: (tool, dict(arguments)) for step, (tool, arguments) in selected.items()}
     applied, ambiguous = {}, False
+    from .semantic_compiler import AnalyzedOperation
+    from .active_context import current_context
+    context=current_context()
+    scope={} if context is None else context.task.get('parameter_sources',{})
+    prepared=() if context is None else context.task.get('prepared_parameter_values',())
     for row in settings:
-        candidates = [step for step, (tool, arguments) in bound.items() if tool == row['tool']
-            and (row.get('native_function') is None or arguments.get('function_name') == row['native_function']
-                 or row['argument'] == 'function_name')
-            and (row.get('step_id') is None or step == row['step_id'])]
+        operations = tuple(AnalyzedOperation(step, tool, args, ()) for step, (tool, args) in bound.items())
+        candidates = [op.step_id for op in parameter_matches(operations, row, registry, scope)]
         if len(candidates) != 1:
-            ambiguous = ambiguous or bool(candidates)
+            if not candidates:
+                from .semantic_compiler import SemanticPlanCompileError
+                raise SemanticPlanCompileError('INVALID_REQUEST_BINDING', 'Explicit parameter has no selected consumer.')
+            ambiguous = True
             continue
-        step = candidates[0]
+        operation, effective = resolved_parameter(operations,row,registry,scope,row['value'],prepared_values=() if context is None else context.task.get('prepared_parameter_values',()))
+        step = operation.step_id
         tool_name, arguments = bound[step]
         tool = registry.get(tool_name)
         name = row['argument']
@@ -105,7 +197,7 @@ def bind_structured_parameters(selected, settings, registry, request_inputs):
                 for port in tool.semantic_planning.consumer_ports):
             raise ValueError('Structured values require a registered scalar port.')
         from agent.schemas.orchestration import _serialize
-        value = _serialize(row['value'])
+        value = effective
         if name == 'kwargs':
             value = {**_serialize(arguments.get(name, {})), **value}
             for key in value:
@@ -117,6 +209,9 @@ def bind_structured_parameters(selected, settings, registry, request_inputs):
         spec.validate(name, value)
         arguments[name] = value
         applied.setdefault(step, set()).add(name)
+    if (settings or prepared) and not ambiguous:
+        operations=tuple(AnalyzedOperation(step,tool,args,()) for step,(tool,args) in bound.items())
+        assert_native_parameter_scopes(operations,(*settings,*prepared),registry,scope)
     return bound, applied, ambiguous
 
 

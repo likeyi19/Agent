@@ -106,7 +106,8 @@ class MappingWitness:
             target = 'epizoo_embed_cells' if self.embedding_only else 'run_snapatac2'
             decision = (dict(kind='execute_plan', target=target)
                 if value['utterance'] == self.objective else
-                dict(kind='answer_prerequisite', pending='@species', species=self.species))
+                dict(kind='answer_parameters',pending='@parameters',arguments=[dict(tool='epizoo_embed_cells',
+                    argument='species',value=self.species,literal=self.species,evidence=value['utterance'])]))
             response = dict(turn_schema_version=1, decision=decision)
         elif 'selection_schema_version' in value:
             response = dict(selection_schema_version=1,
@@ -170,12 +171,13 @@ def test_species_answer_resumes_original_registered_request_with_exact_default_a
         resource_selection_error='EPIZOO_RESOURCE_REQUIRED')
     pending = app.submit_turn('session', 'initial', OBJECTIVE, expected_generation=0, registered_input=binding)
     assert pending.status == 'clarification' and pending.revision_id is None, pending.to_dict()
-    assert pending.response.clarification['reason'] == 'missing_species'
+    assert pending.response.clarification['reason'] == 'missing_parameter_value'
     state = app._application.sessions.load('session')
     original = state.interactions[0]
     original_inputs = _serialize(original.submission['execution_inputs'])
     assert original_inputs == dict(input_path=record.source_path, device='cuda:0')
-    assert original.prerequisite['origin_turn_id'] == 'initial'
+    assert original.prerequisite is None
+    assert original.preparation['task_origin'] == 'initial'
     assert not executor.plans and not state.revisions
 
     before = len(calls)
@@ -206,10 +208,14 @@ def test_species_answer_resumes_original_registered_request_with_exact_default_a
     assert 'min_dist' not in umap.arguments and 'spread' not in umap.arguments
     state = app._application.sessions.load('session')
     resumed = state.interactions[-1]
-    assert resumed.admitted['inputs'] == original_inputs | dict(species=species) | expected.inputs()
-    assert resumed.admitted['continuation']['origin_turn_id'] == 'initial'
-    assert resumed.admitted['registered_input']['resource_id'] == record.resource_id
-    assert resumed.admitted['registered_input']['record_sha256'] == record.record_sha256
+    assert resumed.admitted['inputs'] == original_inputs
+    from agent.application.preparation_state import scalar_bindings
+    assert scalar_bindings(state.interactions,resumed.preparation)['embed']['species']==species
+    assert state.interactions[0]==original
+    assert resumed.preparation['task_origin'] == 'initial'
+    assert sum('semantic_prompt_version' in row for row in calls)==1
+    assert original.submission['registered_input']['resource_id'] == record.resource_id
+    assert original.submission['registered_input']['record_sha256'] == record.record_sha256
     selector, = [call for call in calls if 'output_selection_schema_version' in call]
     assert selector['question'] == OBJECTIVE
     assert not state.revisions and state.generation == 0
@@ -242,13 +248,14 @@ def test_exact_human_species_variant_resumes_single_embedding_request_without_sc
     pending = app.submit_turn('session', 'initial', objective,
         expected_generation=0, registered_input=binding)
     assert pending.status == 'clarification' and pending.revision_id is None, pending.to_dict()
-    assert pending.response.clarification['reason'] == 'missing_species'
+    assert pending.response.clarification['reason'] == 'missing_parameter_value'
     state = app._application.sessions.load('session')
     original = state.interactions[0]
     original_inputs = _serialize(original.submission['execution_inputs'])
     assert original.utterance == objective
     assert original_inputs == dict(input_path=record.source_path, device='cuda:0')
-    assert original.prerequisite['origin_turn_id'] == 'initial'
+    assert original.prerequisite is None
+    assert original.preparation['task_origin'] == 'initial'
     assert not executor.plans and not state.revisions
 
     result = app.submit_turn('session', 'answer', answer, expected_generation=0)
@@ -266,10 +273,14 @@ def test_exact_human_species_variant_resumes_single_embedding_request_without_sc
     state = app._application.sessions.load('session')
     resumed = state.interactions[-1]
     assert resumed.utterance == answer
-    assert resumed.admitted['inputs'] == original_inputs | dict(species='human') | expected.inputs()
-    assert resumed.admitted['continuation']['origin_turn_id'] == 'initial'
-    assert resumed.admitted['registered_input']['resource_id'] == record.resource_id
-    assert resumed.admitted['registered_input']['record_sha256'] == record.record_sha256
+    assert resumed.admitted['inputs'] == original_inputs
+    from agent.application.preparation_state import scalar_bindings
+    assert scalar_bindings(state.interactions,resumed.preparation)['embed']['species']=='human'
+    assert state.interactions[0]==original
+    assert resumed.preparation['task_origin'] == 'initial'
+    assert sum('semantic_prompt_version' in row for row in calls)==1
+    assert original.submission['registered_input']['resource_id'] == record.resource_id
+    assert original.submission['registered_input']['record_sha256'] == record.record_sha256
     selector, = [call for call in calls if 'output_selection_schema_version' in call]
     assert selector['question'] == objective
     assert [(row['step_id'], row['tool']) for row in selector['steps']] == [('embed', 'epizoo_embed_cells')]

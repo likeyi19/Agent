@@ -46,8 +46,23 @@ def record_strings(item, field):
             yield raw.decode('utf-8', errors='strict')
 
 
+def metadata_item(handle, path):
+    """Resolve a selected metadata path without following indirect ancestors."""
+    item = handle
+    for name in path.split('/'):
+        if not name or not isinstance(item, h5py.Group):
+            raise ValueError('Invalid selected HDF5 metadata path')
+        link = item.get(name, getlink=True)
+        if link is None:
+            return None
+        if not isinstance(link, h5py.HardLink):
+            raise ValueError('Indirect HDF5 metadata is unsupported')
+        item = item[name]
+    return item
+
+
 def inspect(source, *, private_paths=(), privacy=False, observation_fields=None, require_matrix=True,
-            max_logical_bytes=_DEFAULT):
+            max_logical_bytes=_DEFAULT, metadata_paths=None):
     """Reject indirect storage, unsafe filters and excessive allocations."""
     logical_limit, chunk_limit = _LIMITS.get()
     from agent.tools._native_process import _CONTROLLED
@@ -63,7 +78,7 @@ def inspect(source, *, private_paths=(), privacy=False, observation_fields=None,
         # Native fragment storage may have obs/obsm and zero features, with
         # neither X nor var. Matrix consumers retain the stricter requirement.
         required = {'X','obs','var'} if require_matrix else {'obs'}
-        if observation_fields is None and not required <= set(f):
+        if observation_fields is None and metadata_paths is None and not required <= set(f):
             raise ValueError('H5AD requires X, obs and var. Cell Ranger .h5 is unsupported; convert with standard scientific software preserving cells, features and counts. Renaming the extension is not conversion.')
         if privacy and f.userblock_size:
             raise ValueError('Unreviewed HDF5 user block cannot be delivered')
@@ -147,7 +162,15 @@ def inspect(source, *, private_paths=(), privacy=False, observation_fields=None,
                     raise ValueError('Unsupported H5AD value dtype')
                 if max_logical_bytes is not None and size > max_logical_bytes:
                     raise ValueError('H5AD decoded values exceed configured storage limit')
-        if observation_fields is not None:
+        if metadata_paths is not None:
+            if observation_fields is not None:
+                raise ValueError('Select either observation fields or metadata paths.')
+            for path in metadata_paths:
+                item = metadata_item(f, path)
+                if item is None:
+                    raise ValueError('Missing selected HDF5 metadata')
+                visit(item, 0)
+        elif observation_fields is not None:
             if not isinstance(f.get('obs', getlink=True), h5py.HardLink):
                 raise ValueError('Indirect HDF5 observation storage is unsupported')
             visit(f['obs'], 0)

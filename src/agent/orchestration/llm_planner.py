@@ -1192,20 +1192,7 @@ def _semantic_v4_plan(
     )
     from .semantic_wire_v4 import parse_semantic_wire_v4
 
-    try:
-        candidate = parse_semantic_wire_v4(response, request, registry, visible_tool_names=visible_tool_names)
-    except PlannerError as exc:
-        if exc.code != "UNSUPPORTED_REQUEST" or exc.diagnostic_stage is not None:
-            raise
-        raise PlannerError(
-            exc.code,
-            str(exc),
-            category=exc.category,
-            diagnostic_stage=PlanningDiagnosticStage.UNSUPPORTED,
-            diagnostic_reason_code="explicit_unsupported_response",
-        ) from exc
-    from .active_context import capture_semantic_candidate
-    capture_semantic_candidate(_parse_json_response(response))
+    candidate = parse_semantic_wire_v4(response, request, registry, visible_tool_names=visible_tool_names)
     try:
         return compile_semantic_plan(
             request,
@@ -1227,6 +1214,14 @@ def _semantic_v4_plan(
             ),
             diagnostic_fields=exc.diagnostic_fields,
         ) from exc
+
+
+def _semantic_v4_analysis(response, request, registry, contract, *, visible_tool_names=None):
+    from .semantic_wire_v4 import parse_semantic_wire_v4
+    from .semantic_compiler import analyze_candidate
+    candidate = parse_semantic_wire_v4(response, request, registry, visible_tool_names=visible_tool_names)
+    analysis = analyze_candidate(request, candidate, registry, contract)
+    return analysis
 
 
 class LLMPlanner:
@@ -1377,6 +1372,7 @@ class LLMPlanner:
         repair_context: PlanningRepairContext | None = None,
         scope: PlanningScope | None = None,
         on_provider_call: Callable[[PlanningDiagnosticContext], None] | None = None,
+        analysis_only: bool = False,
     ) -> DiagnosedPlanningAttempt:
         """Construct one plan and sanitized diagnostics with exactly one model call."""
 
@@ -1591,6 +1587,14 @@ class LLMPlanner:
                 steps = _parse_response(response, request, registry)
             else:
                 assert semantic_contract is not None
+                if analysis_only:
+                    analysis = _semantic_v4_analysis(response, request, registry, semantic_contract,
+                        visible_tool_names=scope.visible_tool_names)
+                    from .planning_diagnostics import DiagnosedCandidateAttempt
+                    diagnostics.extend((context.diagnostic(PlanningDiagnosticStage.PARSE, 'JSON_PARSE_SUCCEEDED', 'succeeded'),
+                        context.diagnostic(PlanningDiagnosticStage.SCHEMA, 'WIRE_SCHEMA_VALID', 'succeeded'),
+                        context.diagnostic(PlanningDiagnosticStage.CANDIDATE, 'SEMANTIC_CANDIDATE_ANALYZED', 'succeeded')))
+                    return DiagnosedCandidateAttempt(analysis, context, tuple(diagnostics))
                 plan = _semantic_v4_plan(
                     response,
                     request,
@@ -1600,13 +1604,16 @@ class LLMPlanner:
                     visible_tool_names=scope.visible_tool_names,
                 )
         except PlannerError as exc:
+            # Both candidate acquisition and full-plan parsing use the same
+            # terminal unsupported classification; it is not schema repair.
+            stage = (PlanningDiagnosticStage.UNSUPPORTED if exc.code == 'UNSUPPORTED_REQUEST'
+                     else exc.diagnostic_stage or PlanningDiagnosticStage.SCHEMA)
             _append_preceding_success_diagnostics(
                 diagnostics,
                 context,
-                exc.diagnostic_stage,
+                stage,
                 response_byte_count=response_byte_count,
             )
-            stage = exc.diagnostic_stage or PlanningDiagnosticStage.SCHEMA
             fields = exc.diagnostic_fields
             from .planning_diagnostics import safe_unsupported_reason
             private_values = []
@@ -1646,7 +1653,8 @@ class LLMPlanner:
                     source_port=fields.get("source_port"),
                     argument_names=tuple(name for name in fields.get("argument_names", ())
                         if _known_argument_name(registry, name) is not None),
-                    reason_code=exc.diagnostic_reason_code,
+                    reason_code=exc.diagnostic_reason_code or (
+                        'explicit_unsupported_response' if stage is PlanningDiagnosticStage.UNSUPPORTED else None),
                     unsupported_reason=(safe_unsupported_reason(str(exc), private_values)
                         if stage is PlanningDiagnosticStage.UNSUPPORTED else None),
                 )
@@ -1725,6 +1733,18 @@ class LLMPlanner:
         )
         return DiagnosedPlanningAttempt(plan, context, tuple(diagnostics))
 
+    def acquire_candidate(self, request, registry, *, diagnostic_sink=lambda rows: None, should_cancel=None):
+        """Acquire wire-v4 once under the existing total provider-call budget.
+
+        Legitimate missing inputs are successful acquisition, not semantic repair.
+        Native-owner preparation and final preflight belong to the application.
+        """
+        if self._wire_mode is not PlanningWireMode.V4:
+            raise ValueError('Interactive scientific preparation requires wire-v4 configuration.')
+        return self.plan_with_recovery(request, registry, analysis_only=True,
+            validate_candidate=lambda attempt: (None, ()), diagnostic_sink=diagnostic_sink,
+            should_cancel=should_cancel)
+
     def plan_with_recovery(
         self,
         request: AgentRequest,
@@ -1733,6 +1753,7 @@ class LLMPlanner:
         validate_candidate: CandidateValidator,
         diagnostic_sink: PlanningDiagnosticSink,
         should_cancel: PlanningCancellationCheck | None = None,
+        analysis_only: bool = False,
     ) -> RecoveredPlanningAttempt:
         """Acquire one Plan with bounded primary recovery and configured failover."""
 
@@ -1835,6 +1856,7 @@ class LLMPlanner:
                 repair_context=repair_context,
                 scope=scope,
                 on_provider_call=on_provider_call,
+                analysis_only=analysis_only,
             )
 
         return self._recovery.acquire(

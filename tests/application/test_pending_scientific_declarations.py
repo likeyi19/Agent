@@ -97,7 +97,7 @@ def test_unknown_schema_only_offers_the_pending_declarations_metadata(field):
     schema = decision_schema()
     assert '"uniqueItems"' not in json.dumps(schema)
     variants = schema['properties']['decision']['anyOf']
-    answer, = [v for v in variants if v['properties']['kind']['enum'] == ['answer_roles'] and field in v['properties']]
+    answer, = [v for v in variants if v['properties']['kind']['enum'] == ['answer_roles'] and field in v['properties'] and (field != 'annotation' or not any(k in v['properties'] for k in ('fastq','bam','fragments')))]
     choices = answer['properties']['unknown_fields']['items']['enum']
     assert set(choices) == set(scientific_metadata_fields(empty(field)))
     assert not {'source', 'operation', 'resource'}.intersection(choices)
@@ -176,8 +176,8 @@ def test_correction_unknown_advice_and_later_continuation_keep_one_objective(tmp
                                       interpreter=Model(invalid))
         assert failed.status == 'failed' and failed.error.code == 'INTERACTIVE_INTENT_BINDING_INVALID'
         kept = app.sessions.load('session').interactions[-1]
-        assert kept.admitted is None and kept.prerequisite['origin_turn_id'] == 'first'
-        assert kept.prerequisite['binding_turn_id'] == 'first'
+        assert kept.admitted is None and kept.prerequisite is None
+        assert kept.snapshot['preparation']['binding_turn_id'] == 'first'
         assert len(app.sessions.load('session').interactions) == 2  # No semantic retry.
     corrected = dict(kind='answer_roles', pending='@roles', roles=[], arguments=[],
         epizoo=asdict(EpiZooDeclaration(scientific_name='Mus musculus', taxonomy_id=10090, assembly='mm10')),
@@ -200,7 +200,8 @@ def test_correction_unknown_advice_and_later_continuation_keep_one_objective(tmp
     assert context['request']['objective'] == 'Please embed these cells with the model.'
     assert context['request']['missing'] and not guidance_model.calls[-1]['context']['evidence']['targets']
     state = app.sessions.load('session')
-    assert state.interactions[-1].prerequisite['origin_turn_id'] == 'first'
+    assert state.interactions[-1].prerequisite is None
+    assert state.interactions[-1].snapshot['preparation']['binding_turn_id'] == 'correct'
     restored = ResearchAgentApplication(app.workspace_root, registry=app.registry)
     later = dict(kind='answer_roles', pending='@roles', roles=[], arguments=[],
                  epizoo=asdict(EpiZooDeclaration(matrix_semantics='binary_accessibility')))
@@ -208,7 +209,8 @@ def test_correction_unknown_advice_and_later_continuation_keep_one_objective(tmp
                                       interpreter=Model(later))
     assert third.status == 'clarification'  # No qualified model was supplied.
     final = restored.sessions.load('session')
-    assert final.interactions[-1].prerequisite['origin_turn_id'] == 'first'
+    assert final.interactions[-1].prerequisite is None
+    assert final.interactions[-1].preparation['task_origin'] == 'first'
     assert _serialize(final.interactions[-1].admitted['registered_input']) == prior_identity
     assert final.interactions[-1].admitted['epizoo']['matrix_semantics'] == 'binary_accessibility'
     assert 'unknown_fields' not in final.interactions[-1].admitted
@@ -241,17 +243,21 @@ def test_resource_advice_retains_exact_configuration_continuation(app, monkeypat
     assert answer.status == 'answered'
     assert model.calls[-1]['context']['pending_prerequisite']['request']['field'] == 'resources'
     seen = []
-    def stop_before_planning(sessions, interaction, admitted, *args, **kwargs):
+    from agent.application import turns
+    def stop_before_planning(sessions, interaction, admitted, *, record, **kwargs):
         seen.append(admitted)
-        return TurnOutcome('execute', 'failed', text='Software fixture stops before planning or science.')
-    monkeypatch.setattr(dialogue_execution, 'execute', stop_before_planning)
+        turns._update(sessions, interaction.turn_id, preparation=record, admitted=admitted, status='failed')
+        return admitted, None, TurnOutcome('execute', 'failed', text='Software fixture stops before planning or science.')
+    monkeypatch.setattr(turns, '_prepare_research', stop_before_planning)
     reopened = ResearchAgentApplication(app.workspace_root, registry=app.registry)
     reply = dict(kind='answer_resources', pending='@resources', choice='resource.method', arguments=[])
     reopened.sessions.respond('session', 'reply', 'Use the configured PCA settings.',
         interpreter=Model(reply), input_sets=(configured,))
     assert len(seen) == 1
     assert seen[0]['inputs'] == inputs | dict(n_components=2)
-    assert seen[0]['continuation']['origin_turn_id'] == 'first'
+    assert 'continuation' not in seen[0]
     state = reopened.sessions.load('session')
     assert not state.revisions and not state.turns and state.generation == 0
-    assert state.interactions[1].prerequisite['origin_turn_id'] == 'first'
+    assert state.interactions[1].prerequisite is None
+    assert state.interactions[1].snapshot['preparation']['binding_turn_id'] == 'first'
+    assert state.interactions[-1].preparation['task_origin'] == 'first'

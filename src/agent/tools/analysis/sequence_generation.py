@@ -188,3 +188,13 @@ def verify_generation(path,*,expected_sha256):
 
 def generate_regulatory_sequences(output_dir,condition,number_of_sequences=None,seed=None,guidance_scale=None):
     return execute({k:v for k,v in locals().items() if v is not None})
+
+
+def prepare_operation(arguments, context):
+    from agent.orchestration.scientific_inputs import ScientificInputRequired,ScientificInputRequirement,ScientificDiagnostic
+    model=shared.preparation_model('DNA-Diffusion','sequence_generator')
+    if not arguments.get('condition'):
+        raise ScientificInputRequired(ScientificInputRequirement('condition','condition','scalar',choices=tuple(model['conditions'])))
+    if arguments['condition'] not in model['conditions']:
+        raise ScientificDiagnostic('SEQUENCE_CONDITION_UNSUPPORTED','The supplied condition is not an exact released DNA-Diffusion condition.')
+    return arguments

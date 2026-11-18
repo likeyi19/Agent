@@ -26,10 +26,14 @@ class ScriptedModel:
         if 'grounding_review_version' in value:
             return json.dumps(dict(verdicts={row['id']: dict(verdict='entailed', independent=True) for row in value['paragraphs']}))
         self.calls.append(value)
+        if value.get('focus') == 'outcome':
+            return json.dumps(dict(support='supported', paragraphs=[dict(
+                text='The operation failed validation or execution.', kind='limitation',
+                citations=[], comparisons=[])]))
         if 'turn_schema_version' in value:
             utterance = value['utterance'].lower()
             if 'clarify' in utterance or 'stricter' in utterance:
-                decision = dict(kind='clarify', reason='missing_parameter_value')
+                decision = dict(kind='clarify', reason='ambiguous_subject', choices=[])
             elif utterance.startswith('inspect'):
                 decision = dict(kind='execute_plan', target='inspect_scATAC')
             else:
@@ -113,7 +117,8 @@ def wait_turn(client, turn='first', *, session='session', timeout=20, terminal_s
         response = client.get(f'/api/v1/sessions/{session}/turns/{turn}')
         assert response.status_code == 200, response.text
         last = response.json()
-        if last.get('response') is not None or terminal_status is not None and last['status'] == terminal_status:
+        if (last.get('response') is not None or last['status'] in {'failed', 'interrupted', 'cancelled'}
+                or terminal_status is not None and last['status'] == terminal_status):
             return last
         time.sleep(0.03)
     raise AssertionError(f'Turn did not finish: {last}')

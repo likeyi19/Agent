@@ -17,7 +17,7 @@ def tool_spec():
     optional = dict(input_sha256=arg((str,), 'Exact source checksum.'),
         kwargs=arg((dict,), 'Native ordinary arguments; omit native defaults.', scientific_parameter=True, conversational_json_object=True, conversational_members=owner.NATIVE_ARGUMENTS),
         count_slot=arg((str,), 'make_cicero_cds selected X or exact layer; no automatic preprocessing.', scientific_parameter=True, conversational_exact_string=True),
-        reduced_coordinates_key=arg((str,), 'make_cicero_cds exact existing obsm field in the same H5AD; no embedding is inferred.', scientific_parameter=True, conversational_exact_string=True),
+        reduced_coordinates_key=arg((str,), 'make_cicero_cds exact existing obsm field in the same H5AD; no embedding is inferred.', scientific_parameter=True, observation_source='dataset', observation_axis='obsm'),
         genomic_coords_path=arg((str, Path), 'Two-column chromosome lengths without header. Required for run_cicero; optional for estimate_distance_parameter, whose omitted native default is human.hg19.genome, not input reference qualification.', artifacts=(A.RAW_SCATAC,), source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT),
         genomic_coords_sha256=arg((str,), 'Exact chromosome-length source checksum.'),
         seed=arg((int,), 'Optional native R RNG seed; omitted retains native stochastic behavior.', scientific_parameter=True))
@@ -30,8 +30,8 @@ def tool_spec():
             request_sources=(request('genomic_coords_path',rm('dataset','genomic_coords_path')),)),
         *(scalar(k,required=k in required) for k in (*required,*optional) if k not in ('input_path','genomic_coords_path'))]
     pub = owner.publication
-    return ToolSpec(native_functions=NativeFunctionCatalog('cicero', tuple((name, tuple(members)) for name, members in owner.FUNCTIONS.items())),name=owner.TOOL,function=owner.invoke,required_arguments=required,optional_arguments=optional,
-        parameter_prerequisites=owner.parameter_prerequisites,scientific_delivery=delivery_spec(owner,'scientific_native_result'),
+    return ToolSpec(source_encodings={'dataset':('h5ad','accepted_cicero_cds'),'genomic_coords':('tsv',)}, source_input_types={'dataset':('h5ad',), 'genomic_coords':('attachment',)}, native_functions=NativeFunctionCatalog('cicero', tuple((name, tuple(members)) for name, members in owner.FUNCTIONS.items())),name=owner.TOOL,function=owner.invoke,required_arguments=required,optional_arguments=optional,
+        preparation_owner=owner.prepare_operation, application_inputs=frozenset({"reduced_coordinates_key"}), parameter_prerequisites=owner.parameter_prerequisites,scientific_delivery=delivery_spec(owner,'scientific_native_result'),
         result_contract=ResultContract('NativeCiceroCDSResult',owner.RESULT_FIELDS,planning_fields={k:_planning_result('Exact native CDS exchange or connection table.',bindable=True,artifact=A.RAW_SCATAC) for k in ('manifest_path','manifest_sha256','cds_path','cds_sha256','table_path','table_sha256')}),
         durable_hooks=DurableToolHooks(owner.execute,owner.recover),exception_classifier=classify,recovery_policy_version=owner.POLICY,
         scientific_authority=ScientificAuthorityHooks(kind=owner.KIND,producer_ports=('publication','cds','table'),describe=pub.describe,

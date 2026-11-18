@@ -8,7 +8,9 @@ from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 import json
 import logging
+import math
 import re
+import sys
 import unicodedata
 from agent.schemas.orchestration import freeze_json_mapping, _serialize
 from agent.orchestration.planning_diagnostics import log_operation_event
@@ -20,6 +22,32 @@ MAX_SCIENTIFIC_ARGUMENTS = 32
 PARAMETER_CLARIFICATION_REASONS = (
     'missing_parameter_value', 'ambiguous_parameter', 'invalid_parameter_value',
     'ungrounded_operand', 'conflicting_scientific_parameter')
+
+
+def protocol_integer(value, *, exact=None):
+    """JSON integer semantics for protocol metadata, never scientific operands."""
+    if type(value) is int:
+        return value
+    if type(value) is float:
+        if exact is not None:
+            # The wire token can contain precision already lost by float (or
+            # underflow to zero). Only protocol fields use this Decimal view.
+            if type(exact) is Decimal and exact.is_finite() and exact == exact.to_integral_value():
+                # Match the existing JSON integer decoder's digit limit before
+                # expanding exponent notation into a potentially huge integer.
+                digits = sys.get_int_max_str_digits()
+                if not exact.is_zero() and digits and exact.adjusted() >= digits:
+                    raise ValueError('Protocol integer exceeds the JSON decoder bound.')
+                return int(exact)
+        elif math.isfinite(value) and value.is_integer():
+            return int(value)
+    raise ValueError('Expected an exact finite protocol integer.')
+
+
+def _validate_choice_value(literal, value, limit=80):
+    if (not literal.strip() or type(value) is not str or not value.strip()
+            or limit is not None and len(value) > limit):
+        raise ValueError('Invalid scalar choice declaration.')
 
 
 class IntentError(ValueError):
@@ -68,9 +96,7 @@ class ScalarChoiceArgument(ScopedArgument):
 
     def __post_init__(self):
         super().__post_init__()
-        if (not self.literal.strip() or type(self.value) is not str
-                or not self.value.strip() or len(self.value) > 80):
-            raise ValueError('Invalid scalar choice declaration.')
+        _validate_choice_value(self.literal, self.value)
 
 
 @dataclass(frozen=True)
@@ -81,7 +107,10 @@ class SourceFieldArgument(ScalarChoiceArgument):
     mode: str
 
     def __post_init__(self):
-        super().__post_init__()
+        ScopedArgument.__post_init__(self)
+        # Offered field names keep their exact captured domain. Literal fields
+        # and unrelated normalized scalar choices retain the ordinary bound.
+        _validate_choice_value(self.literal, self.value, None if self.mode == 'offered' else 80)
         if (type(self.source) is not str or re.fullmatch(r'source\.(?:0|[1-9][0-9]*)', self.source) is None
                 or self.mode not in ('offered', 'literal')):
             raise ValueError('Invalid source-qualified observation field.')
@@ -360,13 +389,14 @@ def _validate_comparison(value):
         raise ValueError('Invalid exact comparison operands.')
     detail = value['detail']
     if detail is not None:
-        validate_scientific_detail(detail, value['right'])
+        detail = value['detail'] = validate_scientific_detail(detail, value['right'])
         if (detail['section'] not in ('category_counts', 'category_association')
                 or any(type(detail[k]) is not str or not detail[k].startswith(('source:', 'result:'))
                        or not detail[k].split(':', 1)[1] for k in ('field', 'other_field'))):
             raise ValueError('Select both exact comparison fields.')
     if value['left'] == value['right'] and (detail is None or detail['field'] == detail['other_field']):
         raise ValueError('A same-result comparison requires two distinct exact fields.')
+    return value
 
 
 def _validate_export(value):
@@ -426,8 +456,8 @@ def _normalize_research_intent(decision):
     _validate_input_results(decision.input_results)
     requested = list(decision.delivery)
     if decision.comparison is not None:
-        _validate_comparison(decision.comparison)
-        object.__setattr__(decision, 'comparison', freeze_json_mapping(decision.comparison, 'comparison'))
+        comparison = _validate_comparison(decision.comparison)
+        object.__setattr__(decision, 'comparison', freeze_json_mapping(comparison, 'comparison'))
         if 'comparison' not in requested:
             requested.append('comparison')
     if decision.visualization is not None:
@@ -729,7 +759,7 @@ class ScientificQuestion:
                 or self.focus not in ('question', 'continue')):
             raise ValueError('Invalid scientific question.')
         if self.detail is not None:
-            validate_scientific_detail(self.detail, self.comparison)
+            object.__setattr__(self, 'detail', validate_scientific_detail(self.detail, self.comparison))
         if self.visualization is not None:
             _validate_visualization(self.visualization, planned=False)
             object.__setattr__(self, 'visualization', freeze_json_mapping(self.visualization, 'visualization'))
@@ -742,14 +772,15 @@ def validate_scientific_detail(detail, comparison):
     """Validate the existing two-target selection, not a list of read queries."""
     _shape(detail, ('section', 'field', 'other_field', 'offset', 'limit'))
     from .dialogue_evidence import DetailRequest
-    if detail['section'] not in ('categorical_fields', 'category_counts', 'category_association'):
+    if detail['section'] not in DetailRequest.CATEGORICAL_SECTIONS:
         raise ValueError('Unsupported scientific detail request.')
     single = dict(detail)
     if detail['section'] == 'category_counts' and detail['other_field'] is not None:
         if comparison is None:
             raise ValueError('Independent second counts require a second accepted target.')
         single['other_field'] = None  # Each owner count read still has one field.
-    DetailRequest(**single)
+    normalized = DetailRequest(**single)
+    return dict(detail, offset=normalized.offset, limit=normalized.limit)
 
 
 @dataclass(frozen=True)
@@ -1032,9 +1063,21 @@ def parse_decision(raw, *, utterance=None, authoritative=()):
         if type(raw) is not str or len(raw.encode()) > 32768: raise IntentError('invalid_decision')
         envelope = json.loads(raw, object_pairs_hook=pairs)
         _shape(envelope, ('turn_schema_version', 'decision'))
-        if type(envelope['turn_schema_version']) is not int or envelope['turn_schema_version'] != 1:
+        precise = json.loads(raw, parse_float=Decimal)
+        if protocol_integer(envelope['turn_schema_version'], exact=precise['turn_schema_version']) != 1:
             raise IntentError('invalid_decision')
         value = envelope['decision']
+        # Normalize protocol pagination only, before the ordinary typed owners.
+        # Scientific kwargs, counts, thresholds and span coordinates retain the
+        # existing decoder and validation semantics.
+        def pagination(detail, exact_detail):
+            if isinstance(detail, dict):
+                for key in ('offset', 'limit'):
+                    if key in detail:
+                        detail[key] = protocol_integer(detail[key], exact=exact_detail[key])
+        pagination(value.get('detail'), precise['decision'].get('detail'))
+        if isinstance(value.get('comparison'), dict):
+            pagination(value['comparison'].get('detail'), precise['decision']['comparison'].get('detail'))
         if utterance is not None:
             if type(utterance) is not str or not 0 < len(utterance) <= 4096:
                 raise IntentError('invalid_decision')
@@ -1210,7 +1253,7 @@ def parse_decision(raw, *, utterance=None, authoritative=()):
             if value['relation'] not in RELATIONS: raise IntentError('invalid_decision')
             return Navigate(value['relation'])
         raise IntentError('invalid_decision')
-    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+    except (ValueError, TypeError, AttributeError, KeyError, InvalidOperation) as exc:
         if isinstance(exc, IntentError): raise
         raise IntentError('invalid_decision') from exc
 
@@ -1253,22 +1296,34 @@ def decision_schema(public=None, *, utterance=None):
     definitions['role'] = _object(dict(tool=text(), port=text(), source=text()))
     definitions['requirement'] = _object(dict(tool=text(), port=text()))
     definitions['target'] = _object(dict(output=text(), subject=optional(text())))
-    definitions['detail'] = _object(dict(section=enum(('categorical_fields', 'category_counts', 'category_association')),
-        field=optional(text(256)), other_field=optional(text(256)), offset=dict(type='integer', minimum=0),
-        limit=dict(type='integer', minimum=1, maximum=32)))
+    from .dialogue_evidence import DetailRequest
+    definitions['detail'] = DetailRequest.categorical_schema()
+    definitions['two_target_detail'] = DetailRequest.categorical_schema(second_target=True)
+    definitions['comparison_detail'] = DetailRequest.categorical_schema(comparison=True)
     definitions['visualization'] = {'anyOf': [
         _object(dict(coordinates=text(), labels=text(), field=text(256))),
         _object(dict(kind=enum(('marker_activity_umap',)), coordinates=text(), activity=text())),
         _object(dict(kind=enum(('qc',)), source=text()))]}
-    definitions['comparison'] = _object(dict(left=text(), right=text(), detail=optional(ref('detail'))))
+    definitions['comparison'] = _object(dict(left=text(), right=text(), detail=optional(ref('comparison_detail'))))
     definitions['export_field'] = _object(dict(output=text(), field=text(256), destination=text(256)))
-    definitions['export'] = _object(dict(measurement=text(), observations=array(ref('export_field'), 32),
-                                        representations=array(ref('export_field'), 32)))
+    # The Export Owner retains the cross-array maximum; two bounded alternatives
+    # encode nonemptiness without a count cross product or a new wire format.
+    definitions['export'] = {'anyOf': [
+        _object(dict(measurement=text(), observations=array(ref('export_field'), 32, 1),
+                     representations=array(ref('export_field'), 32))),
+        _object(dict(measurement=text(), observations=array(ref('export_field'), 0),
+                     representations=array(ref('export_field'), 32, 1)))]}
     definitions['retained'] = _object(dict(result=text(), argument=text()))
-    delivery = dict(input_results=array(text(), 32), references=array(text(), 32),
-        delivery=array(enum(('explanation', 'comparison', 'visualization', 'files_only')), 3),
-        unfulfilled=array(text(512), 8), visualization=optional(ref('visualization')),
-        comparison=optional(ref('comparison')), retain_parameters=array(ref('retained'), 8))
+    definitions['delivery_intentions'] = {'anyOf': [
+        array(enum(('explanation', 'comparison', 'visualization')), 3),
+        array(enum(('files_only',)), 1, 1)]}
+    definitions['result_selection'] = array(text(), 32)
+    definitions['unfulfilled'] = array(text(512), 8)
+    definitions['retained_parameters'] = array(ref('retained'), 8)
+    delivery = dict(input_results=ref('result_selection'), references=ref('result_selection'),
+        delivery=ref('delivery_intentions'),
+        unfulfilled=ref('unfulfilled'), visualization=optional(ref('visualization')),
+        comparison=optional(ref('comparison')), retain_parameters=ref('retained_parameters'))
     execution = dict(target=text(), arguments=declarations, roles=array(ref('role'), 8),
                      context=enum(('none', 'current')), **delivery)
     variants = [
@@ -1277,15 +1332,21 @@ def decision_schema(public=None, *, utterance=None):
         _object(dict(kind=enum(('clarify',)), reason=enum(r for r in REASONS if r not in PARAMETER_CLARIFICATION_REASONS),
                      choices=array(text(256), 0))),
         _object(dict(kind=enum(('navigate',)), relation=enum(RELATIONS))),
-        _object(dict(kind=enum(('answer_scientific',)), target=ref('target'), comparison=optional(ref('target')),
+        _object(dict(kind=enum(('answer_scientific',)), target=ref('target'), comparison={'type': 'null'},
                      focus=enum(('question', 'continue')), detail=optional(ref('detail')),
                      visualization=optional(ref('visualization')), export=optional(ref('export')))),
-        _object(dict(kind=enum(('answer_guidance',)), targets=array(ref('target'), 4), candidate=optional(text()))),
+        _object(dict(kind=enum(('answer_scientific',)), target=ref('target'), comparison=ref('target'),
+                     focus=enum(('question', 'continue')), detail=optional(ref('two_target_detail')),
+                     visualization=optional(ref('visualization')), export=optional(ref('export')))),
+        _object(dict(kind=enum(('answer_guidance',)), targets=array(ref('target'), 4), candidate={'type': 'null'})),
+        _object(dict(kind=enum(('answer_guidance',)), targets=array(ref('target'), 0), candidate=text())),
         _object(dict(kind=enum(('execute_plan',)), **execution, missing_parameters=array({'anyOf': [text(),
             _object(dict(tool=text(), argument=text(), native_function=optional(text()),
                 member=optional(text()), source=optional(text()), port=optional(text()), evidence=optional(text(4096))))]}, 8))),
         _object(dict(kind=enum(('request_roles',)), **execution, required_roles=dict(array(ref('requirement'), 8, 1), description='Complete required role set, including already supplied roles; roles contains its supplied strict subset. Prefer execute_plan for an objective with missing inputs so Preparation derives selected-operation requirements.'))),
-        _object(dict(kind=enum(('answer_roles',)), pending=text(), roles=array(ref('role'), 8), arguments=declarations)),
+        _object(dict(kind=enum(('answer_roles',)), pending=text(), roles=array(ref('role'), 8, 1), arguments=declarations)),
+        _object(dict(kind=enum(('answer_roles',)), pending=text(), roles=array(ref('role'), 0),
+                     arguments=array(ref('declaration'), MAX_SCIENTIFIC_ARGUMENTS, 1))),
         _object(dict(kind=enum(('execute_candidate',)), candidate=text(), evidence=text(4096))),
         _object(dict(kind=enum(('request_resources',)), target=text(), arguments=declarations,
                      roles=array(ref('role'), 8), context=enum(('none', 'current')),
@@ -1479,10 +1540,15 @@ def _offered_schema(schema, public, *, utterance=None):
             props['resource'] = nullable(exact('offered_' + field + '_resource',
                 [r['handle'] for r in d.get(field + '_resources', ()) if 'handle' in r]))
     defs['retained']['properties']['result'] = result
-    defs['export']['properties']['measurement'] = measurement
+    for form in defs['export']['anyOf']:
+        form['properties']['measurement'] = measurement
     defs['export_field']['properties']['output'] = result
     defs['comparison']['properties'].update(left=exact('offered_comparison', groups + ['new']),
                                            right={'$ref': '#/$defs/offered_comparison'})
+    # Required accepted operands cannot become null choices when offers vanish.
+    # Planned categorical operands retain their supported `new` selections.
+    defs['visualization']['anyOf'] = [form for form in defs['visualization']['anyOf']
+                                     if groups or 'labels' in form['properties']]
     for form in defs['visualization']['anyOf']:
         props = form['properties']
         if 'labels' in props:
@@ -1505,7 +1571,7 @@ def _offered_schema(schema, public, *, utterance=None):
     guidance = [v for r in d.get('guidance_predecessor', ()) for v in r.get('references', ())]
     if len(d.get('guidance_predecessor', ())) == 1:
         guidance.append('@candidate')
-    guidance_candidate = nullable(exact('offered_guidance', guidance))
+    guidance_candidate = exact('offered_guidance', guidance)
     resource_rows = (pending.get('resource_answer_choices', ()) if pending.get('task_id')
                      else pending.get('choices', ()) if pending.get('field') == 'resources' else ())
     resources = [r['handle'] for r in resource_rows if isinstance(r, Mapping) and 'handle' in r]
@@ -1532,10 +1598,15 @@ def _offered_schema(schema, public, *, utterance=None):
         if kind == 'answer_scientific':
             if not targets:
                 continue
-            p['visualization'] = nullable({'$ref': '#/$defs/accepted_visualization'})
+            p['visualization'] = (nullable({'$ref': '#/$defs/accepted_visualization'})
+                                  if groups else {'type': 'null'})
         if kind == 'answer_guidance':
-            p['targets'] = items({'$ref': '#/$defs/target'}, 4) if targets else items({'type': 'null'}, 0)
-            p['candidate'] = guidance_candidate
+            if p['candidate'] != {'type': 'null'}:
+                if not guidance:
+                    continue
+                p['candidate'] = guidance_candidate
+            if not targets:
+                p['targets'] = items({'type': 'null'}, 0)
         if kind == 'execute_candidate':
             if not candidates:
                 continue
@@ -1559,6 +1630,8 @@ def _offered_schema(schema, public, *, utterance=None):
             # complete-role wire readable, but do not offer pre-plan role intake.
             continue
         if 'roles' in p and (not sources or ports == {'type': 'null'}):
+            if p['roles'].get('minItems', 0):
+                continue
             p['roles']['maxItems'] = 0
         if 'arguments' in p and argument == {'type': 'null'}:
             if p['arguments'].get('minItems', 0):
@@ -1578,7 +1651,7 @@ def _offered_schema(schema, public, *, utterance=None):
             if argument == {'type': 'null'}:
                 p['missing_parameters']['maxItems'] = 0
         if 'retain_parameters' in p and not groups:
-            p['retain_parameters']['maxItems'] = 0
+            p['retain_parameters'] = items({'$ref': '#/$defs/retained'}, 0)
         if 'context' in p and not d.get('planning_context'):
             p['context'] = dict(type='string', enum=['none'])
         variants.append(variant)
@@ -1639,7 +1712,7 @@ def _intent_instructions():
         'Accepted outputs/groups and result_referents have distinct exact identities. Select a referent only when unique. @focus and @previous require the scientific predecessor, never ordinary clarification. subject=null asserts no new subject and preserves an existing resolved subject; @other requires unambiguous offered context. Categorical labels are detail fields, not annotation subjects. No recency/order/filename guessing.',
         'context=current only for explicit use or modification of captured accepted analysis; context=none for independent input/work. input_results selects offered accepted groups, never source.N. references select exact accepted results. retain_parameters selects requested exact result/argument settings of the same tool/input; never turn old defaults or generated prose into current explicit declarations. Current explicit changes override their own fields only.',
         'Preserve requested explanation/comparison/visualization delivery. Include explanation for ordinary scientific requests, including requests for a result file. Use delivery=["files_only"] only when the researcher explicitly requests files only or literal outputs without explanation; empty delivery is not files-only authorization. unfulfilled may quote only independently separable unsupported clauses whose omission the researcher permits; never drop essential science or resolvable prerequisites. No hidden fallback or retry plan.',
-        'Read-only visualization selects exact accepted operands; planned new operands use new only for explicitly requested new computation. Categorical plots select coordinates, labels and exact source:/result: field. marker_activity_umap selects accepted coordinates/activity; qc selects an accepted result with recorded QC. Reusing saved figures is not new scientific computation; missing or unrelated evidence stays unavailable.',
+        'Read-only visualization selects exact accepted operands; planned new operands use new only for explicitly requested new computation. Categorical plots select coordinates, labels and exact source:/result: field. marker_activity_umap selects accepted coordinates/activity; qc selects an accepted result with recorded QC. When accepted operands are unavailable, preserve future visualization delivery and the scientific objective with visualization=null. Reusing saved figures is not new scientific computation; missing or unrelated evidence stays unavailable.',
         'Read-only export selects exact measurement (accepted group or offered source), observations/representations with exact offered result fields and requested destination names. Preserve source lineage and distinct destinations; never invent a field, overwrite an original field or imply download transfer has happened. Scientific owners qualify alignment and prepare bytes.',
         'Scientific comparison requires explicit targets and a meaningful requested dimension; do not infer cross-result cell/cluster correspondence or rank importance without a criterion. focus=continue preserves only the scientific predecessor question. Navigation uses offered relations; previous is ambiguous if parent and previous-active differ; parent requires an explicit parent reference.',
     ]

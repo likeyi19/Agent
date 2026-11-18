@@ -5,6 +5,7 @@ These are offline contract witnesses, not claims about provider understanding.
 from copy import deepcopy
 from dataclasses import asdict, replace
 import json
+import math
 import re
 
 import pytest
@@ -50,7 +51,9 @@ def accepts(schema, value, root=None):
                 and all(accepts(schema['items'], v, root) for v in value))
     if kind == 'null': return value is None
     types = dict(string=str, integer=int, number=(int, float), boolean=bool)
-    if kind == 'number': valid = type(value) in types[kind]
+    if kind == 'integer':
+        valid = type(value) is int or type(value) is float and math.isfinite(value) and value.is_integer()
+    elif kind == 'number': valid = type(value) in types[kind]
     else: valid = type(value) is types[kind]
     if not valid or 'enum' in schema and value not in schema['enum']: return False
     if kind == 'string':

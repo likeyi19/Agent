@@ -13,6 +13,8 @@ from agent.schemas.orchestration import _serialize
 from .session_state import digest
 from .epizoo_handoff import EpiZooDeclaration
 
+MAX_CONTEXT_TEXT = 128
+MAX_FASTQ_NAMESPACE = 64
 
 
 def _context_text(*values):
@@ -20,7 +22,7 @@ def _context_text(*values):
     for value in values:
         if value is not None:
             identifier(value)
-            if len(value) > 128: raise ValueError('Source declaration exceeds its bound')
+            if len(value) > MAX_CONTEXT_TEXT: raise ValueError('Source declaration exceeds its bound')
 
 
 @dataclass(frozen=True)
@@ -58,7 +60,7 @@ class FastqDeclaration:
             raise ValueError('Unsupported FASTQ assay/layout declaration.')
         if self.namespace is not None:
             _namespace(self.namespace)
-            if len(self.namespace) > 64:
+            if len(self.namespace) > MAX_FASTQ_NAMESPACE:
                 raise ValueError('Library namespace exceeds the member admission bound.')
         _context_text(self.species)
         if self.barcode_policy not in (None, 'raw_sequence_whitelist'):
@@ -348,13 +350,15 @@ def schema(field='fastq'):
         return ({'anyOf': [{'type': 'string', 'enum': list(choices)}, {'type': 'null'}]}
                 if choices else {'type': 'null'})
     identity = {'anyOf': [{'type': 'string', 'minLength': 1, 'maxLength': 256}, {'type': 'null'}]}
+    context_text = {'anyOf': [{'type': 'string', 'minLength': 1, 'maxLength': MAX_CONTEXT_TEXT}, {'type': 'null'}]}
     if field == 'annotation':
         text = {'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]}
         grouping_file = dict(identity, description='A distinct uploaded cell_id/group TSV attachment only. '
             'Use null for a grouping column inside the original H5AD; bind that column through group_column instead.')
         return _object(dict(source=identity, groups_source=grouping_file, groups_result=identity,
             **{k:text for k in ('species','assembly','context','measurement','grouping_provenance')},
-            grouping_strategy=optional(('reuse_only','compute_if_needed')), resource=identity))
+            grouping_strategy=optional(('reuse_only','compute_if_needed')), resource=identity,
+            generate_umap={'anyOf': [{'type': 'boolean'}, {'type': 'null'}]}))
     if field == 'fragments':
         return _object(dict(source=identity,
             resource=identity,
@@ -363,7 +367,7 @@ def schema(field='fastq'):
             genome_source=identity,
             genome_index_source=identity,
             namespace={'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]},
-            species=identity, assembly=identity,
+            species=context_text, assembly=context_text,
             source_profile=dict(optional(('10x-atac-fragments.v1',)), description=(
                 'Map explicitly supplied 10x ATAC/ARC provenance, already Tn5-adjusted zero-based half-open '
                 'intervals, corrected barcodes and read-pair support to this choice. The researcher need '
@@ -377,13 +381,13 @@ def schema(field='fastq'):
             resource=identity,
             assay=optional(('SCATAC', 'TENX_ATAC')),
             namespace={'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]},
-            species=identity, assembly=identity,
+            species=context_text, assembly=context_text,
             barcode_policy=optional(('corrected_cb_already_corrected',)),
             source_profile=optional(('agent-cb-paired-atac.v2',)),
             resource_preference=preference_schema()))
     return _object(dict(resource=identity, assay=optional(('TENX_ATAC',)), layout=optional((FastqLayout.A.value, FastqLayout.B.value)),
-        namespace={'anyOf': [{'type': 'string', 'maxLength': 128}, {'type': 'null'}]},
-        species=identity, barcode_policy=optional(('raw_sequence_whitelist',)),
+        namespace={'anyOf': [{'type': 'string', 'minLength': 1, 'maxLength': MAX_FASTQ_NAMESPACE}, {'type': 'null'}]},
+        species=context_text, barcode_policy=optional(('raw_sequence_whitelist',)),
         resource_preference=preference_schema(),
         members={'type': 'array', 'maxItems': 16, 'items': _object(dict(
             source={'type': 'string', 'minLength': 1, 'maxLength': 128},

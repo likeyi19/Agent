@@ -1,0 +1,5 @@
+{
+  "utterance": "这是一份人类的单细胞 ATAC BAM 数据，帮我整理成 H5AD 文件，再看看数据的情况。",
+  "response": "{\"turn_schema_version\":1,\"decision\":{\"kind\":\"request_roles\",\"target\":\"run_snapatac2\",\"roles\":[],\"required_roles\":[],\"arguments\":[],\"bam\":{\"source\":\"source.0\",\"resource\":null,\"assay\":\"SCATAC\",\"namespace\":null,\"species\":\"Homo sapiens\",\"assembly\":null,\"barcode_policy\":null,\"source_profile\":null,\"resource_preference\":null},\"annotation\":null,\"input_results\":[],\"references\":[],\"delivery\":[\"explanation\"],\"unfulfilled\":[],\"visualization\":{\"kind\":\"qc\",\"source\":null},\"comparison\":null,\"retain_parameters\":[]}}",
+  "response_sha256": "0aa4fff365250d4708f11a1051e9cb035e734d90c08615b0d1e23657f21d286c"
+}

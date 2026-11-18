@@ -90,6 +90,8 @@ def _unsafe_fact_value(value):
 @dataclass(frozen=True)
 class DetailRequest:
     """Exact reviewed section, optional subject, and owner-order record bound."""
+    CATEGORICAL_SECTIONS = ('categorical_fields', 'category_counts', 'category_association')
+    MAX_LIMIT = 32
     section: str
     subject: str | None = None
     limit: int = 8
@@ -100,16 +102,19 @@ class DetailRequest:
     comparison: Mapping | None = None
 
     def __post_init__(self):
+        from .turn_decisions import protocol_integer
+        object.__setattr__(self, 'offset', protocol_integer(self.offset))
+        object.__setattr__(self, 'limit', protocol_integer(self.limit))
         if (type(self.section) is not str or not 0 < len(self.section) <= 128
                 or self.subject is not None and (type(self.subject) is not str or not 0 < len(self.subject) <= 128)
                 or self.candidate is not None and (type(self.candidate) is not str or not 0 < len(self.candidate) <= 128)
-                or type(self.limit) is not int or not 1 <= self.limit <= 32):
+                or not 1 <= self.limit <= self.MAX_LIMIT):
             raise ValueError('Invalid bounded detail request.')
         if (type(self.offset) is not int or self.offset < 0
                 or any(v is not None and (type(v) is not str or not 0 < len(v) <= 256)
                        for v in (self.field, self.other_field))):
             raise ValueError('Invalid categorical detail operands.')
-        categorical = self.section in ('category_counts', 'category_association', 'categorical_fields')
+        categorical = self.section in self.CATEGORICAL_SECTIONS
         if categorical:
             if self.subject is not None or self.candidate is not None:
                 raise ValueError('Categorical fields are distinct from annotation group subjects.')
@@ -123,6 +128,31 @@ class DetailRequest:
             raise ValueError('Only association reads accept a second source.')
         if self.comparison is not None:
             object.__setattr__(self, 'comparison', freeze_json_mapping(self.comparison, 'comparison'))
+
+    @classmethod
+    def categorical_schema(cls, *, second_target=False, comparison=False):
+        """Current categorical operands; evidence availability stays downstream.
+
+        A two-target question can request independent counts. Execution delivery
+        comparisons always name two qualified fields and a comparison section.
+        """
+        from .turn_decisions import _object
+        field = dict(type='string', minLength=1, maxLength=256)
+        if comparison:
+            field = dict(field, pattern=r'^(source:|result:).+')
+        optional = {'anyOf': [field, {'type': 'null'}]}
+        variants = []
+        for section in cls.CATEGORICAL_SECTIONS:
+            if comparison and section == 'categorical_fields':
+                continue
+            variants.append(_object(dict(
+                section=dict(type='string', enum=[section]),
+                field=optional if section == 'categorical_fields' else field,
+                other_field=(field if comparison or section == 'category_association' else
+                             optional if section == 'category_counts' and second_target else {'type': 'null'}),
+                offset=dict(type='integer', minimum=0),
+                limit=dict(type='integer', minimum=1, maximum=cls.MAX_LIMIT))))
+        return {'anyOf': variants}
 
 
 @dataclass(frozen=True)

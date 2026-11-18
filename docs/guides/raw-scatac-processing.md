@@ -20,6 +20,13 @@ clarification; successful post-correction live planning and presentation remain
 unqualified. This is not unrestricted input, provider or biological qualification.
 The paused SRV-2C PBMC10k evaluation has not resumed.
 
+The standalone raw sequencing inspection capability and its Raw Intake Manifest
+are retired. Native packages handle raw processing; processed-H5AD inspection
+remains available. Specialized source declarations bind their entry target through
+`raw_handoff.target()`, shared by the Interpreter schema and parser. The target
+identifies the declaration owner; the Planner still composes the full researcher
+objective, including preparation and subsequent exploration.
+
 ## Current ordinary workflow
 
 [Stage 1 native scATAC analysis](native-scatac-analysis.md) owns the current

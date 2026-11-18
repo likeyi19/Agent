@@ -11,7 +11,7 @@ from agent.orchestration.semantic_wire_v4 import parse_semantic_wire_v4
 from agent.schemas import AgentRequest, RunMode, StepOutputRef
 
 
-def _wire(*, inspect_input=True, matrix_port=True):
+def _wire(*, matrix_port=True):
     def step(name, function, parent, port):
         source = {"kind": "input", "input": "input_path"} if parent is None else {
             "kind": "step_port", "step": parent, "source_port": port}
@@ -22,9 +22,6 @@ def _wire(*, inspect_input=True, matrix_port=True):
             dict(target="function_name", source=dict(kind="registered_choice", choice=function))])
 
     return json.dumps(dict(schema_version=4, decision=dict(kind="plan", steps=[
-        dict(step_id="inspect", tool="inspect_raw_scATAC", control_dependencies=[],
-             sources=[dict(target="raw_input", source=dict(kind="input", input="raw_input_paths"))]
-             if inspect_input else []),
         step("extract", "pp.make_fragment_file", None, None),
         step("import", "pp.import_fragments", "extract", "fragments"),
         step("measure", "metrics.frag_size_distr", "import", "dataset"),
@@ -34,7 +31,7 @@ def _wire(*, inspect_input=True, matrix_port=True):
 @pytest.fixture
 def agent_request(tmp_path):
     return AgentRequest("native-ports", "Inspect and measure the supplied BAM.", dict(
-        input_path="/opaque/input.bam", raw_input_paths=["/opaque/input.bam"],
+        input_path="/opaque/input.bam",
         output_dir=str(tmp_path / "outputs")), mode=RunMode.PLAN_ONLY)
 
 
@@ -49,9 +46,9 @@ def _bindings(plan):
 
 def test_explicit_native_file_and_matrix_ports_keep_distinct_bindings(agent_request):
     plan = _compile(_wire(), agent_request, build_default_tool_registry())
-    assert plan.steps[2].arguments["input_path"] == StepOutputRef("extract", "fragments_path")
-    assert plan.steps[3].arguments["input_path"] == StepOutputRef("import", "matrix_path")
-    assert plan.steps[3].depends_on == ("import",)
+    assert plan.steps[1].arguments["input_path"] == StepOutputRef("extract", "fragments_path")
+    assert plan.steps[2].arguments["input_path"] == StepOutputRef("import", "matrix_path")
+    assert plan.steps[2].depends_on == ("import",)
 
 
 def test_native_bare_step_remains_ambiguous_even_with_selected_functions(agent_request):
@@ -62,19 +59,8 @@ def test_native_bare_step_remains_ambiguous_even_with_selected_functions(agent_r
         target_port="dataset", producer_step_id="import", source_port=None)
 
 
-def test_unique_offered_raw_bundle_binds_without_a_model_source(agent_request):
-    plan = _compile(_wire(inspect_input=False), agent_request, build_default_tool_registry())
-    assert list(plan.steps[0].arguments["raw_input_paths"]) == ["/opaque/input.bam"]
 
 
-def test_raw_inspection_without_an_offered_bundle_reports_the_missing_port(agent_request):
-    from dataclasses import replace
-    agent_request = replace(agent_request, inputs={k: v for k, v in agent_request.inputs.items() if k != "raw_input_paths"})
-    with pytest.raises(SemanticPlanCompileError) as caught:
-        _compile(_wire(inspect_input=False), agent_request, build_default_tool_registry())
-    assert caught.value.code == "MISSING_REQUIRED_SOURCE"
-    assert caught.value.diagnostic_fields["target_port"] == "raw_input"
-    assert caught.value.diagnostic_fields["argument_names"] == ["raw_input_paths"]
 
 
 class _Model:
@@ -104,20 +90,3 @@ def test_complete_repair_preserves_other_explicit_native_bindings(agent_request)
     assert _bindings(actual) == _bindings(expected)
     assert len(model.prompts) == 2
     assert model.prompts[1]["repair"]["diagnostic"]["required_correction"] == "select_source_port_explicitly"
-
-
-def test_new_repair_error_does_not_establish_that_the_first_error_was_fixed(agent_request):
-    from dataclasses import replace
-    agent_request = replace(agent_request, inputs={k: v for k, v in agent_request.inputs.items()
-                                                   if k != "raw_input_paths"})
-    # Both candidates lack the raw bundle. The replacement additionally loses
-    # an explicit native port; channel selection now fails before the later
-    # required-argument check. This reproduces the observed diagnostic order
-    # without claiming to recover the actual rejected model responses.
-    planner, model = _planner([_wire(inspect_input=False),
-                              _wire(inspect_input=False, matrix_port=False)])
-    result = AgentRuntime(planner=planner, registry=build_default_tool_registry()).run(agent_request)
-    assert result.status.value == "FAILED"
-    assert result.errors[-1].code == "AMBIGUOUS_SOURCE_PORT"
-    assert len(model.prompts) == 2
-    assert model.prompts[1]["repair"]["diagnostic"]["required_correction"] == "select_required_semantic_source"

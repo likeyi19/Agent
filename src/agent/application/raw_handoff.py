@@ -893,18 +893,6 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
     return admitted, declaration_need(field, admitted['tool'], missing)
 
 
-def _context_identity(candidates, declared, selected, *, mode='original', scope=None):
-    declaration = declaration_dict(declared)
-    if scope == 'library.v1':
-        # Reference selection is independent of library/barcode processing.
-        # Keep the genuine whitelist dependency; never reuse across libraries.
-        declaration.pop('resource')
-        return digest(dict(sources=candidates.attribution(), declaration=declaration,
-                           whitelist=_serialize(selected.fastq_whitelist), identity_scope=scope))
-    if scope is not None:
-        raise ValueError('Unsupported library identity scope.')
-    return digest(dict(sources=candidates.attribution(), declaration=declaration,
-                       resource=None if selected is None else selected.resource_choice(), **({'source_mode': mode} if mode else {})))
 
 
 def prepare(owner, session_id, candidates, declared, selected, arguments, *, accepted_contexts=(), resource_evidence=None, component_selections=None):
@@ -1086,73 +1074,7 @@ def validate(interaction, preceding):
         elif field == 'fragments':
             _validate_fragments_completion(interaction, admitted, binding, declared, selected, values)
         else:
-            receipt = admitted[field + '_context']
-            if (admitted['kind'] != 'execute' or admitted.get('operation') != 'plan'
-                    or (receipt.get('identity_scope') == 'library.v1') != (evidence is not None)
-                    or (interaction.prerequisite is not None and interaction.prerequisite['field'] != 'parameters') or set(receipt) - {'source_mode', 'identity_scope'} != {
-                        'identity', 'intake_path', 'intake_sha256', 'context_path', 'context_sha256'}):
-                raise ValueError('Invalid completed FASTQ binding.')
-            from .session_state import sha
-            for key in ('identity', 'intake_sha256', 'context_sha256'):
-                sha(receipt[key])
-            mode = receipt.get('source_mode')
-            if mode not in (None, 'original'):
-                raise ValueError('Unsupported FASTQ source mode.')
-            identity = _context_identity(binding, declared, selected, mode=mode, scope=receipt.get('identity_scope'))
-            root = Path(receipt['context_path']).parent
-            if (receipt['identity'] != identity or root.name != identity or root.parent.name != field + '_handoffs'
-                    or not root.is_absolute() or '..' in root.parts
-                    or receipt['context_path'] != str(root / 'context.json')
-                    or receipt['intake_path'] != str(root / 'intake' / ('raw-scatac-intake-' + receipt['intake_sha256'] + '.json'))):
-                raise ValueError('FASTQ context/source identity changed.')
-            bound = LocalResourceAdmission._submission_binding(dict(execution_inputs=admitted['inputs'],
-                registered_input=admitted['registered_input']))
-            if field == 'bam':
-                original = binding.members[int(declared.source.split('.')[1])]
-                wanted = selected.inputs() | values | dict(
-                    species=declared.species, raw_assay=declared.assay, source_genome_assembly=declared.assembly,
-                    source_profile=declared.source_profile,
-                    source_path=original['source_path'], source_sha256=original['source_sha256'],
-                    raw_input_paths=[dict(path=original['source_path'], input_kind='BAM')],
-                    library_context_path=receipt['context_path'], library_context_sha256=receipt['context_sha256'])
-                if (mode != 'original' or bound.composition != 'bam-science.v1'
-                        or bound.resource_id != LocalResourceAdmission.registration_id('bam-handoff:' + identity + ':' + declared.source)
-                        or _serialize(bound.resource_choice) != selected.resource_choice() or admitted['inputs'] != wanted):
-                    raise ValueError('Derived BAM binding changed.')
-            else:
-                if sorted(m['resource_id'] for m in bound.members) != sorted([
-                        LocalResourceAdmission.registration_id('fastq-handoff:' + identity + ':' + m.source)
-                        for m in declared.members]):
-                    raise ValueError('FASTQ derived source identities changed.')
-                raw_inputs = admitted['inputs']['raw_input_paths']
-                if mode == 'original':
-                    from agent.tools.data._raw_fastq import explicit_sources
-                    expected_sources = explicit_sources([dict(
-                        path=binding.members[int(m.source.split('.')[1])]['source_path'],
-                        library_id=declared.namespace, role=m.role, lane=m.lane, chunk=m.chunk)
-                        for m in declared.members])
-                    if raw_inputs != expected_sources:
-                        raise ValueError('FASTQ original-source declarations changed.')
-                else:
-                    # Read-only interpretation of accepted USI-2B materialized views.
-                    from .uploads import H5ADUploadAdmission
-                    allowed = []
-                    for member in declared.members:
-                        technical = dict(library_id=declared.namespace, fastq_layout=declared.layout,
-                                         role=member.role, lane=member.lane, chunk=member.chunk)
-                        allowed.append({str(root / 'sources' / H5ADUploadAdmission._fastq_name(dict(technical, compression=c)))
-                                        for c in ('plain', 'gzip')})
-                    if (len(raw_inputs) != len(allowed) or sorted(raw_inputs) != raw_inputs
-                            or any(len(set(raw_inputs) & paths) != 1 for paths in allowed)):
-                        raise ValueError('Historical FASTQ source locators changed.')
-                wanted = selected.inputs() | values | dict(library_context_path=receipt['context_path'],
-                    library_context_sha256=receipt['context_sha256'], raw_assay=declared.assay, fastq_layout=declared.layout)
-                if evidence is not None:
-                    wanted.setdefault('species', declared.species)
-                if (bound.composition != 'fastq-science.v1' or len(bound.members) != len(declared.members)
-                        or _serialize(bound.resource_choice) != selected.resource_choice()
-                        or {k: v for k, v in admitted['inputs'].items() if k != 'raw_input_paths'} != wanted):
-                    raise ValueError('Derived FASTQ binding changed.')
+            raise ValueError('Retired standalone raw-intake handoff is unavailable.')
     except (ValueError, TypeError, KeyError, AttributeError, StopIteration) as exc:
         raise SessionError('Invalid task-scoped raw handoff.') from exc
 

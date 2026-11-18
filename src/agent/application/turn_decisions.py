@@ -462,12 +462,13 @@ class RequestRoles:
 
     def __post_init__(self):
         _normalize_research_intent(self)
+        from .raw_handoff import target as declaration_target
         if self.epizoo is not None:
-            from .epizoo_handoff import EpiZooDeclaration, target
+            from .epizoo_handoff import EpiZooDeclaration
             from .raw_handoff import validate_arguments
             if (type(self.epizoo) is not EpiZooDeclaration or self.epizoo.operation is None
                     or any(v is not None for v in (self.fastq, self.bam, self.fragments, self.annotation))
-                    or self.target != target(self.epizoo) or self.required_roles or self.roles
+                    or self.target != declaration_target('epizoo', self.epizoo) or self.required_roles or self.roles
                     or self.context != 'none'):
                 raise ValueError('Invalid EpiZoo task declaration.')
             _validate_arguments(self.arguments)
@@ -480,7 +481,7 @@ class RequestRoles:
         if self.annotation is not None and not raw_annotation:
             from .raw_handoff import AnnotationDeclaration, validate_arguments
             if (type(self.annotation) is not AnnotationDeclaration or any(v is not None for v in (self.fastq, self.bam, self.fragments))
-                    or self.target != 'annotate_scATAC_cell_types' or self.required_roles or self.roles
+                    or self.target != declaration_target('annotation', self.annotation) or self.required_roles or self.roles
                     or self.context not in ('none', 'current')):
                 raise ValueError('Invalid annotation task declaration.')
             _validate_arguments(self.arguments)
@@ -489,7 +490,7 @@ class RequestRoles:
         if self.fragments is not None:
             from .raw_handoff import FragmentsDeclaration, validate_arguments
             if (type(self.fragments) is not FragmentsDeclaration or self.fastq is not None or self.bam is not None
-                    or self.target != 'run_snapatac2' or self.required_roles or self.roles
+                    or self.target != declaration_target('fragments', self.fragments) or self.required_roles or self.roles
                     or self.context != 'none'):
                 raise ValueError('Invalid fragments task declaration.')
             _validate_arguments(self.arguments)
@@ -502,7 +503,7 @@ class RequestRoles:
             validate_arguments(self.arguments, 'bam')
         if self.fastq is not None:
             from .raw_handoff import FastqDeclaration
-            if (type(self.fastq) is not FastqDeclaration or self.target != 'run_chromap'
+            if (type(self.fastq) is not FastqDeclaration or self.target != declaration_target('fastq', self.fastq)
                     or self.required_roles or self.roles or self.context != 'none'):
                 raise ValueError('Invalid FASTQ task declaration.')
             _validate_arguments(self.arguments)
@@ -510,7 +511,7 @@ class RequestRoles:
             validate_arguments(self.arguments)
             return
         if self.bam is not None:
-            if self.target != 'run_snapatac2' or self.required_roles or self.context != 'none':
+            if self.target != declaration_target('bam', self.bam) or self.required_roles or self.context != 'none':
                 raise ValueError('Invalid BAM task request.')
             _validate_arguments(self.arguments)
             return
@@ -1305,7 +1306,40 @@ def decision_schema(public=None, *, utterance=None):
             arguments=declarations, **{field: ref(field)}, **downstream,
             unknown_fields=array(enum(scientific_metadata_fields(empty(field))), 16))))
     result = _object(dict(turn_schema_version=dict(type='integer', enum=[1]), decision={'anyOf': variants})) | {'$defs': definitions}
-    return result if public is None else _offered_schema(result, public, utterance=utterance)
+    return (_specialized_declaration_targets(result) if public is None
+            else _offered_schema(result, public, utterance=utterance))
+
+
+def _specialized_declaration_targets(schema, tools=None):
+    """Use declaration owners before final schema pruning and budget checks."""
+    from copy import deepcopy
+    from dataclasses import replace
+    from .raw_handoff import empty, target
+    defs = schema['$defs']
+    variants = []
+    for variant in schema['properties']['decision']['anyOf']:
+        props = variant['properties']
+        field = next((f for f in ('fastq', 'bam', 'fragments', 'epizoo', 'annotation')
+                      if f in props and '$ref' in props[f]), None)
+        if props['kind']['enum'] != ['request_roles'] or field is None:
+            variants.append(variant)
+            continue
+        cases = [empty(field)]
+        if field == 'epizoo':
+            operations = next(v['enum'] for v in defs[field]['properties']['operation']['anyOf'] if 'enum' in v)
+            cases = [replace(empty(field), operation=op) for op in operations]
+        for declared in cases:
+            owned = target(field, declared)
+            if tools is not None and owned not in tools:
+                continue
+            specialized = deepcopy(variant)
+            specialized['properties']['target'] = dict(type='string', enum=[owned])
+            if field == 'epizoo':
+                specialized['properties'][field] = deepcopy(defs[field])
+                specialized['properties'][field]['properties']['operation'] = dict(type='string', enum=[declared.operation])
+            variants.append(specialized)
+    schema['properties']['decision']['anyOf'] = variants
+    return schema
 
 
 def parameter_choice_offers(public):
@@ -1549,6 +1583,7 @@ def _offered_schema(schema, public, *, utterance=None):
             p['context'] = dict(type='string', enum=['none'])
         variants.append(variant)
     schema['properties']['decision']['anyOf'] = variants
+    _specialized_declaration_targets(schema, tools)
     # Remove unused definitions, including raw/answer-only types whose branches
     # are unavailable. Never leave dangling references or empty anyOf/enum.
     used = set()
@@ -1593,7 +1628,7 @@ def _intent_instructions():
         'Read-only questions about accepted results, parameters, methods, execution, provenance, verification and existing downloads use answer_scientific with exact offered targets. General methodological advice, requirements, applicability and possible new work use answer_guidance; targets=[] is valid. Missing evidence stays unknown. Questions never authorize computation.',
         'Use execute_plan for a clear supported scientific objective even when a required file, resource, parameter or existing field is absent or awaits researcher selection. Bind only known source roles and explicit declarations; Planner selects operations and Preparation derives their actual missing requirements and exact controls. Missing input is not an unclear objective. Ordinary objectives use execute_plan, including missing external inputs. request_roles is only the offered specialized raw/annotation/model declaration intake, never an ordinary missing-file alternative. Do not use request_resources for an ordinary objective; Preparation obtains applicable reference requirements after planning. Never require optional resource uploads merely because a port is offered.',
         'Bind source.N only from selected_sources to its actual requested tool/port. current_turn_sources marks newly selected files; other sources are available Session candidates, not automatically selected inputs. Labels, order, filenames, counts and input_type hints establish no scientific eligibility or biological role. Explicit positional references may identify the captured selection positions. Unused sources remain unused; new tasks inherit no prior roles.',
-        'Raw/composed declarations use their existing request_roles variant with empty required_roles/roles and explicit metadata in the corresponding declaration, not duplicated scientific arguments. Missing fields remain null; unknown_fields retracts only offered declaration metadata explicitly made unknown, never source/role/resource identities. Exact resource handles must be offered; a named reference preference requires verbatim resource_preference literal/evidence. Declared species/assembly is not a named-reference selection. File membership and biological history cannot be inferred.',
+        'Raw/composed declarations use their existing request_roles variant with empty required_roles/roles and explicit metadata in the corresponding declaration, not duplicated scientific arguments. Its schema-constrained target identifies the declaration entry owner, not a fixed workflow; preserve the full original processing and exploration objective for Planner composition. Missing fields remain null; unknown_fields retracts only offered declaration metadata explicitly made unknown, never source/role/resource identities. Exact resource handles must be offered; a named reference preference requires verbatim resource_preference literal/evidence. Declared species/assembly is not a named-reference selection. File membership and biological history cannot be inferred.',
         'A package alone is not a single-function request. Capture only explicitly requested methods, never internal workflow decisions. Every explicit native function_name declaration uses value=<registered function> AND native_function=<same registered function>, with verbatim researcher literal/evidence. Scope each native parameter and kwargs member to its explicit function. Example: PCA then neighbors uses separate pp.pca and pp.neighbors scopes, not two unscoped function_name values. The Planner assigns step IDs and dependencies; do not attach original-file scope to downstream consumers of derived outputs.',
         'arguments contains only explicit tool/argument declarations. Copy literal verbatim and quote a uniquely locating exact current-utterance evidence clause containing it once. Numeric literal is the numeric token alone; preserve exact decimal/rational text. Values and members keep their explicit types, including invalid scientific values; never repair them or manufacture defaults. Repeated numeric values require distinct evidence clauses. Conflicting values require clarification unless explicitly corrected.',
         'For structured parameters, verbatim explicit JSON is one literal; prose assignments use members with canonical name, kind and separate literal/evidence. Do not fabricate JSON or combine conflicting JSON/prose. kind=string excludes quote delimiters and preserves Unicode/case/whitespace; number preserves tokens; boolean quotes explicit true/false, yes/no or equivalent; json quotes an actual JSON value.',

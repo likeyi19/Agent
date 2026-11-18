@@ -64,11 +64,11 @@ def test_registration_is_lazy_private_and_not_science(local, monkeypatch, input_
         pytest.fail('Registration entered planning or science.')
     import agent.tools.data.scatac as inspection
     import agent.tools.data.scatac_matrix_adoption as adoption
-    import agent.tools.data._raw_bam as raw_bam
+    import agent.tools._native_process as native_process
     import agent.orchestration.registry as registry
     monkeypatch.setattr(inspection, 'inspect_scATAC', forbidden)
     monkeypatch.setattr(adoption, 'adopt_scATAC_cell_by_ccre', forbidden)
-    monkeypatch.setattr(raw_bam, 'inspect_bam_inputs', forbidden)
+    monkeypatch.setattr(native_process, 'call', forbidden)
     monkeypatch.setattr(registry, 'build_default_tool_registry', forbidden)
     record = register(owner, source, input_type=input_type)
     assert record.source_sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
@@ -379,9 +379,9 @@ def test_new_consumption_fails_but_historical_binding_survives_source_change(loc
     owner, source = local
     record = register(owner, source, input_type=input_type)
     tool = {'h5ad': 'inspect_scATAC', 'external_fragments': 'run_snapatac2',
-            'bam': 'inspect_raw_scATAC'}[input_type]
+            'bam': 'run_snapatac2'}[input_type]
     declarations = {} if input_type == 'external_fragments' else None
-    binding = (owner.compose_native(record.resource_id,{}) if input_type=='external_fragments' else owner.resolve(record.resource_id, tool_name=tool, scientific_inputs=declarations))
+    binding = (owner.compose_native(record.resource_id,{}) if input_type in ('external_fragments','bam') else owner.resolve(record.resource_id, tool_name=tool, scientific_inputs=declarations))
     captured = dict(registered_input=binding.attribution(), execution_inputs=_serialize(binding.execution_inputs))
     original = source.stat()
     if mutation == 'replace':
@@ -402,7 +402,7 @@ def test_new_consumption_fails_but_historical_binding_survives_source_change(loc
     assert reopened.validate_binding(binding, verify_source=False) == _serialize(binding.execution_inputs)
     reopened.validate_submission(captured, verify_source=False)
     assert_code('LOCAL_RESOURCE_INTEGRITY_INVALID', lambda: reopened.validate_binding(binding))
-    assert_code('LOCAL_RESOURCE_INTEGRITY_INVALID', lambda: (reopened.compose_native(record.resource_id,{}) if input_type=='external_fragments' else reopened.resolve(record.resource_id,tool_name=tool,scientific_inputs=declarations)))
+    assert_code('LOCAL_RESOURCE_INTEGRITY_INVALID', lambda: (reopened.compose_native(record.resource_id,{}) if input_type in ('external_fragments','bam') else reopened.resolve(record.resource_id,tool_name=tool,scientific_inputs=declarations)))
 
 
 @pytest.mark.parametrize('change', ['metadata_extra', 'digest', 'inputs', 'missing'])

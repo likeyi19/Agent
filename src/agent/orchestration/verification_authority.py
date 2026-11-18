@@ -243,7 +243,7 @@ def qualify_legacy_authorities(store, run_id):
             raise AuthorityError('Qualification requires complete successful execution provenance.')
         plan = state.plan
         if (not any(s.tool_name in TOOLS for s in plan.steps)
-                or any(s.tool_name not in {*TOOLS, 'inspect_raw_scATAC'} for s in plan.steps)):
+                or any(s.tool_name not in TOOLS for s in plan.steps)):
             raise AuthorityError('Qualification is restricted to the existing raw-processing DAG.')
         registry = build_default_tool_registry()
         expected_policy = build_recovery_policy_snapshot(plan, registry,

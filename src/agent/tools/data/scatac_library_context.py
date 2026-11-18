@@ -1,50 +1,19 @@
-"""M11.1b library/barcode decisions, independent of genomic references.
+"""Shared namespace/whitelist validation and accepted-fragment context reading.
 
-M10 owns group identity, library evidence and barcode extraction facts. This
-artifact projects source/locator facts only through exact M10 binding checks;
-it defines no FASTQ layout or BAM producer interpretation rules. All namespace
-and barcode-interpretation decisions are explicit caller declarations. A valid
-context is not an executable-backend qualification or an M10 readiness override.
-
-Group membership and library collections are sets, canonically sorted by group
-ID and namespace respectively. Cell identity is the tuple (namespace, barcode
-identifier); no rendered cell-ID syntax is defined here. Explicit subset mode
-allows omitted groups, including omitted lanes, but never splits a selected
-authoritative M10 library across namespaces.
-
-Whitelist v1 accepts plain ASCII uppercase A/C/G/T, one uniform-length token
-(1..256 bases) per line. LF is the only separator; the final LF is optional.
-Empty/duplicate records, CR, spaces, suffixes and other alphabets fail. File
-SHA-256 covers all bytes. Candidate-set SHA-256 covers ASCII tokens sorted
-lexically, each followed by LF, with no prefix. This mathematical set identity
-does not promise that a future backend is insensitive to input file order.
-
-Canonical JSON: UTF-8, sorted object keys, compact separators, ensure_ascii=False,
-allow_nan=False, no final newline. Context SHA-256 covers the bytes after
-excluding its own digest, intake path, and whitelist paths/provenance, prefixed
-by ASCII 'agent.scatac-library-processing-context.v1' and one NUL. The separate
-manifest SHA-256 covers every published byte, including paths/provenance.
-
-Loading/validation read no other artifact or resource. Build reads M10 JSON and
-freshly reinspects supplied whitelist identities; binding validation reads only
-M10 JSON. Neither opens FASTQ/BAM. Whitelist reinspection is also a separate API.
-Publication checks M10 binding and protects declared input/resource paths, then
-uses sibling staging, fsync, validation and atomic no-clobber link or replacement.
-As in M11.1a, this assumes a trusted local filesystem, not hostile path races.
+The historical context reader preserves exact digest and nested whitelist checks
+for existing fragment publications. It neither loads nor publishes the retired
+standalone Raw Intake Manifest, nor authorizes new raw scientific execution.
 """
 
-from dataclasses import asdict, dataclass, fields, replace
+from dataclasses import asdict, dataclass, fields
 from enum import Enum
 import hashlib
 import json
-import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
-import tempfile
 from typing import TypedDict
 
-from . import raw_scatac_manifest as intake
 from .scatac_reference import ResourceIdentity, SourceProvenance
 
 
@@ -52,7 +21,7 @@ LIBRARY_CONTEXT_ARTIFACT_TYPE = "agent.scatac-library-processing-context"
 LIBRARY_CONTEXT_SCHEMA_VERSION = 1
 LIBRARY_CONTEXT_CONTRACT_VERSION = "scatac-library-processing-context.v1"
 MAX_CONTEXT_BYTES = 4 * 1024 * 1024
-MAX_GROUPS = intake.MAX_COLLECTION_ITEMS
+MAX_GROUPS = 4096
 MAX_BARCODE_LENGTH = 256
 WHITELIST_SET_ALGORITHM = "sha256-ascii-sorted-lf.v1"
 WHITELIST_SYNTAX = "uppercase-acgt-uniform.v1"
@@ -102,15 +71,15 @@ class BarcodeWhitelistIdentity:
 class IntakeBinding:
     manifest_path: str
     manifest_sha256: str
-    artifact_type: str = intake.RAW_INTAKE_ARTIFACT_TYPE
-    schema_version: int = intake.RAW_INTAKE_SCHEMA_VERSION
-    contract_version: str = intake.RAW_INTAKE_CONTRACT_VERSION
+    artifact_type: str = "agent.raw-scatac-intake"
+    schema_version: int = 1
+    contract_version: str = "raw-scatac-intake.v1"
 
 
 @dataclass(frozen=True)
 class GroupBarcodeBinding:
     group_id: str
-    source: intake.BarcodeSource
+    source: str
     locator: str
 
 
@@ -132,7 +101,7 @@ class LibraryDeclaration:
 class ProcessingLibrary:
     namespace: str
     groups: tuple[GroupBarcodeBinding, ...]
-    input_kind: intake.InputKind
+    input_kind: str
     source_library_id: str | None
     membership_basis: MembershipBasis
     barcode_interpretation: BarcodeInterpretation
@@ -254,8 +223,7 @@ def _whitelist(value):
 def _group_binding(value):
     d = _shape(value, GroupBarcodeBinding)
     _group_ids((d["group_id"],))
-    d["source"] = intake.BarcodeSource(d["source"])
-    if d["source"] is intake.BarcodeSource.UNKNOWN:
+    if d["source"] not in ("fastq_read", "bam_cell_identifier", "bam_raw_sequence"):
         _fail("Barcode source is unresolved.", "LIBRARY_BARCODE_INVALID")
     _text(d["locator"], 128)
     return GroupBarcodeBinding(**d)
@@ -267,7 +235,6 @@ def _library(value):
     groups = tuple(_group_binding(g) for g in _collection(d["groups"]))
     _group_ids(tuple(g.group_id for g in groups))
     d["groups"] = tuple(sorted(groups, key=lambda g: g.group_id))
-    d["input_kind"] = intake.InputKind(d["input_kind"])
     d["membership_basis"] = MembershipBasis(d["membership_basis"])
     d["barcode_interpretation"] = BarcodeInterpretation(d["barcode_interpretation"])
     d["correction_policy"] = CorrectionPolicy(d["correction_policy"])
@@ -290,12 +257,12 @@ def _library(value):
     raw = d["barcode_interpretation"] is BarcodeInterpretation.RAW_SEQUENCE
     policy = d["correction_policy"]
     whitelist = d["whitelist"]
-    if d["input_kind"] is intake.InputKind.FASTQ:
-        valid = (all(g.source is intake.BarcodeSource.FASTQ_READ for g in groups)
+    if d["input_kind"] == "fastq":
+        valid = (all(g.source == "fastq_read" for g in groups)
                  and raw and policy is CorrectionPolicy.WHITELIST_REQUIRED and whitelist is not None)
-    elif d["input_kind"] is intake.InputKind.BAM:
-        valid = (all(g.source in (intake.BarcodeSource.BAM_CELL_IDENTIFIER,
-                                  intake.BarcodeSource.BAM_RAW_SEQUENCE) for g in groups)
+    elif d["input_kind"] == "bam":
+        valid = (all(g.source in ("bam_cell_identifier",
+                                  "bam_raw_sequence") for g in groups)
                  and ((raw and policy is CorrectionPolicy.UNQUALIFIED_RAW_BAM)
                       or (not raw and policy is CorrectionPolicy.ALREADY_CORRECTED and whitelist is None)))
     else:
@@ -327,9 +294,9 @@ def _parse_context(value, *, check_digest):
     b = _shape(d["intake"], IntakeBinding)
     _path_text(b["manifest_path"])
     _sha(b["manifest_sha256"])
-    if (b["artifact_type"] != intake.RAW_INTAKE_ARTIFACT_TYPE
-            or type(b["schema_version"]) is not int or b["schema_version"] != intake.RAW_INTAKE_SCHEMA_VERSION
-            or b["contract_version"] != intake.RAW_INTAKE_CONTRACT_VERSION):
+    if (b["artifact_type"] != "agent.raw-scatac-intake"
+            or type(b["schema_version"]) is not int or b["schema_version"] != 1
+            or b["contract_version"] != "raw-scatac-intake.v1"):
         _fail("Unsupported intake artifact version.", "LIBRARY_INTAKE_INVALID")
     d["intake"] = IntakeBinding(**b)
     d["selection_mode"] = SelectionMode(d["selection_mode"])

@@ -34,10 +34,9 @@ def receive(owner, role='R1', *, key=None, data=b'not scientifically qualified',
 
 
 def test_member_attribution_and_catalog_completion_never_execute_science(uploads, monkeypatch):
-    from agent.tools.data import raw_scatac, chromap_native
+    from agent.tools.data import chromap_native
     def forbidden(*args, **kwargs):
         pytest.fail('Byte/collection admission executed science')
-    monkeypatch.setattr(raw_scatac, 'inspect_raw_scATAC', forbidden)
     monkeypatch.setattr(chromap_native,'execute',forbidden)
     records = [receive(uploads, role) for role in ('R1', 'R2', 'R3')]
     assert uploads.choices() == ()

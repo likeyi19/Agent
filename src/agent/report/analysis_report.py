@@ -608,16 +608,6 @@ _REPORT_FIELDS: Mapping[str, tuple[str, ...]] = {
         "total_support", "backend_policy", "upstream_version", "upstream_commit",
         "contract_version", "support_definition", "library_summary", "n_libraries_omitted_from_summary",
     ),
-    "inspect_raw_scATAC": (
-        "input_kind", "readiness", "n_files", "n_groups", "n_issues",
-        "n_required_information", "n_repairs", "n_prerequisites",
-        "group_readiness_counts", "species_summary", "source_assembly_summary",
-        "target_assembly_summary", "assembly_compatibility_counts",
-        "n_harmonization_required", "structure_counts", "barcode_source_counts",
-        "barcode_identity_scope_counts", "issue_codes", "required_information_codes",
-        "preparation_summary", "prerequisite_codes", "coverage_summary",
-        "intake_contract_version",
-    ),
     "inspect_scATAC": (
         "input_path",
         "n_cells",
@@ -777,7 +767,6 @@ _TOOL_TITLES: Mapping[str, str] = {
     "import_scATAC_fragments": "External fragment adoption",
     "prepare_scATAC_bam_fragments": "BAM fragment preparation",
     "prepare_scATAC_fragments": "Canonical FASTQ fragments",
-    "inspect_raw_scATAC": "Raw scATAC Intake",
     "inspect_scATAC": "Dataset inspection",
     "epizoo_embed_cells": "EpiZoo representation",
 
@@ -874,26 +863,6 @@ _FIELD_LABELS: Mapping[str, str] = {
     "n_libraries_omitted_from_summary": "Libraries omitted from summary",
     "input_kind": "Raw input kind",
     "readiness": "Preprocessing readiness",
-    "n_files": "Files",
-    "n_issues": "Issues",
-    "n_required_information": "Required-information findings",
-    "n_repairs": "Preparation requirements",
-    "n_prerequisites": "Downstream prerequisites",
-    "group_readiness_counts": "Groups by readiness",
-    "species_summary": "Species resolution",
-    "source_assembly_summary": "Source coordinate assembly",
-    "target_assembly_summary": "Target assembly",
-    "assembly_compatibility_counts": "Assembly compatibility",
-    "n_harmonization_required": "Groups requiring assembly harmonization",
-    "structure_counts": "Input structure",
-    "barcode_source_counts": "Barcode source",
-    "barcode_identity_scope_counts": "Barcode identity scope",
-    "issue_codes": "Issue codes",
-    "required_information_codes": "Required information / input codes",
-    "preparation_summary": "Preparation / repair admissibility",
-    "prerequisite_codes": "Normal downstream prerequisite codes",
-    "coverage_summary": "Inspection coverage",
-    "intake_contract_version": "Intake contract",
     "input_path": "Input path",
     "n_cells": "Cells",
     "n_features": "Features",
@@ -1027,7 +996,6 @@ _SECTION_SPECS: tuple[tuple[str, str, frozenset[str]], ...] = (
     ("barcode_qc", "Observed-barcode QC", frozenset({"compute_scATAC_qc"})),
     ("external_fragments", "External Fragment Adoption", frozenset({"import_scATAC_fragments"})),
     ("scatac_fragments", "Raw scATAC Preprocessing", frozenset({"prepare_scATAC_fragments"})),
-    ("raw_scatac_intake", "Raw scATAC Intake", frozenset({"inspect_raw_scATAC"})),
     ('fragment_structure', 'Bounded fragment structure', frozenset({'inspect_scATAC_fragments'})),
     ("dataset", "Dataset", frozenset({"inspect_scATAC"})),
     (
@@ -1087,7 +1055,6 @@ _METHOD_FIELDS: Mapping[str, tuple[str, ...]] = {
     "prepare_scATAC_bam_fragments": ("source_profile", "mapq_policy", "tn5_policy", "source_history", "contract_version"),
     "import_scATAC_fragments": ("source_profile", "source_encoding", "source_selection", "transformation_policy", "contract_version"),
     "prepare_scATAC_fragments": ("input_kind", "backend_policy", "upstream_version", "upstream_commit", "contract_version"),
-    "inspect_raw_scATAC": ("input_kind", "intake_contract_version"),
     "inspect_scATAC": ("x_storage_type", "x_is_sparse", "x_dtype"),
     "epizoo_embed_cells": ("species", "backend", "checkpoint_path", "device"),
 
@@ -1224,7 +1191,7 @@ def _project_artifact_integrity(payload: Mapping[str, object]) -> tuple[_Artifac
                 verification_basis=tuple(basis),
                 raw_manifest_path=(
                     str(raw["artifact_path"])
-                    if raw["artifact_kind"] in ("raw_scatac_intake_manifest_json", "scatac_fragments_manifest_json") else None
+                    if raw["artifact_kind"] == "scatac_fragments_manifest_json" else None
                 ),
             )
         )
@@ -1587,8 +1554,6 @@ def _render_step_block(step: _StepFacts, occurrence: int) -> list[str]:
         return lines
     if step.tool_name == "prepare_scATAC_fragments":
         return _render_fragments(step, occurrence)
-    if step.tool_name == "inspect_raw_scATAC":
-        return _render_raw_intake(step, occurrence)
     lines = [f"### {_TOOL_TITLES[step.tool_name]} {occurrence}", ""]
     lines.append(f"- Source step: {_inline_code(step.step_id)}")
     for fact in step.facts:
@@ -1630,101 +1595,10 @@ def _render_fragments(step: _StepFacts, occurrence: int) -> list[str]:
     return lines
 
 
-_RAW_READINESS_TEXT = {
-    "READY": "The input satisfies the current preprocessing intake contract. Preprocessing has not been performed.",
-    "READY_WITH_REPAIRS": "Supported preparation actions remain before preprocessing can proceed.",
-    "NEEDS_USER_INPUT": "Additional required information or input artifacts are needed before preprocessing can proceed.",
-    "UNSUPPORTED": "The observed input is outside the currently supported preprocessing intake contract.",
-    "INVALID": "The inspection observed invalid or internally inconsistent raw input.",
-}
 
 
-def _raw_readiness_sentence(step: _StepFacts, *, preprocessing_completed: bool = False) -> str:
-    readiness = next(f.value for f in step.facts if f.field == "readiness")
-    text = _RAW_READINESS_TEXT[readiness]
-    if preprocessing_completed:
-        text = "This records readiness at the intake step; completed preprocessing is reported separately."
-    return (
-        "Raw scATAC intake inspection completed successfully and was independently verified. "
-        f"Preprocessing readiness is {_inline_code(readiness)}. {text}"
-    )
 
 
-def _render_raw_intake(step: _StepFacts, occurrence: int, *, preprocessing_completed: bool = False) -> list[str]:
-    """Local presentation of frozen aggregates; no source access or inference."""
-    values = {f.field: f.value for f in step.facts}
-    lines = [f"### Raw scATAC Intake {occurrence}", "",
-             f"- Source step: {_inline_code(step.step_id)}", "", _raw_readiness_sentence(step, preprocessing_completed=preprocessing_completed), ""]
-
-    def render(value):
-        if isinstance(value, dict):
-            if set(value) == {"state", "value", "count"}:
-                if value["value"] is None:
-                    return f"{_inline_code(value['state'])}: {value['count']} group(s)"
-                return f"{_inline_code(value['value'])} ({value['state']}): {value['count']} group(s)"
-            if set(value) == {"code", "admissibility", "count"}:
-                return f"{_inline_code(value['code'])} ({value['admissibility']}): {value['count']} requirement(s)"
-            return "; ".join(f"{_inline_code(k)}: {render(v)}" for k, v in value.items())
-        if isinstance(value, (list, tuple)):
-            if not value:
-                return "none"
-            return "; ".join(render(item) for item in value)
-        return _inline_code(value)
-
-    blocks = (
-        ("Intake overview", ("input_kind", "readiness", "n_files", "n_groups", "group_readiness_counts", "structure_counts")),
-        ("Reference / assembly compatibility", ("species_summary", "source_assembly_summary", "target_assembly_summary", "assembly_compatibility_counts", "n_harmonization_required")),
-        ("Barcode identity", ("barcode_source_counts", "barcode_identity_scope_counts")),
-        ("Outstanding findings", ("n_issues", "issue_codes", "n_required_information", "required_information_codes", "n_repairs", "preparation_summary", "n_prerequisites", "prerequisite_codes")),
-        ("Inspection scope", ("coverage_summary",)),
-    )
-    for title, fields in blocks:
-        lines.extend((f"#### {title}", ""))
-        for field in fields:
-            if field == "coverage_summary":
-                for key, label in (
-                    ("scope_counts", "Coverage records by scope"),
-                    ("method_counts", "Coverage records by method"),
-                    ("any_sample_scoped", "Any sample-scoped inspection"),
-                    ("n_sample_scoped_groups", "Sample-scoped groups"),
-                    ("n_sample_scoped_files", "Sample-scoped files"),
-                    ("n_groups_without_inspection", "Groups without inspection"),
-                    ("n_files_without_inspection", "Files without inspection"),
-                    ("n_groups_with_insufficient_coverage", "Groups with insufficient usable coverage"),
-                ):
-                    lines.append(f"- {label}: {render(values[field][key])}")
-                continue
-            label = "Raw input groups" if field == "n_groups" else _FIELD_LABELS[field]
-            lines.append(f"- {label}: {render(values[field])}")
-        lines.append("")
-        if title == "Reference / assembly compatibility":
-            lines.extend((
-                "Source coordinates and target references are separate. Supported model-oriented targets are "
-                "human → hg38 and mouse → mm10; this does not establish the source assembly. "
-                "FASTQ source coordinate assembly may be not applicable; future alignment can target the reference directly. "
-                "Assembly mismatch or required harmonization does not establish a supported transformation route.", ""))
-        elif title == "Barcode identity":
-            lines.extend((
-                "Barcode source does not establish corrected or canonical identity. Identical barcode strings "
-                "in independent groups do not establish identical cells; group-local scope keeps those groups separate.", ""))
-        elif title == "Outstanding findings":
-            lines.extend((
-                "Required information, preparation/repair admissibility, and normal downstream prerequisites "
-                "are distinct. Prerequisites such as alignment are future processing steps, not inspection errors or completed actions.", ""))
-        elif title == "Inspection scope":
-            coverage = values["coverage_summary"]
-            if coverage["any_sample_scoped"]:
-                lines.extend(("Some source inspection remains bounded and sample-scoped; this is not whole-file certification.", ""))
-            if coverage["n_groups_without_inspection"] or coverage["n_files_without_inspection"] or coverage["scope_counts"]["none"]:
-                lines.extend(("Some sources have no inspection coverage; their content has not been verified.", ""))
-            if coverage["n_groups_with_insufficient_coverage"]:
-                lines.extend(("Some groups have insufficient usable inspection coverage under the intake contract.", ""))
-            lines.extend((
-                "Complete coverage denotes sequential inspection reaching EOF under the intake contract. "
-                "Neither complete nor sampled record coverage establishes a cryptographic hash of the raw source file. "
-                "The authoritative SHA-256 binds the manifest artifact.", ""))
-    lines.extend((_fact_ids_line(step.facts), ""))
-    return lines
 
 
 def _render_summary(
@@ -1773,11 +1647,6 @@ def _render_summary(
     lines = ["## Analysis Summary", ""]
     for tool_name in _REPORT_FIELDS:
         if tool_name in present_tools:
-            if tool_name == "inspect_raw_scATAC":
-                for step in projection.steps:
-                    if step.tool_name == tool_name:
-                        lines.append(f"- Source step {_inline_code(step.step_id)}: {_raw_readiness_sentence(step, preprocessing_completed='prepare_scATAC_fragments' in present_tools)}")
-                continue
             lines.append(f"- {labels[tool_name]}.")
     if visualization is not None:
         lines.append(f"- {len(visualization.figures)} verified figure(s) included.")
@@ -1799,11 +1668,7 @@ def _render_main_section(
     occurrences: dict[str, int] = {}
     for step in _steps_for_section(projection, section):
         occurrences[step.tool_name] = occurrences.get(step.tool_name, 0) + 1
-        if step.tool_name == "inspect_raw_scATAC":
-            lines.extend(_render_raw_intake(step, occurrences[step.tool_name],
-                preprocessing_completed=any(s.tool_name == 'prepare_scATAC_fragments' for s in projection.steps)))
-        else:
-            lines.extend(_render_step_block(step, occurrences[step.tool_name]))
+        lines.extend(_render_step_block(step, occurrences[step.tool_name]))
     return lines
 
 

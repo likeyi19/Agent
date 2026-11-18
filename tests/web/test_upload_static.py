@@ -163,7 +163,7 @@ def test_reopened_companion_choice_is_rechecked_against_safe_catalog_and_bound_p
     assert 'scientific format and compatibility are checked during import' in (STATIC / 'index.html').read_text()
 
 
-def test_bam_has_one_source_and_context_selection_keeps_inspection_available():
+def test_bam_has_one_source_and_context_selection_keeps_native_processing_inputs():
     html = (STATIC / 'index.html').read_text()
     assert '<option value="bam">scATAC-seq BAM</option>' in html
     assert 'Upload one BAM; no index is required.' in html
@@ -173,13 +173,14 @@ def test_bam_has_one_source_and_context_selection_keeps_inspection_available():
     assert 'bam ? ".bam" : fastq ? ".fastq,.fq,.fastq.gz,.fq.gz" : groups ? ".tsv" : ".h5ad"' in upload
     assert 'element("upload-index-fields").hidden = !(fragments || fasta)' in upload
     context = section('function inputContext()', 'function selectedResourceType()')
-    assert 'Choose approved BAM context or inspect' in context
+    assert 'Choose configured BAM inputs' in context
+    assert 'Inspect the BAM' not in context
     assert 'item.bam_default === true' in context
     assert 'configured.bam_companion === true' in context
     companion = section('function selectedCompanion(', 'function saveResourceSelection()')
     assert 'inputType === "bam" ? choice.bam_companion === true' in companion
     assert not any(value in upload + context + companion for value in (
-        'inspect_raw_scATAC', 'prepare_scATAC_bam_fragments', 'source_sha256', 'library_context_path',
+        'prepare_scATAC_bam_fragments', 'source_sha256', 'library_context_path',
     ))
 
 
@@ -270,4 +271,5 @@ def test_fastq_completion_sends_opaque_members_and_does_not_select_a_workflow():
     context = section('function inputContext()', 'function selectedResourceType()')
     assert 'item.fastq_default === true' in context
     assert 'configured.fastq_companion === true' in context
-    assert 'Choose approved FASTQ context or inspect' in context
+    assert 'Choose configured FASTQ inputs' in context
+    assert 'Inspect the completed FASTQ' not in context

@@ -14,7 +14,7 @@ def test_retired_operations_and_modules_are_absent_while_native_science_remains(
     for module in ('cell_label_comparison','annotation_evaluation','cell_type_standardization','annotation_corroboration','marker_validation'):
         assert importlib.util.find_spec('agent.tools.analysis.'+module) is None
     assert {'annotate_scATAC_cell_types','transfer_cell_labels','evaluate_cell_clustering',
-        'run_scanpy','run_signac','run_snapatac2','run_episcanpy','inspect_raw_scATAC',
+        'run_scanpy','run_signac','run_snapatac2','run_episcanpy',
         'run_chromap','build_replicate_pseudobulk','run_replicate_differential_accessibility'}<=set(registry.names())
     offers=json.dumps(scientific_parameters(registry))
     assert not any(n in offers for n in (*retired,'prediction_mapping','reference_mapping','string_mapping'))

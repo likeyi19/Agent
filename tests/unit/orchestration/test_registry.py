@@ -49,7 +49,6 @@ def test_default_registry_contains_exact_allowlist(registry) -> None:
         "validate_scATAC_feature_space",
         "build_replicate_pseudobulk",
         "run_replicate_differential_accessibility",
-        "inspect_raw_scATAC",
         "inspect_scATAC_fragments",
         "adopt_scATAC_cell_by_ccre",
         "annotate_scATAC_cell_types",
@@ -283,7 +282,6 @@ def test_label_transfer_addition_preserves_existing_recovery_identities(registry
         "prepare_scatac_regulatory_sequences": "scatac-regulatory-sequences-v1",
         "evaluate_regulatory_predictions": "regulatory-sequence-native-v1",
         "inspect_scATAC": "inspect-scatac-v2",
-        "inspect_raw_scATAC": "inspect-raw-scatac-v1",
         "inspect_scATAC_fragments": "inspect-fragment-structure-v1",
         "annotate_scATAC_cell_types": "hierarchical-annotation-v1",
 

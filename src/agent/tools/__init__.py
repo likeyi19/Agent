@@ -14,7 +14,7 @@ from .analysis import (
     run_replicate_differential_accessibility,
     validate_scATAC_feature_space,
 )
-from .data import RawScATACInspection, ScATACInspection, inspect_raw_scATAC, inspect_scATAC
+from .data import ScATACInspection, inspect_scATAC
 
 __all__ = [
     "CellClusteringEvaluationToolResult",
@@ -24,8 +24,6 @@ __all__ = [
     "ReplicateDifferentialAccessibilityToolResult",
     "ScATACFeatureSpaceToolResult",
     "ScATACInspection",
-    "RawScATACInspection",
-    "inspect_raw_scATAC",
     "epizoo_embed_cells",
     "evaluate_cell_clustering",
     "inspect_scATAC",

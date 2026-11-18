@@ -27,12 +27,10 @@ def receive(owner, data=b'unqualified source bytes', **kwargs):
 
 
 def test_bam_transport_registers_bytes_without_qualifying_or_inspecting_them(uploads, monkeypatch):
-    from agent.tools.data import raw_scatac
-    from agent.tools.analysis.native_matrix import SNAPATAC2
+    from agent.tools import _native_process
     def forbidden(*args, **kwargs):
         pytest.fail('Byte registration invoked a scientific owner')
-    monkeypatch.setattr(raw_scatac, 'inspect_raw_scATAC', forbidden)
-    monkeypatch.setattr(SNAPATAC2,'execute',forbidden)
+    monkeypatch.setattr(_native_process, 'call', forbidden)
     record = receive(uploads)
     assert record.input_type == 'bam' and record.source_index is None
     assert record.source_sha256 == hashlib.sha256(b'unqualified source bytes').hexdigest()

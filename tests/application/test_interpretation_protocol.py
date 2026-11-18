@@ -129,7 +129,9 @@ def test_one_structurally_stable_schema_and_complete_inventory(registry):
     # Inventory choices and arbitrary source-field growth never enter the schema.
     for word in ('run_scanpy', 'pp.pca', 'source.0', 'field_0_0', 'n_comps'):
         assert word not in frozen
-    assert len(frozen) < 40000
+    # Operation-dependent EpiZoo targets require explicit correlated alternatives.
+    # Keep a fixed grammar bound independent of Registry/source catalog growth.
+    assert len(frozen) < 50000
 
 
 def test_explicit_api_detail_is_exact_without_filtering_discovery(registry):

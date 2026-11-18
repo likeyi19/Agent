@@ -63,7 +63,6 @@ from agent.schemas import (
 
 from .registry import ToolRegistry, UnknownToolError
 from .error_policy import classified_agent_error
-from .raw_scatac_verifier import verify_raw_scatac_intake
 from agent.tools.analysis.differential_accessibility_backend import verify_completion as verify_da_completion
 
 
@@ -1534,27 +1533,6 @@ def verify_step(
                 checks.add('matrix_external_conservation', True,
                     'Every external sparse value and ordered axis identity is conserved.',
                     'External matrix conservation verification failed.', 'MATRIX_VERIFICATION_FAILED')
-        elif step.tool_name == "inspect_raw_scATAC":
-            try:
-                verify_raw_scatac_intake(resolved_arguments, plain_result, registry)
-            except Exception as exc:
-                code = getattr(exc, 'code', 'RAW_INTAKE_VERIFICATION_FAILED')
-                checks.add(
-                    'raw_intake_source_reconstruction', False,
-                    'Raw intake manifest matches fresh source reconstruction.',
-                    'Raw intake manifest failed source, output, or summary verification.',
-                    code,
-                    ErrorCategory.ENVIRONMENT_ERROR if code in (
-                        'RAW_BAM_DEPENDENCY_UNAVAILABLE', 'RAW_BAM_BACKEND_VERSION_UNSUPPORTED')
-                    else ErrorCategory.VERIFICATION_ERROR,
-                )
-            else:
-                checks.add(
-                    'raw_intake_source_reconstruction', True,
-                    'Raw intake manifest matches fresh source reconstruction.',
-                    'Raw intake manifest failed source reconstruction.',
-                    'RAW_INTAKE_VERIFICATION_FAILED',
-                )
         elif step.tool_name == "inspect_scATAC_fragments":
             from agent.tools.data.fragment_inspection import verify_result
             try:

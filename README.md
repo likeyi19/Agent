@@ -40,7 +40,7 @@ upstream API coverage. Future integrations remain demand-driven.
 
 The [scientific results guide](docs/guides/scientific-results-and-evaluation.md)
 describes native analysis/annotation, source-bound figures, readable accepted
-facts and downloads. The current product has 37 registered tools. Cell-type label
+facts and downloads. The current product has 33 registered tools. Cell-type label
 renaming, ontology enrichment and post-annotation reference-label benchmarks are
 retired; independent research evaluation remains outside Agent. See the
 [retirement closeout](../agent-data/acceptance/scientific-results/cell-type-comparison-retirement-2026-11-08/REPORT.md)
@@ -221,109 +221,10 @@ Guarded real-data differential-accessibility acceptance remains outstanding.
 [AGENTS.md](AGENTS.md) contains the detailed engineering rules, scientific
 contracts, milestone history, acceptance results, and deferred work.
 
-**Milestone 10 — Raw scATAC Data Intake & Preflight is complete.**
-Natural-language requests now support raw FASTQ/BAM intake → deterministic
-preflight → verified manifest/evidence → figureless deterministic report.
-M10 identifies the supplied input, whether its structure/provenance is
-interpretable, and whether it satisfies the intake contract for its intended
-preprocessing route.
-
-Phase II began with raw scATAC intake capabilities. Milestone 10.1 established
-the versioned raw-scATAC intake domain contract
-and manifest infrastructure. Raw-input readiness is distinct from execution
-success: the contract separates required information, preparation/repair
-requirements, and normal downstream prerequisites.
-
-Milestone 10.2 is complete: a deterministic, read-only FASTQ intake vertical
-slice built on M10.1. It inspects local plain/gzip FASTQ with bounded parsing,
-accepting `.fastq`, `.fastq.gz`, `.fq`, and `.fq.gz` for Agent inspection.
-Discovery supports explicit files and non-recursive directories. Reviewed
-Illumina/10x-style names support deterministic sample-token/lane/chunk/read-role
-grouping without establishing biological sample identity.
-
-The first supported declared assay family is 10x / Cell Ranger ATAC-compatible
-FASTQ, with two layouts:
-
-| Layout | Genomic reads | Raw cell-barcode read | Optional sample index |
-| --- | --- | --- | --- |
-| A | R1, R3 | R2 | I1 |
-| B | R1, R2 | I2 | I1 |
-
-Assay identity is not inferred from filenames or read lengths alone. Barcode
-provenance requires supported assay/layout evidence; generic or ambiguous FASTQ
-remains inspectable without inferred barcode semantics.
-
-Milestone 10.3 is complete: deterministic, read-only BAM intake supports explicit
-local `.bam` files and non-recursive directories. It uses mature `pysam`/htslib
-parsing, with no custom BAM decoder. The tested optional dependency is
-`pysam==0.24.1`, declared in [requirements/bam.txt](requirements/bam.txt) and
-lazy-loaded for BAM inspection; existing FASTQ/H5AD workflows do not require it.
-Bounded sequential reading works without an index and collects compact
-header/reference, species/source-assembly, sort/index, mapping/pairing, and
-barcode-tag evidence. Missing indexes alone do not make inputs invalid.
-
-Usable sampled `CB` may establish a BAM cell identifier; `CR` supplies raw
-cellular-barcode evidence and `CY` its quality evidence. Generic CB is not
-assumed corrected. `BC`/`QT` describe sample/library barcodes and qualities,
-never cell identity. Barcode values, read sequences, qualities, and per-read
-coordinates are not persisted.
-
-Human model-oriented preprocessing targets `hg38`; mouse targets `mm10`.
-Source BAM assembly remains distinct from target assembly and is never inferred
-merely from species or chromosome naming. A mismatch does not establish a
-supported conversion/realignment route. FASTQ has no source coordinate assembly;
-FASTQ alignment targets the appropriate reference directly. Inspection is
-sample-scoped unless sequential EOF observation permits complete coverage and
-does not certify uninspected content.
-
-Milestone 10.4 is complete: M10.1–M10.3 intake is now exposed through one public
-capability, `inspect_raw_scATAC`. Natural-language LLM planning selects this tool;
-the compiler binds structured request values without putting their filesystem
-paths in the model prompt. Private FASTQ/BAM helpers are not Planner tools.
-Agent code owns format dispatch, FASTQ layout and BAM tag/header interpretation,
-source/target assembly semantics, manifest publication, readiness, and verification.
-
-Raw sequencing has planning semantics distinct from processed-H5AD `RAW_SCATAC`.
-The result is a versioned authoritative manifest reference and compact summary.
-It cannot feed EpiZoo directly: preprocessing must first construct the required
-cell-by-cCRE/H5AD input. Execution success is separate from readiness (`READY`,
-`READY_WITH_REPAIRS`, `NEEDS_USER_INPUT`, `UNSUPPORTED`, or `INVALID`). Dedicated
-verification independently reloads the manifest and reobserves current sources.
-
-PLAN_ONLY performs zero raw inspection and writes no manifest; BAM planning
-does not load pysam. Verified Runtime EXECUTE and durable resume are supported.
-
-Milestone 10.5 is complete: FASTQ and BAM intake now support the full Application
-path from natural-language planning → `inspect_raw_scATAC` → source-aware
-verification → evidence → deterministic verified Markdown report. Raw-intake
-reports are figureless by design; no scientific visualization is generated.
-Reports distinguish successful Agent execution, successful source verification,
-and preprocessing readiness. A truthful non-ready or `INVALID` finding can still
-be a successful Application execution.
-
-Reports summarize input kind, readiness, file/group counts, species, separate
-source/target assemblies and compatibility, harmonization requirements, barcode
-provenance/scope, structured issue codes, required information, preparations,
-normal downstream prerequisites, and inspection coverage. Bounded/sample-scoped
-inspection is distinguished from complete sequential inspection and is not
-whole-file certification. Evidence freshly verifies sources before projection;
-verified manifest provenance and SHA-256 identify the authoritative intake artifact.
-Evidence/reports contain no whole raw manifest, reads, read names, barcode values,
-qualities, complete BAM reference dictionaries, or raw sequencing payloads.
-
-M10 provides intake/preflight; M11.2 adds FASTQ and M11.3c adds qualified BAM
-preprocessing below. Sort/index observations alone do not authorize transformations.
-M11.5c now adds cell-by-cCRE construction. Realignment/liftOver, automatic
-statistical cell calling and model inference from raw sequencing remain deferred.
-
-Direct marker-based cell-type annotation is available through
-[`annotate_scATAC_cell_types`](docs/history/m13.5-agent-annotation-integration.md).
-It consumes an accepted canonical fragment-count matrix or declared raw genomic
-region counts/binary accessibility, exact independent groups, and pinned
-tissue/context resources. It publishes primary labels in a new annotated H5AD
-while preserving source values and axes. Unresolved cells remain present.
-Groups may be supplied in `obs`, an ordered TSV, or an explicitly selected
-compatible accepted Leiden result.
+Raw BAM and FASTQ processing uses the registered native SnapATAC2 and Chromap
+interfaces. Processed H5AD exploration uses `inspect_scATAC` and appropriate native
+QC operations. The retired standalone raw inspection and intake manifest system
+is unavailable. See the [raw processing guide](docs/guides/raw-scatac-processing.md).
 
 ## Historical Milestone 11 status
 
@@ -824,7 +725,6 @@ Planner-visible coverage is registry-derived, not a permanent tool-count limit.
 | Workflow | Registered tools and accepted behavior |
 | --- | --- |
 | Exact external cCRE adoption | `adopt_scATAC_cell_by_ccre`: constrained int64 CSR H5AD, exact complete reference vocabulary, explicit external value semantics, independently verified conservation, durable matrix authority and figureless reporting; see [M12.1](docs/history/m12.1-exact-external-cell-by-ccre-adoption.md) |
-| Raw sequencing intake | `inspect_raw_scATAC`: bounded FASTQ/BAM inspection, authoritative intake manifest, source-aware verification, and full Application execution with a verified figureless report |
 | FASTQ preprocessing | `run_chromap`: native `index`/`map`, explicit lane/barcode/reference inputs and native BED output |
 | Fragment ingestion | `run_snapatac2` → `pp.import_fragments`: direct native fragments to fragment-storage H5AD |
 | BAM fragments | `run_snapatac2` → `pp.make_fragment_file`: native BAM method and recorded parameters |
@@ -1146,152 +1046,12 @@ importer's `unknown` default; an operator-supplied `source_index_path` and
 `source_index_sha256` pair retains its existing explicit BGZF/TBI contract.
 The index is not registered, and no adjacent index is discovered.
 
-UA2.3 supports one declared `bam` source through the existing raw inspection and
-qualified BAM fragments operations:
-
-```python
-resource = app.resources.register(
-    "local-bam-request-001", local_bam, input_type="bam",
-    label="Supplied BAM", attribution="Caller-declared local BAM",
-)
-inspection = app.resources.resolve(
-    resource.resource_id, tool_name="inspect_raw_scATAC",
-    scientific_inputs={
-        "species": "human", "raw_assay": "SCATAC",
-        "source_genome_assembly": "hg38",
-    },
-)
-app.create_session("bam-analysis")
-view = app.submit_turn(
-    "bam-analysis", "inspect-001", "Inspect the supplied BAM.",
-    expected_generation=0, registered_input=inspection,
-)
-
-# Use the exact accepted intake and an explicitly prepared, qualified context.
-production = app.resources.resolve(
-    resource.resource_id, tool_name="prepare_scATAC_bam_fragments",
-    scientific_inputs={
-        "intake_manifest_path": intake_manifest_path,
-        "intake_manifest_sha256": intake_manifest_sha256,
-        "library_context_path": library_context_path,
-        "library_context_sha256": library_context_sha256,
-        "reference_bundle_path": reference_bundle_path,
-        "reference_bundle_sha256": reference_bundle_sha256,
-        "source_profile": "agent-cb-paired-atac.v1",
-    },
-)
-view = app.submit_turn(
-    "bam-analysis", "prepare-001", "Prepare fragments from the supplied qualified BAM.",
-    expected_generation=1, registered_input=production,
-)
-```
-
-The resolver supplies exactly `[registered_source_path]` for raw inspection, and
-the pinned source path/full SHA for production. Production binding requires an
-intake with one BAM file and one group, selected explicitly at that exact path;
-directory-discovered intake is outside this registered single-file boundary.
-The existing manifest owner validates membership; the existing producer owns
-fresh intake reinspection, explicit context/reference/profile compatibility,
-corrected-CB paired-ATAC transformation and source conservation. Its independent
-verifier issues the existing producer-neutral fragments-v2 authority. Public
-production remains human/hg38 or mouse/mm10 with `agent-cb-paired-atac.v1`.
-Context construction remains an explicit data-layer operation.
-
-UA2.4 composes declared FASTQ files into an exact immutable collection of existing
-`(resource_id, record_sha256)` references. Membership is closed, permutation-invariant,
-and bounded to 128 members with 32 KiB of attribution. Duplicate identities or
-source paths, missing/corrupt records, wrong types, and changed bytes fail closed.
-The collection is captured inline in each turn's existing submission; it creates
-no separate collection store or Session-wide active input. Historical scalar
-H5AD/fragments/BAM attribution remains unchanged.
-
-```python
-files = [app.resources.register(
-    f"fastq-request-001-{number}", path, input_type="fastq",
-    label=f"Supplied reads {number}", attribution="Explicit caller-selected FASTQ",
-) for number, path in enumerate(explicit_fastq_paths)]
-members = [{"resource_id": file.resource_id, "record_sha256": file.record_sha256}
-           for file in files]
-inspection = app.resources.resolve_collection(
-    members, tool_name="inspect_raw_scATAC",
-    scientific_inputs={"species": "human", "raw_assay": "TENX_ATAC",
-                       "fastq_layout": "tenx-atac-r1-r2-r3.v1"},
-)
-app.create_session("fastq-analysis")
-view = app.submit_turn(
-    "fastq-analysis", "inspect-001", "Inspect the supplied FASTQ collection.",
-    expected_generation=0, registered_input=inspection,
-)
-
-# Supply the accepted intake and explicitly provisioned scientific prerequisites.
-production = app.resources.resolve_collection(
-    members, tool_name="prepare_scATAC_fragments",
-    scientific_inputs={
-        "intake_manifest_path": intake_manifest_path,
-        "intake_manifest_sha256": intake_manifest_sha256,
-        "library_context_path": library_context_path,
-        "library_context_sha256": library_context_sha256,
-        "reference_bundle_path": reference_bundle_path,
-        "reference_bundle_sha256": reference_bundle_sha256,
-    },
-)
-view = app.submit_turn(
-    "fastq-analysis", "prepare-001", "Prepare fragments using the supplied FASTQ context.",
-    expected_generation=1, registered_input=production,
-)
-```
-
-The inspection resolves only the selected files as explicit `raw_input_paths`;
-it performs no directory discovery. The existing owner supports `.fastq`, `.fq`,
-`.fastq.gz`, and `.fq.gz`, and owns readability, syntactic grouping, roles,
-synchronization, and readiness. Registration parses no reads and can identify
-invalid files. Selected files do not automatically form a biological library.
-
-FASTQ production retains its exact Registry contract: intake, library-context,
-and reference path/SHA pairs. Registered membership must equal the complete
-explicit intake inventory. The qualified context can select a legitimate subset
-of groups; first acceptance checks the actual compiled intake and the produced
-FASTQ provenance's exact source paths, hashes, and sizes, including optional I1.
-Every collection member is checked before new consumption and first acceptance,
-including unfinished recovery. Completed historical reads/retries retain their
-existing lifetime rules. Existing scientific authority policies still govern
-scientific reuse.
-
-Assay/layout, biological library membership, barcode policy/whitelist, reference,
-qualified Chromap executable/index, producer verification, and authority stay
-with their existing owners. No prerequisites or workflow steps are manufactured.
-Current public FASTQ production remains human/hg38 or mouse/mm10. Generic resource
-identity has no species restriction; the existing M14 neutral references,
-fragments, generic QC, and matrices retain their separate qualified contracts.
-Arbitrary-species FASTQ and unregistered neutral producers are not exposed here.
-
-Successful raw inspection can report `INVALID`, `NEEDS_USER_INPUT` or
-`UNSUPPORTED`; it does not qualify downstream production. Registered-source
-integrity is checked before new consumption and before first inspection-result
-acceptance, including unfinished recovery. Completed historical results retain
-their existing source-lifetime policies. A BAM index is not required or created
-by registration; existing intake observations of adjacent BAI/CSI files and
-producer reinspection remain unchanged. Cross-type bindings and caller overrides
-of registered source fields are rejected.
-
-Registration keeps a hash-pinned source locator rather than copying the file. Its canonical
-approved location must remain available with identical bytes for new consumption;
-different bytes, deletion, or a symlink replacement fails closed. The registration key is an
-explicit idempotency key: equivalent retries return the same immutable record,
-while changed bytes or metadata conflict. Known records can be reopened without
-granting permission to register new sources. Completed turn reads/retries retain
-their captured attribution without requiring current source bytes.
-
-Pass either `registered_input` or ordinary `execution_inputs` for a turn. Source
-identity and exact resolved inputs are captured once in the existing immutable
-submission; scientific results retain their existing RunStore/Revision authority.
-`resource.public()` exposes safe registration metadata without paths. The initial
-UA1–UA2.4 admission boundary did not transfer browser files or register indexes;
-UA3.4.1 adds optional paired-index identities to the same source records.
-UA3.1 adds optional H5AD browser transfer and discovery of those completed
-registrations through the same owner; operator-configured Web InputSets retain
-their current behavior. UA3.2.2 additionally allows explicitly designated H5AD
-companion InputSets and exact reviewed EpiZoo resources to accompany one upload.
+BAM uploads and explicitly attributed FASTQ collections use the shared immutable
+source catalog. The Interpreter captures exact attachments and declared metadata;
+the Planner composes native SnapATAC2 or Chromap operations and Canonical Preparation
+resolves their actual requirements. No standalone raw intake inspection is needed.
+Use the [raw processing guide](docs/guides/raw-scatac-processing.md) and
+[native function guide](docs/guides/native-functions.md) for current interfaces.
 
 ### Optional H5AD browser attachment (UA3.1)
 
@@ -1452,53 +1212,19 @@ deferred. Sources remain selectable after refresh/restart. Existing accepted
 matrix, QC and selection downloads remain available; fragments/TBI downloads
 remain deferred. See the [implementation and acceptance record](docs/history/ua3.4.1-external-fragments-web-upload.md).
 
-### BAM browser attachment (UA3.4.2)
+### BAM and FASTQ browser attachments
 
-Choose **BAM** in the existing composer and upload one source. No BAI/CSI is
-required or uploaded. Registration captures bytes without asserting scientific
-eligibility. An ordinary inspection request works without producer context;
-bounded BAM observations do not establish corrected-barcode or upstream history.
+Attach a BAM to an AI Research conversation and describe the complete analysis
+objective. Agent captures exact uploaded bytes and researcher declarations; native
+SnapATAC2 operations own extraction, matrix processing and scientific legality.
+For FASTQ, declare the library, read layout and each member's lane/chunk/role,
+then complete the library in the existing upload interface. Native Chromap owns
+mapping with the selected reference and barcode inputs. Uploading and assigning
+roles run no scientific inspection or processing. Missing scientific requirements
+are resolved through Canonical Preparation.
 
-For fragment preparation, select an operator InputSet marked `bam_companion: true`
-containing the existing `agent-cb-paired-atac.v1` profile, exact library-context
-path/SHA and reference-bundle path/SHA. The context must be qualified for the
-actual stored uploaded source and its pinned intake, rather than the file's old
-location. The public producer retains human/hg38 and mouse/mm10 scope, explicit
-corrected-CB/already-corrected context, unshifted coordinate and retained-duplicate
-declarations. Agent does not reconstruct missing source history.
-
-Only a unique explicitly configured `bam_default: true` may supply a context;
-explicit selection wins. Inspection stays available without such a default.
-The ordinary plan may consume an explicit pinned intake or a new inspection's
-semantic output. Qualified preparation and optional downstream QC/selection/matrix
-still require their existing resources and parameters. The operator JSON remains
-unchanged. See the [UA3.4.2 record](docs/history/ua3.4.2-bam-web-upload.md) for a
-configuration example and acceptance scope. Existing upload limits apply per
-source; oversized transfers report the exact limit and `upload_max_bytes` action.
-
-### FASTQ library browser attachment (UA3.4.3)
-
-Choose **FASTQ**, name one library, and explicitly select its layout, read role,
-three-digit lane/chunk and plain/gzip encoding before each file upload. Layout A
-uses genomic R1/R3 and barcode R2; layout B uses genomic R1/R2 and barcode I2.
-Both allow optional sample-index I1. Multiple complete lane/chunk groups are
-supported. Original filenames are display labels; generated source names encode
-the explicit declarations for the unchanged scientific owner.
-
-Select the completed members and click **Complete FASTQ library**. Missing required
-roles are reported per group. Only complete collections enter the scientific input
-selector; member upload and collection completion run no science. The same catalog
-persists both members and complete choices across refresh/restart.
-
-Request inspection without producer context. Qualified preparation additionally
-needs an operator InputSet marked `fastq_companion: true`, binding the actual stored
-sources' library context/whitelist/namespace and human/hg38 or mouse/mm10 reference.
-Only a unique explicit `fastq_default: true` may supply a default. Assay/layout are
-already captured by the collection and cannot be overridden by companions. Existing
-qualified Chromap/index runtime provisioning remains operator-owned; no configuration
-is changed automatically. Natural language selects the operations, while typed
-selections still supply scientific declarations and thresholds. See the
-[FASTQ acceptance and UA3.4 closeout](docs/history/ua3.4.3-fastq-web-upload.md).
+See the [raw processing guide](docs/guides/raw-scatac-processing.md) for current
+scientific behavior. Earlier UA3.4 browser acceptance records remain historical.
 
 ## Validation and current boundaries
 

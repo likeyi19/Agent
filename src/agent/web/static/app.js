@@ -1877,13 +1877,13 @@ function inputContext() {
   const fastqDefaults = state.inputSets.filter((item) => item.fastq_default === true);
   element("input-choice").options[0].textContent = fragments
     ? configuredDefaults.length === 1 ? "Use explicitly configured fragments default" : "Choose approved fragments declarations"
-    : bam ? bamDefaults.length === 1 ? "Use explicitly configured BAM context" : "Choose approved BAM context or inspect"
-      : fastq ? fastqDefaults.length === 1 ? "Use explicitly configured FASTQ context" : "Choose approved FASTQ context or inspect"
+    : bam ? bamDefaults.length === 1 ? "Use explicitly configured BAM context" : "Choose configured BAM inputs"
+      : fastq ? fastqDefaults.length === 1 ? "Use explicitly configured FASTQ context" : "Choose configured FASTQ inputs"
         : "No structured inputs";
   element("input-choice-help").textContent = fragments
     ? "Choose an approved fragments declaration set with a reference, source profile and namespace. Missing prerequisites are reported when you send the request."
-    : bam ? "Inspect the BAM without a producer context. To prepare fragments, choose an approved paired-ATAC source context and compatible reference."
-      : fastq ? "Inspect the completed FASTQ library without producer resources. Fragment production requires an approved library context, barcode policy and compatible reference/runtime."
+    : bam ? "Describe how you want to process this BAM. Missing inputs will be requested before analysis."
+      : fastq ? "Describe how you want to process this FASTQ library. Reference and barcode requirements depend on the analysis."
         : multiple ? "Describe each selected input's scientific role in your message. Configured inputs may supply approved companion values."
           : "Choose configured inputs or declarations for an uploaded source.";
   for (const option of element("input-choice").options) {

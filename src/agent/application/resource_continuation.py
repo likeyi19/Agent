@@ -12,7 +12,6 @@ from .turn_decisions import IntentError
 from .input_sets import ScientificInputSet
 
 COMPOSITIONS = {'external-fragments-science.v1': 'fragments',
-                'bam-science.v1': 'bam', 'fastq-science.v1': 'fastq',
                 'h5ad-science.v1': 'h5ad'}
 
 

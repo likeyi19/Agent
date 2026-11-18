@@ -54,13 +54,10 @@ def test_collection_persists_in_same_catalog_and_preserves_inline_fingerprint(su
     assert admission.load(collection.resource_id) == collection
     assert admission.register_fastq_collection('library', [record.resource_id for record in records[::-1]],
         label=collection.label, attribution=collection.attribution) == collection
-    legacy = admission.resolve_collection(collection.members, tool_name='inspect_raw_scATAC')
     composed = admission.compose_native(collection.resource_id,{})
-    assert legacy.collection_sha256 == composed.collection_sha256 == collection.collection_sha256
+    assert composed.collection_sha256 == collection.collection_sha256
     assert composed.composition == 'native-science.v1'
     assert admission._submission_binding(submit(composed)) == composed
-    assert 'composition' not in legacy.attribution()
-    assert set(legacy.attribution()) == {'members', 'collection_sha256', 'tool_name'}
     assert len(composed.execution_inputs['read1_path']) == len(composed.execution_inputs['read2_path']) == len(composed.execution_inputs['barcode_path']) == 1
     assert collection.public() == dict(resource_id=collection.resource_id, input_type='fastq',
         label='Research library', status='registered', fastq_collection=True)
@@ -126,14 +123,6 @@ def test_conflicting_collection_completion_never_rewrites_accepted_catalog(suppl
     dict(unknown='unsupported'), dict(min_qc_fragment_records=True), dict(min_tss_enrichment=1.5)])
 def test_scientific_companion_cannot_replace_typed_source_or_invent_inputs(supplied, values):
     admission, _, collection = supplied
-    if set(values)<= {'raw_assay','fastq_layout'}:
-        original=admission.compose_native(collection.resource_id,{})
-        binding=admission.compose_native(collection.resource_id,values)
-        assert binding.attribution()==original.attribution()
-        assert dict(binding.execution_inputs)==dict(original.execution_inputs)|values
-        for key in ('read1_path','read2_path','barcode_path'):
-            assert binding.execution_inputs[key]==original.execution_inputs[key]
-        return
     with pytest.raises(ResourceAdmissionError) as error:
         admission.compose_native(collection.resource_id, values)
     assert error.value.code == 'LOCAL_RESOURCE_BINDING_INVALID'

@@ -1,3 +1,17 @@
+# Raw inspection retirement and specialized declaration contract cleanup (2026-11-18)
+
+The standalone `inspect_raw_scATAC` capability, dedicated Raw Intake Manifest,
+BAM/FASTQ inspection implementations, verification and publication/report routes
+are retired. Native SnapATAC2/Chromap workflows and processed-H5AD inspection retain
+their existing owners. Shared FASTQ member checks and historical accepted-fragment
+library-context integrity remain. Specialized Interpreter Schema and Parser targets
+share `raw_handoff.target()`, including operation-dependent EpiZoo relationships;
+entry targets never prescribe a complete scientific workflow. The engineering
+[report](../agent-data/acceptance/iterative-cell-type-annotation/icta-post-spp-2026-11-18/contract-cleanup/REPORT.md)
+owns offline verification and independent review. Original acceptance evidence stays
+exact. Older raw inspection descriptions below record historical behavior and do
+not restore the deleted capability.
+
 # ICTA-4B production annotation integration (2026-11-12)
 
 The current request replaces the sole `annotate_scATAC_cell_types` operation with

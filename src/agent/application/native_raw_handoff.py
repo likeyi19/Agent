@@ -121,18 +121,11 @@ def historical_binding(owner, records, binding):
             try: known[name].validate(name,value)
             except (TypeError,ValueError): invalid()
         return values
-    if binding.composition == 'fastq-science.v1':
-        source = dict(raw_input_paths=owner._fastq_sources(records),raw_assay='TENX_ATAC',
-            fastq_layout=records[0].fastq_member['fastq_layout'])
-    else:
-        if len(records) != 1: invalid()
-        record=records[0]
-        source = dict(source_path=record.source_path,source_sha256=record.source_sha256)
-        if binding.composition == 'bam-science.v1':
-            source['raw_input_paths'] = ([record.source_path] if record.source_path.endswith('.bam')
-                else [dict(path=record.source_path,input_kind='BAM')])
-        if record.source_index is not None:
-            source.update(source_index_path=record.source_index['path'],source_index_sha256=record.source_index['sha256'])
+    if len(records) != 1: invalid()
+    record=records[0]
+    source = dict(source_path=record.source_path,source_sha256=record.source_sha256)
+    if record.source_index is not None:
+        source.update(source_index_path=record.source_index['path'],source_index_sha256=record.source_index['sha256'])
     if any(values.get(k) != v for k,v in source.items()): invalid()
     return values
 

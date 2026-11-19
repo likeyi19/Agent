@@ -1053,3 +1053,12 @@ def _read_annotation_predictions(path: Path) -> _AnnotationPredictions:
         cell_ids=cell_ids,
         predicted_labels=tuple(predicted),
     )
+
+
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    label=arguments.get('reference_label_key')
+    return ScientificContract(inputs={'reference_dataset':{'obs.'+label:True}} if label else {},
+        parameters={'alignment':'exact_embedding_cell_identity','compatibility':('species','model')},
+        outputs={'annotation':{'measurement':'transferred_query_labels_and_confidence'}},
+        effects={'reference_mutation':False})

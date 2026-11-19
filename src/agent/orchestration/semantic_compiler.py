@@ -1126,11 +1126,19 @@ def _analyze_candidate(
         states[step_id].arguments = arguments
     # This policy belongs to AI semantic planning, after exact researcher binding.
     # Native Functions builds its own explicit plan and never enters this compiler.
-    from agent.tools.analysis.native_clustering import ELIGIBLE
+    from .native_parameters import coordinate_native_parameters, select_native_parameters
     for step in candidate.steps:
-        arguments = states[step.step_id].arguments
-        if (step.tool_name.removeprefix('run_'), arguments.get('function_name')) in ELIGIBLE:
-            arguments.setdefault('parameter_selection', 'asw')
+        arguments=states[step.step_id].arguments
+        states[step.step_id].arguments=select_native_parameters(registry.get(step.tool_name), arguments)
+    from .scientific_inputs import ScientificDiagnostic
+    try:
+        coordinated=coordinate_native_parameters({
+            step.step_id:(step.tool_name,states[step.step_id].arguments) for step in candidate.steps
+        },registry)
+    except ScientificDiagnostic as exc:
+        raise SemanticPlanCompileError(exc.code,str(exc)) from exc
+    for step_id,(_,arguments) in coordinated.items():
+        states[step_id].arguments=arguments
     selected_argument_names = {
         argument_name
         for step in candidate.steps
@@ -1244,7 +1252,9 @@ def _analyze_candidate(
                 if name in kwargs and kwargs[name] != value:
                     _raise_compile('EXPLICIT_PARAMETER_CONFLICT',
                         'A registered native choice conflicts with supplied native kwargs.')
-        missing = sorted(set(tool.required_arguments).difference(state.arguments))
+        from .scientific_inputs import missing_contract_ports
+        missing = sorted(set(tool.required_arguments).difference(state.arguments)
+                         | set(missing_contract_ports(tool, state.arguments)))
         for name in missing:
             argument = tool.required_arguments.get(name, tool.optional_arguments.get(name))
             port = next((p.name for p in tool.semantic_planning.consumer_ports

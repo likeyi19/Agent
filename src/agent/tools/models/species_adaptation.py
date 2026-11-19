@@ -175,3 +175,10 @@ def prepare_operation(arguments, context):
         check_matrix_spec(value,spec)
     except ValueError as exc:raise ScientificDiagnostic('SPECIES_PREREQUISITE_INVALID',str(exc)) from exc
     return arguments
+
+
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(parameters={'alignment':'exact_neutral_target_feature_space'},
+        outputs={'model':{'lifecycle':'initialized','optimizer_updates':0}},
+        selection={'transfer_assessment':{'operand':'strategy','applies_if':'auto'}})

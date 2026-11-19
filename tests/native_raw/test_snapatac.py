@@ -129,6 +129,18 @@ def test_native_qc_filtering_and_exact_source_preservation(native,inputs):
     assert source.read_bytes()==before
 
 
+def test_single_end_import_storage_and_receipt_match_selected_contract(native,inputs):
+    from agent.tools.analysis.peak_h5ad import scientific_properties
+    kwargs=dict(is_paired=False,sorted_by_barcode=False,min_num_fragments=0,n_jobs=1)
+    source=inputs['root']/'single-end.tsv'
+    source.write_text('chr1\t4900\t4950\tB-1\t1\t+\nchr1\t4940\t4990\tA-1\t1\t-\n')
+    result=call(inputs,'pp.import_fragments',input_path=source,chrom_sizes_path=str(inputs['sizes']),kwargs=kwargs)
+    properties=SNAPATAC2.scientific_contract(dict(function_name='pp.import_fragments',kwargs=kwargs)).outputs['dataset']
+    assert result['measurement']==properties['measurement']=='native_single_end_insertions'
+    keys=('x','storage_kind','paired_fragments','obsm.fragment_single','obs.n_fragment','obs.tsse')
+    assert scientific_properties(result['matrix_path'],keys)=={key:properties[key] for key in keys}
+
+
 def test_native_recovery_is_read_only_and_bound_to_exact_execution(native,inputs,monkeypatch):
     result=imported(inputs)
     args=dict(input_path=str(inputs['source']),output_dir=str(inputs['root']/'out-pp-import_fragments'),function_name='pp.import_fragments',
@@ -180,3 +192,19 @@ def test_native_tiles_and_explicit_ordmag_keep_independent_returns(native, input
     assert np.asarray(indices).dtype.kind in 'iu'
     assert called['parameters']['population']['applied'] is False
     assert Path(source['matrix_path']).read_bytes() == before
+
+
+def test_native_ordmag_accepts_ordered_json_vector(native,inputs):
+    source=imported(inputs)
+    result=call(inputs,'pp.call_cells',input_path=source['matrix_path'],
+        kwargs=dict(use_rep=[2,1],inplace=False))
+    assert result['parameters']['effective_native_parameters']['use_rep']==[2,1]
+    assert result['result_slots']==['uns.agent_native_return']
+
+
+def test_native_peak_matrix_accepts_explicit_region_list(native,inputs):
+    source=imported(inputs)
+    result=call(inputs,'pp.make_peak_matrix',input_path=source['matrix_path'],
+        kwargs=dict(use_rep=['chr1:4900-5100']))
+    assert result['n_features']==1
+    assert result['measurement']=='paired_insertion_counts'

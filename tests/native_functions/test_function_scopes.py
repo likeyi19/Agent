@@ -85,7 +85,8 @@ def test_interactive_mixed_calls_bind_one_upload_and_accept_ordered_outputs(tmp_
     from agent.orchestration import PlanningModelProfile
     from agent.tools.analysis import native_matrix
     utterance,raw=declarations(True);calls=[]
-    source=tmp_path/'source.h5ad';ad.AnnData(np.ones((16,12))).write_h5ad(source)
+    source=tmp_path/'source.h5ad'
+    data=ad.AnnData(np.ones((16,12)));data.var['selected']=True;data.write_h5ad(source)
     def native(self,args,stage,matrix):
         calls.append(args)
         matrix.write_h5ad(stage/'result.h5ad')

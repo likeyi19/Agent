@@ -87,6 +87,30 @@ def test_empty_external_file_requirement_has_upload_action(tmp_path):
     assert action['action']=='upload_source' and action['argument']=='control_path'
 
 
+def test_qc_population_question_resumes_exact_candidate_without_replanning(tmp_path):
+    model=Model('run_snapatac2','pp.filter_cells',roles=False)
+    app,executor=setup(tmp_path,model)
+    source=tmp_path/'source.h5ad'
+    data=ad.AnnData(np.eye(4))
+    data.obs['n_fragment']=[300,500,1000,2000]
+    data.obs['tsse']=[2.0,3.0,6.0,9.0]
+    data.write_h5ad(source)
+    first=app.submit_turn('session','task','Filter these cells.',expected_generation=0,
+                          execution_inputs={'input_path':str(source)})
+    assert first.status=='clarification',first.to_dict()
+    before=app._application.sessions.load('session').interactions[0]
+    choices=[option for option in first.clarification_choices if option['argument']=='qc_population']
+    assert choices
+    choice=next(option for option in choices if option.get('value')=='uncalled_single_sample')
+    done=app.submit_turn('session','answer','',expected_generation=0,
+        clarification_choice=dict(question_turn_id='task',handle=choice['handle']))
+    assert done.error.code=='TEST_SCIENCE_WITHHELD',done.to_dict()
+    assert executor.plans[0].steps[0].arguments['qc_selection']['method']=='otsu'
+    after=app._application.sessions.load('session').interactions
+    assert after[-1].preparation['candidate_id']==before.preparation['candidate_id']
+    assert sum('semantic_prompt_version' in call for call in model.calls)==1
+
+
 def test_byte_transparency_is_explicit_and_invalid_metadata_is_rejected():
     from agent.application.source_observations import identity_source
     from agent.orchestration.registry import ToolRegistry

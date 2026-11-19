@@ -42,7 +42,7 @@ def tool_spec(owner):
                 request_sources=(request(key, rm('dataset', key)),), accepted_upstream_types=('native_genomic_table.v1',)))
     ports.extend(scalar(k, required=k in required) for k in (*required, *optional) if k not in ('input_path', 'control_path', 'treatment2_path', 'control2_path'))
     pub = owner.publication
-    return ToolSpec(source_encodings={p.name:('bed','bedgraph','tsv') for p in ports if p.name in ('dataset','control','treatment2','control2')}, source_input_types={p.name:('attachment','h5ad') for p in ports if p.name in ('dataset','control','treatment2','control2')}, native_functions=NativeFunctionCatalog(owner.package, tuple((name, tuple(members)) for name, members in owner.FUNCTIONS.items())),name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
+    return ToolSpec(source_encodings={p.name:('bed','bedgraph','tsv') for p in ports if p.name in ('dataset','control','treatment2','control2')}, source_input_types={p.name:('attachment','h5ad') for p in ports if p.name in ('dataset','control','treatment2','control2')}, native_functions=NativeFunctionCatalog(owner.package, tuple(owner.FUNCTIONS.items())),scientific_contract=owner.scientific_contract,name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
         preparation_owner=owner.prepare_operation, parameter_prerequisites=owner.parameter_prerequisites, scientific_delivery=delivery_spec(owner, 'scientific_native_result'),
         result_contract=ResultContract('NativeGenomicTableResult', owner.RESULT_FIELDS, planning_fields={
             k: _planning_result('Exact native table publication.', bindable=True, artifact=A.RAW_SCATAC)
@@ -56,7 +56,8 @@ def tool_spec(owner):
             'Accepted table bytes are reusable only when their actual format and measurement match the requested consumer; no hidden upstream execution.'),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports), producer_ports=(
             Producer('publication', owner.CONTRACT, (member('path', 'manifest_path'), member('sha256', 'manifest_sha256'))),
-            Producer('table', 'native_genomic_table.v1', (member('dataset', 'table_path'),), lineage_from_port='dataset'))))
+            Producer('table', 'native_genomic_table.v1', (member('dataset', 'table_path'),), lineage_from_port='dataset',
+                     observation_sha256_field='table_sha256'))))
 
 
 def tool_specs():

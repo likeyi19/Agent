@@ -1526,3 +1526,24 @@ def prepare_pseudobulk(arguments, context):
             checked_file(observed.path,observed.sha256)
         raise ScientificInputRequired(*(replace(req,choices=choices) for req in parameter_requirements(context.tool,missing)))
     return arguments
+
+
+def feature_space_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    layer=arguments.get('layer_key')
+    slot='layers.'+layer if arguments.get('matrix_source')=='layer' and layer else 'X'
+    requirements={'format':'h5ad'}
+    if arguments.get('matrix_source')!='layer' or layer:
+        requirements.update({'x' if slot=='X' else slot:True,'count_values.'+slot:True})
+    return ScientificContract(inputs={'input_path':requirements},
+        parameters={'matrix_source':('X','layer'),'matrix_semantics':tuple(sorted(_COUNT_SEMANTICS))},
+        outputs={'feature_space':{'object_type':'validated_feature_space','reference_qualified':False}},
+        effects={'source_mutation':False})
+
+
+def pseudobulk_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(parameters={'fields':('replicate_key','group_key','condition_key','covariate_keys'),
+                               'alignment':'exact_feature_space_source'},
+        outputs={'pseudobulk':{'object_type':'replicate_pseudobulk','aggregation':'sum'}},
+        effects={'cell_axis':'replicate_group_units'})

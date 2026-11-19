@@ -57,7 +57,7 @@ def main(request_path):
     raw = Path(request_path).read_bytes(); req = json.loads(raw)
     stage = Path(req['stage'])
     sys.path.insert(0, str(Path(__file__).parent))
-    from native_clustering import RequiredClusterCount
+    from native_clustering import ExplicitASWUnavailable, RequiredClusterCount
     try:
         import anndata as ad
         import numpy as np
@@ -71,7 +71,7 @@ def main(request_path):
         # AI publication's specialized scientific slots remain separate owners.
         from native_callable_worker import functions
         from native_clustering import invoke, valid_graphs, graph_record
-        from cell_result import grouping_key, representation_key
+        from cell_result import grouping_key, matrix_transform, representation_key
         function = functions(package)[name]
         activity = package == 'episcanpy' and name == 'tl.geneactivity'
         call_kwargs = kwargs
@@ -87,7 +87,7 @@ def main(request_path):
                 activity_source['raw_current_features_equal'] = (
                     a.raw is not None and a.raw.var_names.tolist() == a.var_names.tolist())
             call_kwargs = dict(kwargs, gtf_file=req['gene_anno_path'])
-        graphs = valid_graphs(a, req.get('graph_inputs', []))
+        graphs = valid_graphs(a, req.get('graph_inputs', []), require_representation=False)
         # A positional marker follows native subsetting, including duplicate labels.
         marker = None
         if name == 'pp.highly_variable_genes' and kwargs.get('subset'):
@@ -112,7 +112,8 @@ def main(request_path):
             invoking = time.perf_counter()
             native_started_at = datetime.now(timezone.utc).isoformat()
             result, selection = invoke(function, a, package, name, call_kwargs,
-                                       req.get('parameter_selection'), graphs)
+                                       req.get('parameter_selection'), valid_graphs(a,graphs),
+                                       require_asw=req.get('require_asw',False),parameter_origin=req.get('parameter_origin'))
             invoked = time.perf_counter()
             native_finished_at = datetime.now(timezone.utc).isoformat()
         finally:
@@ -122,12 +123,13 @@ def main(request_path):
         independent = result is not None and not isinstance(result, ad.AnnData)
         if isinstance(result, ad.AnnData):
             a = result
-        graphs = valid_graphs(a, graphs)
+        graphs = valid_graphs(a, graphs, require_representation=False)
         graph = graph_record(a, package, name, kwargs)
         if graph is not None:
             graph['source_sha256'] = req['source_sha256']
             graph['visualization'] = graph['representation'] in req.get('visualization_representations', [])
-            graphs = [g for g in graphs if g['graph'] != graph['graph']] + [graph]
+            overwritten={graph['graph'],graph.get('distance_slot')}
+            graphs = [record for record in graphs if record['graph'] not in overwritten] + [graph]
         axis_positions = None
         if marker is not None:
             axis_positions = dict(cells=list(range(a.n_obs)), features=a.var.pop(marker).tolist())
@@ -158,7 +160,8 @@ def main(request_path):
                 if package != 'snapatac2' and name in ('tl.leiden', 'tl.louvain'): slots += ['uns.' + name.split('.')[1]]
             elif name == 'tl.paga': slots += ['uns.paga']
             elif name in ('tl.rank_genes_groups', 'tl.rank_features'):
-                slots += ['uns.' + (kwargs.get('key_added') or ('rank_features_groups' if name == 'tl.rank_features' else 'rank_genes_groups'))]
+                wrapper_default='rank_features_groups' if name=='tl.rank_features' else 'rank_genes_groups'
+                slots += ['uns.'+(kwargs.get('key_added',wrapper_default) or 'rank_genes_groups')]
             elif name == 'tl.score_genes': slots += ['obs.' + kwargs.get('score_name', 'score')]
             elif name == 'pp.highly_variable_genes':
                 slots += ['uns.hvg'] + ['var.' + k for k in a.var if k in ('highly_variable', 'means', 'dispersions', 'dispersions_norm', 'variances', 'variances_norm', 'highly_variable_rank', 'highly_variable_nbatches', 'highly_variable_intersection')]
@@ -176,11 +179,8 @@ def main(request_path):
             slots = ['X'] + ['var.' + key for key in a.var]
             measurement = 'episcanpy_gene_domain_sum'
         if not independent and name in ('pp.binarize', 'pp.log1p', 'pp.scale', 'pp.normalize_total'):
-            changed = not (package == 'episcanpy' and name == 'pp.normalize_total' and not kwargs.get('inplace', True))
-            if changed:
-                semantics = {'pp.binarize': 'native_binarized_supplied_measurement', 'pp.log1p': 'log1p_transformed_measurement',
-                    'pp.scale': 'scanpy_scaled_measurement', 'pp.normalize_total': package + '_library_size_normalized'}[name]
-                target = 'layers.' + kwargs['layer'] if kwargs.get('layer') else 'obsm.' + kwargs['obsm'] if kwargs.get('obsm') else 'X'
+            target, semantics = matrix_transform(package,name,kwargs)
+            if target is not None:
                 slots.append(target)
                 if target == 'X': measurement = semantics
                 elif kwargs.get('layer'): layer_semantics[kwargs['layer']] = semantics
@@ -214,6 +214,13 @@ def main(request_path):
             if p.default is not inspect.Parameter.empty}
         effective.update(kwargs)
         receipt['effective_parameters'] = effective
+        if package=='episcanpy' and name=='tl.rank_features':
+            slot=kwargs.get('key_added','rank_features_groups') or 'rank_genes_groups'
+            actual=a.uns.get(slot,{}).get('params',{}).get('method')
+            if isinstance(actual,str):
+                requested=kwargs.get('method')
+                receipt['native_method_attribution']=dict(requested_wrapper_method=requested,executed_method=actual,
+                    conflict='method' in kwargs and requested!=actual)
         if activity:
             from native_gene_activity import axis_identity
             receipt['gene_activity_axes'] = axis_identity(stage / 'result.h5ad')
@@ -221,9 +228,14 @@ def main(request_path):
             receipt['inherited_slots'] = activity_source['slots']
             receipt['implementation'] = [activity_implementation]
         if selection is not None:
+            if package=='episcanpy' and name=='tl.louvain' and kwargs.get('flavor','vtraag')=='vtraag' and selection['selected_value'] is None:
+                from louvain import RBConfigurationVertexPartition
+                default=inspect.signature(RBConfigurationVertexPartition).parameters['resolution_parameter'].default
+                selection['native_method_parameters']={'resolution':default}
             receipt['parameter_selection'] = selection
         if graphs:
-            receipt['graph_inputs'] = graphs
+            qualified=valid_graphs(a,graphs)
+            receipt['graph_inputs']=[dict(record,representation_qualified=record in qualified) for record in graphs]
         if adaptation is not None:
             receipt['input_adaptation'] = adaptation
         receipt['result_shapes'] = {s: list(getattr(a, s.partition('.')[0])[s.partition('.')[2]].shape)
@@ -232,7 +244,7 @@ def main(request_path):
         (stage / 'native-receipt.json').write_text(json.dumps(receipt, indent=2, default=_receipt_default))
     except Exception as exc:
         error = dict(message=str(exc), type=type(exc).__name__)
-        if isinstance(exc, RequiredClusterCount):
+        if isinstance(exc, (RequiredClusterCount,ExplicitASWUnavailable)):
             error.update(parameter_selection=exc.evidence, request_sha256=hashlib.sha256(raw).hexdigest())
         (stage / 'native-error.json').write_text(json.dumps(error))
         traceback.print_exc()

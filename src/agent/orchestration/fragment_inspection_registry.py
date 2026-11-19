@@ -1,6 +1,6 @@
 """Reference-independent inspection through the existing Registry and roles."""
 from pathlib import Path
-from agent.tools.data.fragment_inspection import inspect_scATAC_fragments, POLICY
+from agent.tools.data.fragment_inspection import inspect_scATAC_fragments, POLICY, scientific_contract
 from .native_matrix_registry import classify as classify_external_fragments
 
 FIELDS = {
@@ -29,7 +29,7 @@ def tool_spec():
             (member('path', prefix + '_path'), member('sha256', prefix + '_sha256')), mandatory,
             request_sources=(request(prefix + '_path', input_member('path', prefix + '_path'),
                 input_member('sha256', prefix + '_sha256')),)))
-    return ToolSpec(source_encodings={'source':('fragments',),'source_index':('tabix',)}, source_input_types={'source':('external_fragments','attachment'), 'source_index':('attachment',)}, name='inspect_scATAC_fragments', function=inspect_scATAC_fragments,
+    return ToolSpec(scientific_contract=scientific_contract, source_encodings={'source':('fragments',),'source_index':('tabix',)}, source_input_types={'source':('external_fragments','attachment'), 'source_index':('attachment',)}, name='inspect_scATAC_fragments', function=inspect_scATAC_fragments,
         required_arguments=required, optional_arguments=optional,
         result_contract=ResultContract('FragmentStructureInspection', FIELDS,
             planning_fields={k: _planning_result(description, bindable=k == 'source_sha256')

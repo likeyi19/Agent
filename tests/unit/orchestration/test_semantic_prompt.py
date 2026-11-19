@@ -644,15 +644,12 @@ def test_semantic_prompt_and_schema_retain_combined_size_headroom(
     # Per-port source constraints now exclude illegal bindings at generation,
     # while the older v3 schema permits a broader generic binding vocabulary.
     # Retain an absolute bounded payload budget rather than comparing different
-    # authorization contracts merely by byte count. STE-NFI-1H adds two native
-    # object/enrichment tools; the largest matched fixture is 103,379 bytes.
-    # The documented 112 KiB maintenance budget preserves ~11 KiB headroom
-    # without discarding scientific inputs or rebuilding the fixed Interpreter.
-    # See docs/guides/native-functions.md for historical measurements and live
-    # provider scope; this is not an API limit or authority to omit metadata.
+    # authorization contracts merely by byte count. Function-level scientific
+    # inputs and effects raise the largest matched fixture to about 131 kB.
+    # 128 KiB leaves headroom without dropping scientific facts; it is not an API limit.
     assert len(semantic_prompt.encode("utf-8")) + schema_bytes(
         build_semantic_wire_v4_schema(registry, request)
-    ) < 112 * 1024
+    ) < 128 * 1024
 
 
 def test_registered_choice_index_reuses_exact_catalog_domains(registry):

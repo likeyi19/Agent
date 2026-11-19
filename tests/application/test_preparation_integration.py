@@ -141,7 +141,7 @@ def test_resume_recaptures_added_reference_without_replanning(tmp_path, monkeypa
    raise AssertionError(list(value))
  registry=build_default_tool_registry();executor=WithholdScience(registry)
  app=InteractiveAgentApplication(root/'workspace',registry=registry,executor=executor,model_profiles=(PlanningModelProfile('offline','scripted',Model.model_id),),default_profile_id='offline',approved_source_roots=(root,),planning_model_factory_registry=PlanningModelFactoryRegistry({'scripted':lambda _:Model()}))
- app.create_session('session');bam=root/'input.bam';bam.write_bytes(b'Opaque controlled BAM')
+ app.create_session('session');bam=root/'input.bam';bam.write_bytes(b'BAM\x01')
  source=app.resources.register('bam',bam,input_type='attachment',session_id='session',label='BAM',attribution='Review fixture')
  group=app.resources.compose_group([source.resource_id],attachment_candidates=True)
  def ref(name,**ports):
@@ -404,17 +404,17 @@ def test_http_distinct_competing_answers_reserve_only_one_plan(tmp_path, monkeyp
     assert ResearchAgentApplication(app._application.workspace_root).sessions.load('session')==state
 
 
-@pytest.mark.parametrize('missing_at_capture',[None,0,1,2,3,4])
+@pytest.mark.parametrize('missing_at_capture',[None,0,1,2,3,4,5])
 def test_direct_multilane_sources_pin_each_consumed_file(tmp_path,missing_at_capture):
     app,executor,model,_=setup(tmp_path,missing=(dict(tool='run_chromap',native_function='map',argument='kwargs',member='num-threads'),))
     inputs={}
-    for key in ('reference_path','read1_path','read2_path'):
+    for key in ('reference_path','index_path','read1_path','read2_path'):
         paths=[]
-        for lane in range(1 if key=='reference_path' else 2):
+        for lane in range(2 if key in ('read1_path','read2_path') else 1):
             path=tmp_path/f'{key}-{lane}.fixture';path.write_text('Opaque file identity; science is withheld.')
             paths.append(str(path))
-        inputs[key]=paths[0] if key=='reference_path' else paths
-    all_paths=[inputs['reference_path'],*inputs['read1_path'],*inputs['read2_path']]
+        inputs[key]=paths if key in ('read1_path','read2_path') else paths[0]
+    all_paths=[inputs['reference_path'],inputs['index_path'],*inputs['read1_path'],*inputs['read2_path']]
     absent=None if missing_at_capture is None else Path(all_paths[missing_at_capture])
     absent_bytes=None if absent is None else absent.read_bytes()
     complete=model.complete
@@ -430,7 +430,7 @@ def test_direct_multilane_sources_pin_each_consumed_file(tmp_path,missing_at_cap
             return json.dumps(dict(schema_version=4,decision=dict(kind='plan',steps=[dict(
                 step_id='map',tool='run_chromap',control_dependencies=[],sources=[
                     dict(target=port,source=dict(kind='input',input=key)) for port,key in
-                    [('reference','reference_path'),('read1','read1_path'),('read2','read2_path')]]+[
+                    [('reference','reference_path'),('index','index_path'),('read1','read1_path'),('read2','read2_path')]]+[
                     dict(target='function_name',source=dict(kind='registered_choice',choice='map'))])])) )
         return complete(**kwargs)
     model.complete=candidate

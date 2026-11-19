@@ -335,3 +335,11 @@ def prepare_operation(arguments, context):
     if needs:
         raise ScientificInputRequired(*needs, bindings=arguments)
     return arguments
+
+
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(inputs={'dataset': {'format':'h5ad'}},
+        parameters={'resources':('assembly_matched_genome','compatible_motif_collection'),
+                    'coordinates':('feature_names','var_columns')},
+        outputs={'matches':{'motif_output':arguments.get('kwargs',{}).get('out','matches')}})

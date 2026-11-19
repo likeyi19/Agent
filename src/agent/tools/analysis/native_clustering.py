@@ -20,6 +20,14 @@ SEED = 0
 MAX_SAMPLE = 2000
 
 
+def selection_contract(package, function):
+    operand=ELIGIBLE.get((package,function))
+    if operand is None:return {}
+    return {'asw':{'parameter':operand,'input':'obsm.X_pca' if operand=='num_clusters' else 'exact_graph_representation',
+                   'overridden_by':('explicit_parameter','native_defaults'),
+                   'if_unavailable':'ask_required_value' if operand=='num_clusters' else 'implicit_native_default_only'}}
+
+
 def candidates(parameter, n_cells):
     return ([0.1, 0.25, 0.5, 1.0, 1.5, 2.0] if parameter == 'resolution'
             else [k for k in (2, 3, 4, 6, 8, 10) if k < n_cells])
@@ -52,18 +60,40 @@ class RequiredClusterCount(ValueError):
         super().__init__('ASW unavailable and ' + evidence['function'] + ' requires explicit num_clusters')
 
 
+class ExplicitASWUnavailable(ValueError):
+    def __init__(self, evidence):
+        self.evidence=evidence
+        super().__init__('Requested ASW did not select a value: '+evidence['reason'])
+
+
+class ASWReason(str):
+    def __new__(cls, kind, message):
+        reason=super().__new__(cls,message)
+        reason.kind=kind
+        return reason
+
+
 def cells_sha(a):
     return hashlib.sha256(json.dumps(a.obs_names.tolist(), ensure_ascii=False).encode()).hexdigest()
 
 
 def representation(a, record):
     key = record['representation']
-    values = a.X if key == 'X' else a.obsm[key]
+    values = a.X if key == 'X' and record.get('representation_slot')!='obsm.X' else a.obsm[key]
     dims = record['dimensions']
     values = values[:, dims] if dims is not None else values
     if record.get('execution_dtype'):
         values = values.astype(record['execution_dtype'], copy=False)
     return values
+
+
+def scanpy_graph_slot(neighbors, role, metadata):
+    return role if neighbors in (None,'neighbors') else metadata[role+'_key']
+
+
+def matching_graphs(package, slot, records):
+    writers=('snapatac2.pp.knn',) if package=='snapatac2' else ('scanpy.pp.neighbors','episcanpy.pp.neighbors')
+    return [record for record in records if record.get('graph')==slot and record.get('function') in writers]
 
 
 def graph_record(a, package, name, kwargs):
@@ -74,7 +104,7 @@ def graph_record(a, package, name, kwargs):
         key, dims = kwargs.get('use_rep', 'X_spectral'), kwargs.get('use_dims')
         if isinstance(dims, int):
             dims = list(range(a.obsm[key].shape[1]))[:dims]
-        record = dict(graph='distances', representation=key, dimensions=dims,
+        record = dict(graph='distances', representation=key, representation_slot='obsm.'+key, dimensions=dims,
                       metric='euclidean', metric_kwds={})
         if kwargs.get('method') == 'hora':
             record['execution_dtype'] = 'float32'
@@ -83,13 +113,20 @@ def graph_record(a, package, name, kwargs):
         key, n_pcs = kwargs.get('use_rep'), kwargs.get('n_pcs')
         # Mirrors the installed selector, after the native call has produced any
         # native implicit PCA. This never computes a representation a second time.
-        if key is None:
-            key = 'X' if n_pcs == 0 or a.n_vars <= settings.N_PCS else 'X_pca'
-        dims = None if key == 'X' or n_pcs is None else list(range(a.obsm[key].shape[1]))[:n_pcs]
+        if key is None and n_pcs!=0:
+            key='X' if a.n_vars<=settings.N_PCS else 'X_pca'
+            uses_obsm=key!='X'
+        else:
+            key=key or 'X'
+            uses_obsm=key in a.obsm
+        dims = list(range(a.obsm[key].shape[1]))[:n_pcs] if uses_obsm and n_pcs is not None else None
         neighbors = kwargs.get('key_added') or 'neighbors'
         record = dict(graph=a.uns[neighbors]['connectivities_key'], neighbors_key=neighbors,
-                      representation=key, dimensions=dims, metric=kwargs.get('metric', 'euclidean'),
+                      representation=key, representation_slot='obsm.'+key if uses_obsm else 'X',
+                      dimensions=dims, metric=kwargs.get('metric', 'euclidean'),
                       metric_kwds=dict(kwargs.get('metric_kwds', {})))
+        distance_slot=a.uns[neighbors]['distances_key']
+        record.update(distance_slot=distance_slot,distance_sha256=array_sha(a.obsp[distance_slot]))
     else:
         return None
     record.update(function=package + '.' + name, cells_sha256=cells_sha(a),
@@ -98,13 +135,14 @@ def graph_record(a, package, name, kwargs):
     return record
 
 
-def valid_graphs(a, records):
+def valid_graphs(a, records, *, require_representation=True):
     retained = []
     for record in records:
         try:
             valid = (record['cells_sha256'] == cells_sha(a)
                      and record['graph_sha256'] == array_sha(a.obsp[record['graph']])
-                     and record['representation_sha256'] == array_sha(representation(a, record)))
+                     and (not require_representation or
+                          record['representation_sha256'] == array_sha(representation(a, record))))
         except KeyError:
             valid = False
         if valid:
@@ -121,27 +159,28 @@ def evaluation_input(a, package, name, kwargs, graphs):
         record['representation_sha256'] = array_sha(values)
     else:
         if kwargs.get('restrict_to') is not None:
-            return None, None, 'Restricted clustering is not adapted for ASW selection.'
+            return None, None, ASWReason('inapplicable','Restricted clustering is not adapted for ASW selection.')
         if name == 'tl.louvain' and kwargs.get('flavor', 'vtraag') != 'vtraag':
-            return None, None, 'ASW resolution selection requires the native resolution-aware vtraag flavor.'
+            return None, None, ASWReason('inapplicable','ASW resolution selection requires the native resolution-aware vtraag flavor.')
         if package == 'snapatac2':
             key = 'distances'
-            matches = [r for r in graphs if r['graph'] == key and r['function'] == 'snapatac2.pp.knn']
         else:
             neighbors = kwargs.get('neighbors_key') or 'neighbors'
-            key = kwargs.get('obsp') or a.uns.get(neighbors, {}).get('connectivities_key', 'connectivities')
-            matches = [r for r in graphs if r['graph'] == key
-                       and r['function'] in ('scanpy.pp.neighbors', 'episcanpy.pp.neighbors')]
+            try:
+                key = kwargs.get('obsp') or scanpy_graph_slot(neighbors,'connectivities',a.uns.get(neighbors, {}))
+            except KeyError:
+                key=None
+        matches=matching_graphs(package,key,graphs)
         if len(matches) != 1:
-            return None, None, 'No exact accepted graph/representation association is available.'
+            return None, None, ASWReason('missing_prerequisite','No exact accepted graph/representation association is available.')
         record = deepcopy(matches[0])
         values = representation(a, record)
     if record['representation'] == 'X_umap' or record.get('visualization'):
-        return None, record, 'Visualization coordinates are not an ASW clustering representation.'
+        return None, record, ASWReason('inapplicable','Visualization coordinates are not an ASW clustering representation.')
     return values, record, None
 
 
-def invoke(function, a, package, name, kwargs, policy, graphs):
+def invoke(function, a, package, name, kwargs, policy, graphs, *, require_asw=False, parameter_origin=None):
     """Return the native result and evidence; retain winning labels without replay."""
     import anndata as ad
     import numpy as np
@@ -157,11 +196,13 @@ def invoke(function, a, package, name, kwargs, policy, graphs):
         return function(a, **kwargs), None
     default = inspect.signature(function).parameters[parameter].default
     evidence = dict(package=package, function=package + '.' + name, parameter=parameter,
-                    origin='explicit' if parameter in kwargs else 'native_default',
+                    origin=(parameter_origin or 'explicit') if parameter in kwargs else 'native_default',
                     selected_value=kwargs.get(parameter, None if default is inspect.Parameter.empty else default),
                     candidates=[], sample_count=0, evaluation_seed=SEED,
                     cells_sha256=cells_sha(a), criterion='sklearn.metrics.silhouette_score',
                     tie_rule='first candidate in ascending order', status='not_requested')
+    evidence['strategy_intent']='explicit_native_defaults' if policy=='native_defaults' else (
+        'explicit_asw' if require_asw else 'implicit_asw' if policy=='asw' else 'none')
     if parameter in kwargs or policy != 'asw':
         result = function(a, **kwargs)
         _, record, reason = evaluation_input(a, package, name, kwargs, graphs)
@@ -172,7 +213,7 @@ def invoke(function, a, package, name, kwargs, policy, graphs):
     values, record, unavailable = evaluation_input(a, package, name, kwargs, graphs)
     evidence['input'] = record
     if unavailable is None and record['metric'] == 'precomputed' and sparse.issparse(values):
-        unavailable = 'Sparse precomputed input does not establish complete pairwise distances for ASW.'
+        unavailable = ASWReason('missing_prerequisite','Sparse precomputed input does not establish complete pairwise distances for ASW.')
     if unavailable is None:
         sample = np.sort(np.random.default_rng(SEED).choice(a.n_obs, min(MAX_SAMPLE, a.n_obs), replace=False))
         evidence.update(sample_count=len(sample), sample_positions_sha256=array_sha(sample))
@@ -181,7 +222,7 @@ def invoke(function, a, package, name, kwargs, policy, graphs):
             sampled = sampled[:, sample]
         numeric = sampled.data if sparse.issparse(sampled) else sampled
         if not np.isfinite(numeric).all() or sampled.shape[1] == 0:
-            unavailable = 'ASW representation is empty or nonfinite.'
+            unavailable = ASWReason('missing_prerequisite','ASW representation is empty or nonfinite.')
     key = grouping_key(package, name, kwargs)
     best = fallback = None
     before_obs = a.obs[key].copy() if key in a.obs else None
@@ -234,11 +275,14 @@ def invoke(function, a, package, name, kwargs, policy, graphs):
     if best is not None:
         evidence.update(origin='automatic', status='selected', selected_value=best[0])
     else:
-        evidence.update(status='unavailable', reason=unavailable or 'No candidate has a defined ASW.')
+        evidence.update(status='unavailable', reason=unavailable or 'No candidate has a defined ASW.',
+                        unavailable_kind=unavailable.kind if unavailable else 'undefined_scores')
         if default is inspect.Parameter.empty:
             if package == 'episcanpy' and name in ('tl.kmeans', 'tl.hc') and parameter == 'num_clusters':
                 raise RequiredClusterCount(evidence)
             raise ValueError('ASW unavailable and ' + package + '.' + name + ' requires explicit ' + parameter)
+        if require_asw:
+            raise ExplicitASWUnavailable(evidence)
     if winner is None:
         return function(a, **kwargs), evidence
     kwargs[parameter] = winner[0]

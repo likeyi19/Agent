@@ -34,7 +34,7 @@ def tool_spec():
             ports.append(scalar_port(owner.TOOL,tuple(owner.FUNCTIONS),key,required=key in required)
                 if spec.planning.scientific_parameter else scalar(key,required=key in required))
     pub = owner.publication
-    return ToolSpec(source_encodings={'dataset':('fragments','accepted_archr_project'),'second':('fragments',)}, source_input_types={'dataset':('h5ad','external_fragments'), 'second':('h5ad','external_fragments')}, native_functions=NativeFunctionCatalog(owner.package,tuple(owner.FUNCTIONS.items())),name=owner.TOOL,function=owner.invoke,
+    return ToolSpec(scientific_contract=owner.scientific_contract, source_encodings={'dataset':('fragments','accepted_archr_project'),'second':('fragments',)}, source_input_types={'dataset':('h5ad','external_fragments'), 'second':('h5ad','external_fragments')}, native_functions=NativeFunctionCatalog(owner.package,tuple(owner.FUNCTIONS.items())),name=owner.TOOL,function=owner.invoke,
         required_arguments=required,optional_arguments=optional,preparation_owner=owner.prepare_operation, parameter_prerequisites=owner.parameter_prerequisites,
         scientific_delivery=delivery_spec(owner,'scientific_native_result'),
         result_contract=ResultContract('NativeArchRResult',owner.RESULT_FIELDS,planning_fields={k:_planning_result('Exact native ArchR publication/snapshot.',bindable=True,artifact=A.RAW_SCATAC)

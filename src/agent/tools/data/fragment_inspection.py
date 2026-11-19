@@ -74,3 +74,9 @@ def verify_result(arguments, result):
     """Recheck a bounded observation and exact source identity before acceptance."""
     if inspect_scATAC_fragments(**arguments) != dict(result):
         m.fail('EXTERNAL_FRAGMENTS_INSPECTION_MISMATCH')
+
+
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(inputs={'source':{'format':'fragments'}},
+        outputs={'inspection':{'scope':'bounded_descriptive','reference_qualified':False}})

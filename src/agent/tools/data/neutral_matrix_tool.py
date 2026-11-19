@@ -39,3 +39,11 @@ def verify_public_result(args, result):
 def adopt_scATAC_cell_by_features(source_path, source_sha256, reference_manifest_path,
         reference_manifest_sha256, matrix_semantics, output_dir):
     return execute(locals())
+
+
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(inputs={'source':{'format':'h5ad','x':True,'count_values.X':True}},
+        parameters={'feature_alignment':'exact_ordered_regulatory_reference'},
+        outputs={'dataset':{'format':'h5ad','x':True,'count_values.X':True}},
+        effects={'cell_and_feature_axes':'preserve'})

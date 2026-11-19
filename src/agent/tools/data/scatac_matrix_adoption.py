@@ -112,3 +112,11 @@ def adopt_scATAC_cell_by_ccre(source_path,source_sha256,reference_manifest_path,
                              species,assembly,matrix_semantics,output_dir)->AdoptedCellByCCREResult:
     """Adopt an exact full canonical int64 CSR H5AD with declared value semantics."""
     return execute_matrix(locals())
+
+
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(inputs={'source':{'format':'h5ad','x':True,'count_values.X':True}},
+        parameters={'feature_alignment':'full_ordered_qualified_reference'},
+        outputs={'dataset':{'format':'h5ad','x':True,'count_values.X':True}},
+        effects={'cell_and_feature_axes':'preserve'})

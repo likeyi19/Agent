@@ -56,7 +56,7 @@ def matrix_adoption_tool_spec():
             request_sources=(request(prefix+'_path',*(input_member(s,prefix+'_'+s) for s in ('path','sha256'))),)))
     ports.extend(_semantic_argument_port(k,required=True) for k in ('species','assembly','matrix_semantics','output_dir'))
     ints={'artifact_schema_version','n_cells','n_features','nnz','total_count','zero_row_count'}
-    return ToolSpec(name='adopt_scATAC_cell_by_ccre',function=public.adopt_scATAC_cell_by_ccre,required_arguments=required,optional_arguments={},
+    return ToolSpec(scientific_contract=public.scientific_contract, name='adopt_scATAC_cell_by_ccre',function=public.adopt_scATAC_cell_by_ccre,required_arguments=required,optional_arguments={},
         result_contract=ResultContract('AdoptedCellByCCREResult',{k:(int,) if k in ints else (str,) for k in public.AdoptedCellByCCREResult.__annotations__},
             validator=validate_result,planning_fields={k:_planning_result('Verified external canonical matrix with exact source conservation.',bindable=True,
                 artifact=A.RAW_SCATAC if k=='matrix_path' else A.SCATAC_CELL_BY_CCRE) for k in ('manifest_path','manifest_sha256','matrix_path')}),

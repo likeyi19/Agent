@@ -29,8 +29,9 @@ def tool_spec():
         accepted_upstream_types=('native_chromap_index.v1',) if port == 'index' else ()) for port, field in owner.PORTS.items())
     pub = owner.publication
     from agent.application.native_raw_handoff import prepare_operation
-    return ToolSpec(source_encodings={p.name:(('fasta',) if p.name=='reference' else ('fastq',) if p.name in ('read1','read2','barcode') else ('chromap_index',) if p.name=='index' else ('barcode_whitelist',)) for p in ports}, source_input_types={p.name:(('fasta',) if p.name=='reference' else ('fastq',) if p.name in ('read1','read2','barcode') else ('attachment',)) for p in ports}, preparation_owner=prepare_operation, planned_output_properties=owner.planned_output_properties, name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
+    return ToolSpec(source_encodings={p.name:(('fasta',) if p.name=='reference' else ('fastq',) if p.name in ('read1','read2','barcode') else ('chromap_index',) if p.name=='index' else ('barcode_whitelist',)) for p in ports}, source_input_types={p.name:(('fasta',) if p.name=='reference' else ('fastq',) if p.name in ('read1','read2','barcode') else ('attachment',)) for p in ports}, preparation_owner=prepare_operation, name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
         native_functions=NativeFunctionCatalog('Chromap', tuple(owner.FUNCTIONS.items()), output_available=owner.output_available),
+        scientific_contract=owner.scientific_contract,
         result_contract=ResultContract('NativeChromapResult', owner.RESULT_FIELDS, planning_fields={key: result(
             'Exact native publication/file; null means unavailable for this operation.', bindable=True, artifact=A.RAW_SCATAC)
             for key in ('manifest_path', 'manifest_sha256', 'fragments_path', 'fragments_sha256', 'index_path', 'index_sha256')}),
@@ -47,5 +48,6 @@ def tool_spec():
         semantic_planning=SemanticToolSpec(consumer_ports=ports + tuple(scalar(port + '_sha256', required=False) for port in ('reference','index','whitelist')) + (scalar('output_dir', required=True),
             scalar_port(owner.TOOL, tuple(owner.FUNCTIONS), 'function_name', required=True),
             scalar_port(owner.TOOL, tuple(owner.FUNCTIONS), 'kwargs', required=False)), producer_ports=(
-            P('fragments', 'native_fragments_file.v1', (member('dataset', 'fragments_path'),), lineage_from_port='read1'),
+            P('fragments', 'native_fragments_file.v1', (member('dataset', 'fragments_path'),), lineage_from_port='read1',
+              observation_sha256_field='fragments_sha256'),
             P('index', 'native_chromap_index.v1', (member('dataset', 'index_path'),), lineage_from_port='reference'))))

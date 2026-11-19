@@ -578,8 +578,9 @@ def prepare_result_edit(sessions, interaction):
         if selection is not None:
             parameter = selection['parameter']
             effective = recorded.get('effective_native_parameters', {})
-            if parameter in effective:
+            if parameter in effective and selection['origin'] in ('automatic','retained_fitted'):
                 args['kwargs'] = {**_serialize(args.get('kwargs', {})), parameter: _serialize(effective[parameter])}
+                args['parameter_origin']='retained_fitted'
         baseline.append(replace(step, arguments=args))
     baseline = replace(run.plan, steps=tuple(baseline))
     children = annotation_operations(run, sessions._application.run_store, registry)
@@ -604,26 +605,60 @@ def prepare_result_edit(sessions, interaction):
         plan=replace(plan,steps=tuple(steps))
     # An explicit selection-policy edit requests a new selection/default, rather
     # than merely changing a sibling kwarg. A simultaneous numeric edit prevails.
-    for row in rows:
-        if row['argument'] != 'parameter_selection':
-            continue
-        if row['step_id'] in children:
-            continue  # Branch override explicitly controls its native child selection.
-        selected = stored[row['step_id']].result['parameters'].get('parameter_selection')
-        if selected is None:
-            continue
-        parameter = selected['parameter']
-        if any(r['step_id'] == row['step_id'] and r['argument'] == 'kwargs' and parameter in r['value'] for r in rows):
-            continue
-        if row['value'] == 'native_defaults' and parameter == 'num_clusters':
-            raise ParameterEditUnavailable('This native function has no num_clusters default; supply an explicit cluster count.')
-        steps = []
+    revised=[]
+    for step in plan.steps:
+        selected=stored[step.step_id].result.get('parameters',{}).get('parameter_selection')
+        args=dict(step.arguments)
+        if selected is not None:
+            parameter=selected['parameter']
+            edits=[row for row in ordinary if row['step_id']==step.step_id]
+            explicit=any(row['argument']=='kwargs' and parameter in row['value'] for row in edits)
+            policy=next((row['value'] for row in edits if row['argument']=='parameter_selection'),None)
+            if explicit or policy is not None:args.pop('parameter_origin',None)
+            if policy is not None:
+                args['require_asw']=policy=='asw'
+                if not explicit:
+                    if policy=='native_defaults' and parameter=='num_clusters':
+                        raise ParameterEditUnavailable('This native function has no num_clusters default; supply an explicit cluster count.')
+                    args['kwargs']={k:v for k,v in args.get('kwargs',{}).items() if k!=parameter}
+        revised.append(replace(step,arguments=args))
+    plan=replace(plan,steps=tuple(revised))
+    qc_edits={row['step_id'] for row in ordinary if row['argument'] in ('qc_thresholds','qc_population')
+              or row['argument']=='kwargs' and set(row['value'])&{'min_counts','min_tsse','min_num_fragments','whitelist','inplace'}}
+    from agent.orchestration.native_parameters import parameter_edit_descendants
+    qc_affected=parameter_edit_descendants(plan.steps,qc_edits)
+    qc_steps={step.step_id for step in plan.steps if step.step_id in qc_affected
+              and step.tool_name=='run_snapatac2' and step.arguments.get('function_name')=='pp.filter_cells'}
+    if qc_steps:
+        from agent.orchestration.native_parameters import coordinate_native_parameters
+        from agent.orchestration.scientific_inputs import ScientificDiagnostic
+        selection_sources={step.step_id:(step.tool_name,dict(step.arguments)) for step in plan.steps}
+        for step_id in qc_steps:
+            _,args=selection_sources[step_id]
+            source=args.get('input_path')
+            if isinstance(source,StepOutputRef) and source.step_id not in qc_affected:
+                producer=registry.get(stored[source.step_id].tool_name)
+                ports=[port for port in producer.semantic_planning.producer_ports
+                       if any(member.field_name==source.output_key for member in port.members)]
+                if len(ports)==1:
+                    pin=bind_output(sessions._application.run_store,registry,run.run_id,source.step_id,ports[0].name)
+                    args['input_path']=PriorOutputRef(pin,source.output_key)
+        try:
+            coordinated=coordinate_native_parameters(selection_sources,registry,only=qc_steps,
+                                                     sessions=sessions,observe_existing=True)
+        except ScientificDiagnostic as exc:
+            raise ParameterEditUnavailable(str(exc)) from exc
+        revised=[]
         for step in plan.steps:
-            args = dict(step.arguments)
-            if step.step_id == row['step_id']:
-                args['kwargs'] = {k:v for k,v in args.get('kwargs', {}).items() if k != parameter}
-            steps.append(replace(step, arguments=args))
-        plan = replace(plan, steps=tuple(steps))
+            effective=coordinated[step.step_id][1]
+            if 'qc_selection' not in effective:
+                revised.append(step)
+                continue
+            decision=effective['qc_selection']
+            if step.step_id in qc_steps and decision['method'] is None:
+                raise ParameterEditUnavailable('Supply the exact QC population history or explicitly request native defaults.')
+            revised.append(replace(step,arguments=dict(step.arguments,qc_selection=decision)))
+        plan=replace(plan,steps=tuple(revised))
     affected = {s.step_id for s, old in zip(plan.steps, baseline.steps) if s.arguments != old.arguments}
     if not affected:
         raise ParameterEditUnavailable('Change at least one recorded parameter before running.')

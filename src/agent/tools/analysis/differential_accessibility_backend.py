@@ -1437,3 +1437,11 @@ __all__ = [
     "assess_host_memory",
     "run_replicate_differential_accessibility",
 ]
+
+
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(parameters={'design':('independent','paired'),
+                               'contrast':('numerator_condition','denominator_condition')},
+        outputs={'differential_accessibility':{'measurement':'native_edgeR_QL_contrast'}},
+        effects={'feature_identity':'source_pseudobulk_features'})

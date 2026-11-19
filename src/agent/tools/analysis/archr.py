@@ -123,7 +123,7 @@ def accepted_snapshot(args, stage):
         raise AuthorityError('Selected publication is not the supported ArchR snapshot')
     verify_publication(path, expected_sha256=sha)
     value, _ = load(path, sha)
-    needed = 'ArrowFiles' if args['function_name'] == 'ArchRProject' else 'ArchRProject'
+    needed = snapshot_type(args['function_name'])
     if value['result']['object_type'] != needed:
         raise ValueError('Requested native function requires ' + needed)
     archive = Path(path).parent / 'native-object.zip'
@@ -249,3 +249,24 @@ def prepare_operation(arguments, context):
     if needs:
         raise ScientificInputRequired(*needs)
     return arguments
+
+
+def snapshot_type(function):
+    return 'ArrowFiles' if function=='ArchRProject' else 'ArchRProject'
+
+
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    function=arguments.get('function_name')
+    if function=='createArrowFiles':
+        return ScientificContract(inputs={'dataset':{'format':'fragments'},'second':{'format':'fragments'}},
+            parameters={'resources':('hg38_genome',),'declarations':('sample_name','assembly','coordinate_system','fragment_endpoints')},
+            outputs={'publication':{'object_type':'ArrowFiles','snapshot':True}},effects={'cell_axis':'native_qc_subset'})
+    if function=='ArchRProject':
+        return ScientificContract(inputs={'dataset':{'object_type':snapshot_type(function),'snapshot':True}},
+            outputs={'publication':{'object_type':'ArchRProject','snapshot':True}})
+    if function in ('getAvailableMatrices','getMatrixFromProject'):
+        return ScientificContract(inputs={'dataset':{'object_type':snapshot_type(function),'snapshot':True}},
+            outputs={'publication':{'object_type':'ArchRProject',
+                        'snapshot':True,'result':'available_matrix_names' if function=='getAvailableMatrices' else 'native_matrix'}})
+    return ScientificContract()

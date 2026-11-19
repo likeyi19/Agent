@@ -505,11 +505,10 @@ __all__ = ["EpiZooEmbeddingToolResult", "EpiZooResourceIdentityError", "epizoo_e
            "validate_expected_resource_identity", "validate_resource_provenance"]
 
 
-DATASET_PROPERTIES = dict(x=False,fragment_storage=False,paired_fragments=False,native_values=False,
-    representations=('X_epizoo',),produced_representation='X_epizoo',preserves_counts=False)
+DATASET_PROPERTIES = dict(format='h5ad',x=False,scanpy_auto_rep=False,scanpy_x_rep=False,fragment_storage=False,paired_fragments=False,native_values=False,
+    representations=('X_epizoo',),produced_representation='X_epizoo',preserves_counts=False,**{'obsm.X_epizoo':True})
 
 
-def planned_output_properties(arguments, port, context, *, seen=()):
-    if port in ('embedding','dataset'):
-        return dict(DATASET_PROPERTIES)
-    return {}
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(inputs={'dataset':{'x':True}},outputs={'dataset':DATASET_PROPERTIES})

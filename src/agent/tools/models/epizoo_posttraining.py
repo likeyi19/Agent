@@ -91,3 +91,10 @@ def prepare_operation(arguments, context):
     try:check_parent_matrix(matrix.load_manifest_bytes(dataset.read_bytes(max_bytes=matrix.MAX_MANIFEST_BYTES)),owner.load_manifest(parent.path,parent.sha256))
     except ValueError as exc:raise ScientificDiagnostic('SPECIES_PREREQUISITE_INVALID',str(exc)) from exc
     return arguments
+
+
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(parameters={'parent':'accepted_initialized_model',
+                                          'alignment':'exact_feature_space_and_measurement'},
+        outputs={'model':{'lifecycle':'posttrained'}},effects={'parent_mutation':False})

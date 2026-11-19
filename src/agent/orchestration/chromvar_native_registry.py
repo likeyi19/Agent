@@ -44,7 +44,7 @@ def tool_spec():
         accepted_upstream_types=('scatac_matrix_h5ad.v1','hierarchical_annotation_h5ad.v1','chromvar_scores_h5ad.v1','native_matrix_h5ad.v1','raw_scatac_dataset.v1')),
         *(scalar(k,required=k in required) for k in (*required,*optional) if k!='input_path')]
     pub=owner.publication
-    return ToolSpec(preparation_owner=owner.prepare_operation, source_encodings={'dataset':('h5ad',)}, source_input_types={'dataset':('h5ad',)}, native_functions=NativeFunctionCatalog('chromVAR', tuple((name, tuple(members)) for name, members in owner.FUNCTIONS.items())),name=owner.TOOL,function=owner.run_chromvar,required_arguments=required,optional_arguments=optional,
+    return ToolSpec(preparation_owner=owner.prepare_operation, source_encodings={'dataset':('h5ad',)}, source_input_types={'dataset':('h5ad',)}, native_functions=NativeFunctionCatalog('chromVAR', tuple(owner.FUNCTIONS.items())),scientific_contract=owner.scientific_contract,name=owner.TOOL,function=owner.run_chromvar,required_arguments=required,optional_arguments=optional,
         scientific_delivery=delivery_spec(owner,'scientific_native_result'),
         result_contract=ResultContract('NativeChromvarResult',owner.RESULT_FIELDS,planning_fields={k:_planning_result(
             'Native statistics with ordered source identities.',bindable=True,artifact=A.MOTIF_ACCESSIBILITY)

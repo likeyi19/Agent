@@ -44,7 +44,7 @@ def tool_spec():
             ports.append(scalar_port(owner.TOOL, tuple(owner.FUNCTIONS), key, required=key in required)
                 if spec.planning.scientific_parameter else scalar(key, required=key in required))
     pub = owner.publication
-    return ToolSpec(source_encodings={'dataset':('h5ad',),'bins':('tsv',),'genome':('fasta',)}, source_input_types={'dataset':('h5ad',), 'bins':('h5ad','attachment'), 'genome':('fasta',)}, native_functions=NativeFunctionCatalog(owner.package, tuple(owner.FUNCTIONS.items())), name=owner.TOOL, function=owner.invoke,
+    return ToolSpec(scientific_contract=owner.scientific_contract, source_encodings={'dataset':('h5ad',),'bins':('tsv',),'genome':('fasta',)}, source_input_types={'dataset':('h5ad',), 'bins':('h5ad','attachment'), 'genome':('fasta',)}, native_functions=NativeFunctionCatalog(owner.package, tuple(owner.FUNCTIONS.items())), name=owner.TOOL, function=owner.invoke,
         required_arguments=required, optional_arguments=optional, preparation_owner=owner.prepare_operation, parameter_prerequisites=owner.parameter_prerequisites,
         scientific_delivery=delivery_spec(owner, 'scientific_native_result'),
         result_contract=ResultContract('NativeMonaLisaResult', owner.RESULT_FIELDS, planning_fields={k: _planning_result('Exact native enrichment publication.', bindable=True, artifact=A.RAW_SCATAC)
@@ -56,4 +56,4 @@ def tool_spec():
             'Requires actual genomic coordinates, matching genome, motifs and supplied per-region bins. Never infer bins, expression or biological truth. Native sequence-composition correction and tests remain upstream. Genome-background sampling is unsupported. No automatic figure.'),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports), producer_ports=(
             Producer('publication', owner.CONTRACT, (member('path', 'manifest_path'), member('sha256', 'manifest_sha256'))),
-            Producer('table', 'native_genomic_table.v1', (member('dataset', 'table_path'),)))))
+            Producer('table', 'native_genomic_table.v1', (member('dataset', 'table_path'),), observation_sha256_field='table_sha256'))))

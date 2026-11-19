@@ -27,6 +27,34 @@ LIMITATIONS = ('Independent native function, not a complete workflow or biologic
     'Omitted native arguments retain installed defaults; source files remain unchanged.')
 
 
+def bedgraph_record(line):
+    fields = line.split()
+    if len(fields) != 4:
+        raise ValueError('MACS3 requires four-column bedGraph data')
+    chrom, left, right, score = fields
+    start, end, value = int(left), int(right), float(score)
+    if (not 0 <= start < end <= 2147483647
+            or math.isfinite(value) and abs(value) > 3.4028234e38):
+        raise ValueError('bedGraph coordinates/scores exceed native representation')
+    return chrom, start, end
+
+
+def observe_table_format(path):
+    """Disprove bedGraph from a bounded exact prefix, never by suffix."""
+    with Path(path).open('rb') as stream:
+        for _ in range(64):
+            line=stream.readline(4097)
+            if not line or len(line)>4096:
+                return None
+            if line.startswith((b'#',b'track',b'browser')):
+                continue
+            try:
+                bedgraph_record(line.decode('utf-8'))
+            except (UnicodeError,ValueError):
+                return 'incompatible_bedGraph'
+    return None
+
+
 def bedgraph(path, *, empty=False):
     """Protect against the native C parser's silent coordinate/number coercion.
 
@@ -39,14 +67,7 @@ def bedgraph(path, *, empty=False):
         for line in stream:
             if line.startswith(('#', 'track', 'browser')):
                 continue
-            fields = line.split()
-            if len(fields) != 4:
-                raise ValueError('MACS3 requires four-column bedGraph data')
-            chrom, left, right, score = fields
-            start, end, value = int(left), int(right), float(score)
-            if (not 0 <= start < end <= 2147483647
-                    or math.isfinite(value) and abs(value) > 3.4028234e38):
-                raise ValueError('bedGraph coordinates/scores exceed native representation')
+            chrom,start,end=bedgraph_record(line)
             if chrom in ends and start != ends[chrom]:
                 raise ValueError('MACS3 requires sorted continuous nonoverlapping intervals within each chromosome')
             ends[chrom] = end; n += 1
@@ -117,11 +138,8 @@ class TablePackage:
         return kw
 
     def parameter_prerequisites(self, args):
-        if self.package != 'MACS3':
-            return ()
-        if args.get('function_name') == 'bdgdiff':
-            return tuple(k + '_path' for k in ('control', 'treatment2', 'control2') if not args.get(k + '_path'))
-        return ('control_path',) if args.get('function_name') in ('bdgcmp', 'cmbreps') and not args.get('control_path') else ()
+        return tuple(port+'_path' for port in self.scientific_contract(args).parameters.get('required_ports', ())
+                     if not args.get(port+'_path'))
 
     def prepare_operation(self, arguments, context):
         from agent.orchestration.scientific_inputs import parameter_requirements, ScientificInputRequired
@@ -306,6 +324,22 @@ class TablePackage:
         if name == 'bdgopt':
             return 'bedGraph', 'MACS3_' + str(kw.get('method', 'p2q')) + '_of_' + args.get('signal_semantics', 'unspecified_scores')
         return ('narrowPeak' if name == 'bdgpeakcall' else 'gappedPeak'), 'native_peaks_from_' + args.get('signal_semantics', 'unspecified_scores')
+
+    def scientific_contract(self, arguments):
+        from agent.orchestration.scientific_inputs import ScientificContract
+        function=arguments.get('function_name')
+        if function not in self.FUNCTIONS:return ScientificContract()
+        required=()
+        inputs={}
+        if self.package=='MACS3':
+            if function=='bdgdiff':required=('control','treatment2','control2')
+            elif function in ('bdgcmp','cmbreps'):required=('control',)
+            if function not in ('pileup','filterdup'):
+                inputs={port:{'table_format':'bedGraph'} for port in ('dataset',*required)}
+        output_format, measurement=self.output_semantics(arguments)
+        outputs={'measurement':measurement}
+        if function!='filterdup':outputs['table_format']=output_format
+        return ScientificContract(inputs=inputs,parameters={'required_ports':required} if required else {},outputs={'table':outputs})
 
     def invoke_macs3(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None,
                control_path=None, control_sha256=None, signal_semantics=None, control_semantics=None,

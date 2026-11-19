@@ -30,7 +30,7 @@ def tool_spec():
             request_sources=(request('genomic_coords_path',rm('dataset','genomic_coords_path')),)),
         *(scalar(k,required=k in required) for k in (*required,*optional) if k not in ('input_path','genomic_coords_path'))]
     pub = owner.publication
-    return ToolSpec(source_encodings={'dataset':('h5ad','accepted_cicero_cds'),'genomic_coords':('tsv',)}, source_input_types={'dataset':('h5ad',), 'genomic_coords':('attachment',)}, native_functions=NativeFunctionCatalog('cicero', tuple((name, tuple(members)) for name, members in owner.FUNCTIONS.items())),name=owner.TOOL,function=owner.invoke,required_arguments=required,optional_arguments=optional,
+    return ToolSpec(scientific_contract=owner.scientific_contract, source_encodings={'dataset':('h5ad','accepted_cicero_cds'),'genomic_coords':('tsv',)}, source_input_types={'dataset':('h5ad',), 'genomic_coords':('attachment',)}, native_functions=NativeFunctionCatalog('cicero', tuple((name, tuple(members)) for name, members in owner.FUNCTIONS.items())),name=owner.TOOL,function=owner.invoke,required_arguments=required,optional_arguments=optional,
         preparation_owner=owner.prepare_operation, application_inputs=frozenset({"reduced_coordinates_key"}), parameter_prerequisites=owner.parameter_prerequisites,scientific_delivery=delivery_spec(owner,'scientific_native_result'),
         result_contract=ResultContract('NativeCiceroCDSResult',owner.RESULT_FIELDS,planning_fields={k:_planning_result('Exact native CDS exchange or connection table.',bindable=True,artifact=A.RAW_SCATAC) for k in ('manifest_path','manifest_sha256','cds_path','cds_sha256','table_path','table_sha256')}),
         durable_hooks=DurableToolHooks(owner.execute,owner.recover),exception_classifier=classify,recovery_policy_version=owner.POLICY,
@@ -41,5 +41,5 @@ def tool_spec():
             'Native functions own numerical validation. Aggregation members appear only with return_agg_info=true. run_cicero requires chromosome lengths; estimate_distance_parameter may use its bundled human hg19 default, not inferred input compatibility. No upstream rerun.'),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(
             Producer('publication',owner.CONTRACT,(member('path','manifest_path'),member('sha256','manifest_sha256'))),
-            Producer('cds','cicero_cds_exchange.v1',(member('dataset','cds_path'),)),
-            Producer('table','native_genomic_table.v1',(member('dataset','table_path'),)))))
+            Producer('cds','cicero_cds_exchange.v1',(member('dataset','cds_path'),),observation_sha256_field='cds_sha256'),
+            Producer('table','native_genomic_table.v1',(member('dataset','table_path'),),observation_sha256_field='table_sha256'))))

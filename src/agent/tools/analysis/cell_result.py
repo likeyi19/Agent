@@ -35,10 +35,34 @@ def representation_key(package, function, kwargs):
     if function=='tl.spectral':return 'X_spectral'
     if function=='tl.diffmap':return 'X_diffmap'
     if function=='tl.tsne':return 'X_tsne'
-    if function=='pp.lsi':return 'X_lsi'
+    if function in ('pp.lsi','RunSVD'):return 'X_lsi'
     if function=='tl.umap':return 'X_'+(kwargs.get('key_added') or 'umap') if package=='snapatac2' else 'X_umap'
     if function=='pp.mnc_correct':return kwargs.get('key_added') or kwargs.get('use_rep','X_spectral')+'_mnn'
     return None
+
+
+_TRANSFORM_MEASUREMENTS = {'pp.binarize':'native_binarized_supplied_measurement',
+    'BinarizeCounts':'native_binarized_supplied_measurement','pp.log1p':'log1p_transformed_measurement',
+    'pp.scale':'scanpy_scaled_measurement','RunTFIDF':'Signac_TFIDF'}
+
+
+def count_measurement(measurement):
+    if measurement in ('peak_counts','fragment_counts','insertion_counts','paired_insertion_counts',
+                       'binary_accessibility','native_binarized_supplied_measurement'):
+        return True
+    if (measurement in _TRANSFORM_MEASUREMENTS.values() or measurement.endswith('_library_size_normalized')
+            or measurement in ('episcanpy_tfidf','chromVAR_bias_corrected_deviations')):
+        return False
+    return None
+
+
+def matrix_transform(package, function, kwargs):
+    measurement = (package+'_library_size_normalized' if function=='pp.normalize_total'
+                   else _TRANSFORM_MEASUREMENTS.get(function))
+    if measurement is None or kwargs.get('inplace',True) is False:
+        return None, None
+    target = 'layers.'+kwargs['layer'] if kwargs.get('layer') else 'obsm.'+kwargs['obsm'] if kwargs.get('obsm') else 'X'
+    return target, measurement
 
 
 def describe(tool, result):

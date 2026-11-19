@@ -47,7 +47,7 @@ def tool_spec():
             request_sources=(request('genome_path',rm('path','genome_path'),rm('sha256','genome_sha256')),)),
         scalar('output_dir',required=True),*(scalar(k,required=False) for k in optional if k not in ('genome_path','genome_sha256'))]
     from .native_delivery import delivery_spec
-    return ToolSpec(source_encodings={'dataset':('h5ad',),'genome':('fasta',)}, source_input_types={'dataset':('h5ad',), 'genome':('fasta',)}, scientific_delivery=delivery_spec(owner,'scientific_motifs', h5ad_roles=('motif-accessibility.h5ad',), figure=('patterns.png','motif_accessibility_heatmap')),name=owner.TOOL,function=owner.compute_motif_accessibility,required_arguments=required,optional_arguments=optional,
+    return ToolSpec(scientific_contract=owner.scientific_contract,source_encodings={'dataset':('h5ad',),'genome':('fasta',)}, source_input_types={'dataset':('h5ad',), 'genome':('fasta',)}, scientific_delivery=delivery_spec(owner,'scientific_motifs', h5ad_roles=('motif-accessibility.h5ad',), figure=('patterns.png','motif_accessibility_heatmap')),name=owner.TOOL,function=owner.compute_motif_accessibility,required_arguments=required,optional_arguments=optional,
         preparation_owner=owner.prepare_operation, parameter_prerequisites=owner.parameter_prerequisites,
         result_contract=ResultContract('MotifAccessibilityResult',owner.RESULT_FIELDS,planning_fields={k:_planning_result(
             'Exact native cell-by-motif result; deviations and z-scores are distinct, never peak counts.',bindable=True,artifact=A.MOTIF_ACCESSIBILITY)
@@ -61,4 +61,5 @@ def tool_spec():
             'Publishes per-cell bias-corrected deviations and separate z-scores, matched backgrounds, motif/GC evidence, descriptive summaries, a heatmap and downloads. This is not peak-set motif enrichment, TF expression/binding, causality or replicate-level condition testing.'),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(Producer('motifs','motif_accessibility.v1',
             (member('path','manifest_path'),member('sha256','manifest_sha256'))),
-            Producer('scores','chromvar_scores_h5ad.v1',(member('dataset','scores_path'),))),))
+            Producer('scores','chromvar_scores_h5ad.v1',(member('dataset','scores_path'),),
+                     observation_sha256_field='scores_sha256')),))

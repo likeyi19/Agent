@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 from agent.schemas import StepOutputRef
 from agent.orchestration import build_default_tool_registry
-from agent.orchestration.scientific_inputs import OperationPreparationContext,ScientificInputRequired,ScientificDiagnostic
+from agent.orchestration.scientific_inputs import OperationPreparationContext,ScientificInputRequired,ScientificDiagnostic,validate_input_properties
 from agent.tools.analysis import native_matrix
 
 
@@ -73,8 +73,8 @@ def test_inapplicable_clustering_selection_is_canonical_invalid_without_reservat
 def test_native_dpt_graph_and_root_are_preparable_without_invented_defaults(tmp_path):
     path=source(tmp_path);ctx=context()
     args=dict(input_path=str(path),function_name='tl.dpt')
-    with pytest.raises(ScientificDiagnostic,match='graph') as absent:native_matrix.SCANPY.prepare_operation(args,ctx)
-    assert absent.value.code=='NATIVE_GRAPH_REQUIRED'
+    with pytest.raises(ScientificDiagnostic,match='graph') as absent:validate_input_properties(args,ctx)
+    assert absent.value.code=='SCIENTIFIC_INPUT_PROPERTY_REQUIRED'
     selected={'pca':('run_scanpy',dict(input_path=str(path),function_name='pp.pca')),
         'graph':('run_scanpy',dict(input_path=StepOutputRef('pca','matrix_path'),function_name='pp.neighbors',use_rep='X_pca'))}
     ctx=context(selected.items());args['input_path']=StepOutputRef('graph','matrix_path')
@@ -82,6 +82,7 @@ def test_native_dpt_graph_and_root_are_preparable_without_invented_defaults(tmp_
     req,=root.value.requirements
     assert req.argument=='root_cell' and req.kind=='scalar' and not req.choices
     assert native_matrix.SCANPY.prepare_operation(dict(args,root_cell='a'),ctx)['root_cell']=='a'
+    validate_input_properties(dict(args,root_cell='a'),ctx)
     assert 'root_cell' not in args
     promised=ctx.planned(args['input_path'])
     assert 'scanpy:neighbors' in promised['graphs'] and 'X_pca' in promised['representations']
@@ -175,7 +176,7 @@ def test_symbolic_row_adaptation_invalidates_root_and_graph(tmp_path):
     ctx=context(selected.items());args=dict(input_path=StepOutputRef('graph','matrix_path'),function_name='tl.dpt',cell_subset=dict(positions=[2,3]))
     props=native_matrix.SCANPY.input_properties(args,ctx)
     assert props['root'] is False and props['graphs']==()
-    with pytest.raises(ScientificDiagnostic,match='graph'):native_matrix.SCANPY.prepare_operation(args,ctx)
+    with pytest.raises(ScientificDiagnostic,match='graph'):validate_input_properties(args,ctx)
 
 
 def test_required_native_field_uses_owner_metadata_or_planned_groups(tmp_path,monkeypatch):

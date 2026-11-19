@@ -11,7 +11,7 @@ sys.dont_write_bytecode = True
 import traceback
 
 
-def otsu_thresholds(obs, kwargs):
+def otsu_thresholds(obs, kwargs, *, n_obs=None):
     """pycisTopic-style sample thresholds on SnapATAC2's own QC measurements.
 
     The package supplies Otsu; Agent only selects/transforms its input and
@@ -37,7 +37,7 @@ def otsu_thresholds(obs, kwargs):
             transform='log10' if logarithmic else 'identity', fitting_floor=floor,
             fitting_barcodes=len(fitting), nonfinite_barcodes=int((~np.isfinite(values)).sum()),
             value=selected[key], nbins=5000)
-    return selected, dict(method='sample-level Otsu', input_barcodes=len(np.asarray(obs['n_fragment'])), thresholds=details,
+    return selected, dict(method='sample-level Otsu', input_barcodes=len(obs) if n_obs is None else n_obs, thresholds=details,
         measurement='SnapATAC2 n_fragment and tsse; not pycisTopic fragments-in-peaks or TSS scores',
         comparison='native filter_cells inclusive minima (>=)')
 
@@ -47,6 +47,12 @@ def peak_measurement(source_measurement, strategy):
     return ({'fragment': 'fragment_counts', 'insertion': 'insertion_counts',
              'paired-insertion': 'paired_insertion_counts'}[strategy]
             if source_measurement == 'paired_fragments' else 'snapatac2_' + source_measurement)
+
+
+def import_storage(is_paired):
+    if is_paired:
+        return 'paired_fragments', 'fragment_paired', 'native_fragment_positions_and_lengths'
+    return 'single_end_insertions', 'fragment_single', 'native_single_end_insertions'
 
 
 def main(request_path):
@@ -94,7 +100,8 @@ def main(request_path):
             call.update(fragment_file=inputs['input_path'], chrom_sizes=sizes, file=str(stage / 'result.h5ad'), tempdir=str(stage))
             if inputs.get('whitelist_path'): call['whitelist'] = inputs['whitelist_path']
             a = fn(**call); result = a
-            measurement = 'native_fragment_positions_and_lengths'; slots = ['obsm.fragment_paired' if call.get('is_paired', True) else 'obsm.fragment_single', 'obs.n_fragment', 'obs.frac_dup', 'obs.frac_mito']
+            _, slot, measurement = import_storage(call.get('is_paired', True))
+            slots = ['obsm.'+slot, 'obs.n_fragment', 'obs.frac_dup', 'obs.frac_mito']
         else:
             shutil.copyfile(inputs['input_path'], stage / 'result.h5ad')
             a = snap.read(str(stage / 'result.h5ad'))
@@ -119,9 +126,15 @@ def main(request_path):
                 if not kw.get('use_x'):
                     activity_source['measurement'] = source_measurement
             if name == 'pp.filter_cells' and inputs.get('qc_thresholds') == 'otsu':
-                thresholds, threshold_selection = otsu_thresholds(a.obs, kw)
+                thresholds, threshold_selection = otsu_thresholds(a.obs, kw, n_obs=a.n_obs)
                 call.update(thresholds)
-            result = fn(a, **call)
+            if name=='pp.call_cells' and isinstance(call.get('use_rep'),list):
+                import numpy as np
+                if len(call['use_rep'])!=a.n_obs:
+                    raise ValueError('Count vector length must match the selected ordered observation axis')
+                result = fn(a, **dict(call, use_rep=np.asarray(call['use_rep'],dtype=np.uint64)))
+            else:
+                result = fn(a, **call)
             if name in ('pp.make_peak_matrix', 'pp.add_tile_matrix', 'pp.make_gene_matrix'):
                 if result is not None:
                     a.close(); a = result

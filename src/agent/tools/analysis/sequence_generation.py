@@ -198,3 +198,9 @@ def prepare_operation(arguments, context):
     if arguments['condition'] not in model['conditions']:
         raise ScientificDiagnostic('SEQUENCE_CONDITION_UNSUPPORTED','The supplied condition is not an exact released DNA-Diffusion condition.')
     return arguments
+
+
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(outputs={'sequences':{'sequence_origin':'synthetic'},
+                                     'generation':{'scope':'model_samples_not_biological_validation'}})

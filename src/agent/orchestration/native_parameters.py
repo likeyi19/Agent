@@ -215,12 +215,53 @@ def bind_structured_parameters(selected, settings, registry, request_inputs):
     return bound, applied, ambiguous
 
 
+def select_native_parameters(tool, arguments):
+    strategy=tool.selected_scientific_contract({'function_name':arguments.get('function_name')}).selection.get('asw')
+    if strategy is None:
+        return arguments
+    if arguments.get('parameter_selection')=='asw':
+        return dict(arguments, require_asw=arguments.get('require_asw',True))
+    if arguments.get('parameter_selection') is None:
+        return dict(arguments,parameter_selection='asw',require_asw=False)
+    return arguments
+
+
+def coordinate_native_parameters(selected, registry, *, only=None,sessions=None,observe_existing=False):
+    from .scientific_inputs import OperationPreparationContext
+    proposals={}
+    for step_id,(name,arguments) in selected.items():
+        if only is not None and step_id not in only:continue
+        tool=registry.get(name)
+        owner=tool.selected_scientific_contract({'function_name':arguments.get('function_name')}).resolve_selection
+        if owner is None:continue
+        context=OperationPreparationContext(tool,step_id,registry,selected,{}, {},[],sessions,None,{},observe_existing=observe_existing)
+        for target,value in owner(arguments,context).items():
+            existing=proposals.get(target)
+            if existing is not None and existing!=value:
+                from .scientific_inputs import ScientificDiagnostic
+                raise ScientificDiagnostic('NATIVE_SELECTION_CONFLICT','The selected consumers request incompatible policies for one shared population.')
+            proposals[target]=value
+    return {step:(name, {**arguments,**proposals.get(step,{})}) for step,(name,arguments) in selected.items()}
+
+
+def parameter_edit_descendants(steps, roots):
+    from agent.schemas import StepOutputRef
+    affected=set(roots)
+    while True:
+        expanded=affected|{step.step_id for step in steps if any(
+            isinstance(source,StepOutputRef) and source.step_id in affected for source in step.arguments.values())}
+        if expanded==affected:return affected
+        affected=expanded
+
+
 def missing_clustering_parameters(tool, inputs):
     """The two count-based APIs have no default when ASW is explicitly disabled."""
-    if tool.name != 'run_episcanpy':
+    if tool.native_functions is None:
         return ()
     missing = []
-    for function in ('tl.kmeans', 'tl.hc'):
+    for function,_ in tool.native_functions.functions:
+        policy=tool.selected_scientific_contract({'function_name':function}).selection.get('asw',{})
+        if policy.get('parameter')!='num_clusters':continue
         selection = inputs.get(input_name(tool.name, function, 'parameter_selection'))
         if inputs.get('function_name') == function:
             selection = selection or inputs.get('parameter_selection')

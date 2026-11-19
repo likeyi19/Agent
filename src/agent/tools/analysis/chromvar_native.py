@@ -277,17 +277,30 @@ def prepare_operation(arguments, context):
     """Observe only selected native input slots and field names before R."""
     from dataclasses import replace
     from agent.orchestration.scientific_inputs import ScientificInputRequired,ScientificDiagnostic,parameter_requirements
-    observed=context.existing(arguments.get('input_path'))
-    if observed is None:return arguments
     function=arguments.get('function_name')
     if function in DEVIATION_FUNCTIONS:
         if arguments.get('count_slot') is not None or arguments.get('matrix_semantics') is not None:
             raise ScientificDiagnostic('CHROMVAR_DEVIATION_INPUT_INVALID','Deviation functions consume supplied deviations and z_scores, without a count declaration.')
-        if 'z_scores' not in observed.slots('layers'):
-            raise ScientificDiagnostic('CHROMVAR_SCORES_REQUIRED','The selected native function requires supplied deviations X and layers/z_scores. Supply existing scores or include their producer.')
     if function=='getBackgroundPeaks':
-        fields=observed.fields('var');key=arguments.get('bias_key','bias')
-        if key not in fields:
+        observed=context.existing(arguments.get('input_path'))
+        if observed is None:return arguments
+        key=arguments.get('bias_key','bias')
+        if not context.properties(arguments.get('input_path'),('var.'+key,)).get('var.'+key):
+            fields=observed.fields('var')
             needs=parameter_requirements(context.tool,('bias_key',))
             raise ScientificInputRequired(*(replace(req,choices=fields,messages=('Select the actual numeric per-peak bias field; no GC bias is inferred.',)) for req in needs))
     return arguments
+
+
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    function=arguments.get('function_name')
+    dataset={'format':'h5ad'}
+    if function in DEVIATION_FUNCTIONS:
+        dataset.update({'x':True, 'dense.x':True, 'dense.z_scores':True})
+    else:
+        slot=arguments.get('count_slot','X')
+        dataset['x' if slot=='X' else 'layers.'+slot.removeprefix('layers/')]=True
+    if function=='getBackgroundPeaks':dataset['var.'+arguments.get('bias_key','bias')]=True
+    if arguments.get('group_key'):dataset['obs.'+arguments['group_key']]=True
+    return ScientificContract(inputs={'dataset':dataset})

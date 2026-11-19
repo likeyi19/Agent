@@ -171,3 +171,6 @@ def inspect_scATAC(path: str | Path) -> ScATACInspection:
 
 
 __all__ = ["ScATACInspection", "inspect_scATAC"]
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(inputs={'dataset': {'x': True}})

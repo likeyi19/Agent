@@ -412,3 +412,12 @@ def prepare_operation(arguments, context):
         return context.accepted_input('differential_accessibility' if method=='differential_accessibility' else 'regions',arguments)
     else:raise ScientificDiagnostic('REGION_SELECTION_MODE_INVALID','Select a supported region selection mode.')
     return arguments
+
+
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(inputs={'dataset':{'format':'h5ad'}},
+        parameters={'source_alternatives':('datasets_with_regions','differential_accessibility','accepted_regions'),
+                    'resources':('coordinate_matched_reference',)},
+        outputs={'sequences':{'sequence_origin':'reference'},
+                 'regions':{'scope':'observed_regions_and_reference_windows'}})

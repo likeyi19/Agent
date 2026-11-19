@@ -10,6 +10,7 @@ from pathlib import Path
 from agent.schemas.orchestration import _serialize
 from .session_state import digest
 from agent.orchestration.semantic_compiler import ScientificInputRequired, ScientificInputRequirement
+from agent.orchestration.scientific_inputs import ScientificDiagnostic
 
 # Reviewed external names for one exact qualified FASTA/FAI/ordered-axis triple.
 # This is not an hg38/GRCh38 synonym or a substitute for component qualification.
@@ -579,7 +580,7 @@ def gene_annotation_component(receipt, source, *, source_sha256=None, supplied=N
 
 def bind_operation(tool_name, function, arguments, receipt, *, step_id, bindings=None, qualify_source=True):
     """Resolve one selected operation's exact native inputs, without a Plan."""
-    from agent.tools.analysis.snapatac_raw import APPLIES, PORTS
+    from agent.tools.analysis.snapatac_raw import APPLIES, PORTS, peak_region_key
     from agent.schemas import StepOutputRef, PriorOutputRef
     args = dict(arguments)
     if tool_name not in ('run_snapatac2', 'run_episcanpy'):
@@ -591,6 +592,11 @@ def bind_operation(tool_name, function, arguments, receipt, *, step_id, bindings
         if port == 'whitelist':
             continue  # Optional native input; never auto cell calling.
         path_key, sha_key, _ = PORTS[port]
+        if port == 'peaks' and peak_region_key(args) is not None:
+            requested = receipt.get('component_selections', {}).get(port)
+            if args.get(path_key) is not None or port in receipt['custom'] or requested is not None:
+                raise ScientificDiagnostic('NATIVE_PEAK_REGIONS_CONFLICT','Use either a BED input or kwargs.use_rep, not both.')
+            continue
         if isinstance(args.get(path_key), (StepOutputRef, PriorOutputRef)):
             continue
         if port in args.get('kwargs', {}):
@@ -660,6 +666,10 @@ def prepare_operation(arguments, context):
     mapped = context.planned(arguments.get('input_path')).get('source_reference')
     if mapped is not None:
         receipt['source_reference'] = mapped
+    if (context.tool.name == 'run_snapatac2' and 'peaks' not in receipt['custom']
+            and 'peaks' not in receipt['component_selections'] and receipt['selected'] is None):
+        from agent.tools.analysis.snapatac_raw import use_default_peak_regions
+        arguments = use_default_peak_regions(arguments, context)
     bound = bind_operation(context.tool.name, arguments.get('function_name'), arguments, receipt,
         step_id=context.step_id, bindings=context.receipts)
     if context.tool.native_functions is not None:

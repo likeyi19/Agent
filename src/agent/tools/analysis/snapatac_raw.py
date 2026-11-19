@@ -70,38 +70,237 @@ BARCODE_CHOICES = (
 def parameter_metadata(function, metadata):
     """Keep the selected-member editor typed even without runtime discovery."""
     result=dict(metadata)
-    for condition in scientific_contract({'function_name':function}).get('conditional_parameters',()):
+    for condition in scientific_contract({'function_name':function}).parameters.get('conditions',()):
         for member in condition['members']:
             result[member]=dict(result.get(member,{}),types=['str','NoneType'],
                 required=False,default_when_omitted=None,conditional=condition)
     return result
 
 
+FILTER_DEFAULTS = dict(min_counts=1000, min_tsse=5.0, max_counts=None, max_tsse=None)
+FILTER_FIELDS = {'obs.n_fragment': ('min_counts', 'max_counts'), 'obs.tsse': ('min_tsse', 'max_tsse')}
+DEFAULT_PEAK_REGION_KEY = 'peaks'
+QC_POPULATIONS = ('uncalled_single_sample','study_selected','depth_prefiltered','multiple_samples')
+QC_FILTER_MINIMA = ('min_counts','min_tsse')
+
+
+def active_qc(arguments):
+    if arguments.get('qc_thresholds')=='native_defaults':return 'native_defaults'
+    decision=arguments.get('qc_selection')
+    return decision['method'] if decision is not None else arguments.get('qc_thresholds')
+
+
+def accepted_qc_population(parameters):
+    history=parameters.get('population',{})
+    if history.get('stage')=='native_import' and history.get('min_num_fragments',0)>0:
+        return 'depth_prefiltered'
+    if history.get('applied') and history.get('stage') in ('native_cell_filter','native_ordmag_cell_call'):
+        return 'study_selected'
+    return parameters.get('qc_population')
+
+
+def qc_lineage(value, context):
+    from agent.schemas import StepOutputRef
+    from agent.application.source_observations import identity_parent
+    seen=set()
+    while isinstance(value,StepOutputRef) and value.step_id not in seen:
+        seen.add(value.step_id)
+        name, arguments=context.selected.get(value.step_id,(None,{}))
+        if name!='run_snapatac2':
+            parent=identity_parent(value,context.selected,context.registry)
+            if parent is None:break
+            value=parent
+            continue
+        function=arguments.get('function_name')
+        kwargs=arguments.get('kwargs',{})
+        if function=='pp.import_fragments':
+            minimum=kwargs.get('min_num_fragments')
+            if (minimum is None and arguments.get('qc_thresholds')=='native_defaults'
+                    or isinstance(minimum,(int,float)) and minimum>0):
+                return value.step_id,'depth_prefiltered'
+            if kwargs.get('whitelist') is not None or arguments.get('whitelist_path') is not None:
+                return value.step_id,'restricted_population'
+            return value.step_id,arguments.get('qc_population')
+        if function in ('pp.filter_cells','pp.call_cells') and kwargs.get('inplace',True):
+            return None,'study_selected'
+        if function not in ('metrics.tsse','metrics.frag_size_distr','pp.filter_cells','pp.call_cells',
+                            'pp.add_tile_matrix','pp.make_peak_matrix','pp.make_gene_matrix'):
+            break
+        value=arguments.get('input_path')
+    if context.observe_existing and (source:=context.existing(value)) is not None:
+        return None,accepted_qc_population(source.publication_parameters)
+    return None,None
+
+
+def qc_decision(arguments, context):
+    from agent.orchestration.scientific_inputs import ScientificDiagnostic
+    request=arguments.get('qc_thresholds')
+    if request=='native_defaults':
+        return {'method':'native_defaults','reason':'explicit_native_defaults'},qc_lineage(arguments.get('input_path'),context)[0]
+    if all(member in arguments.get('kwargs',{}) for member in QC_FILTER_MINIMA):
+        return {'method':'native_defaults','reason':'explicit_filter_minima'},qc_lineage(arguments.get('input_path'),context)[0]
+    origin,history=qc_lineage(arguments.get('input_path'),context)
+    declared=arguments.get('qc_population')
+    if history and declared and history!=declared and declared!='uncalled_single_sample':
+        raise ScientificDiagnostic('QC_POPULATION_CONFLICT','The declared QC population conflicts with its selected source lineage.')
+    population=history or declared
+    if population=='uncalled_single_sample':
+        return {'method':'otsu','population':population,'reason':'qualified_uncalled_single_sample'},origin
+    if population is not None:
+        if request=='otsu':
+            raise ScientificDiagnostic('OTSU_INAPPLICABLE','The requested Otsu fit requires one uncalled, unprefiltered sample.')
+        return {'method':'native_defaults','population':population,'reason':'otsu_inapplicable'},origin
+    return {'method':None,'reason':'population_history_unknown'},origin
+
+
+def coordinate_qc(arguments, context):
+    decision,origin=qc_decision(arguments,context)
+    values={context.step_id:{'qc_selection':decision}}
+    if (origin is not None and decision['method']=='otsu'
+            and context.selected[origin][1].get('qc_thresholds')!='native_defaults'):
+        values[origin]={'qc_selection':dict(decision,role='retain_fitting_population')}
+    elif origin is not None and context.selected[origin][1].get('qc_thresholds')=='otsu':
+        from agent.orchestration.scientific_inputs import ScientificDiagnostic
+        if decision['method'] is not None:
+            raise ScientificDiagnostic('OTSU_SELECTION_CONFLICT','The import requests Otsu but the selected filter does not fit that population; supply import retention explicitly instead.')
+    elif origin is not None and context.selected[origin][1].get('qc_selection',{}).get('method')=='otsu':
+        values[origin]={'qc_selection':{'method':'native_defaults','reason':'linked_fit_not_selected'}}
+    return values
+
+
+def require_linked_qc_fit(arguments, context):
+    if arguments.get('qc_thresholds')!='otsu':return {}
+    for _,candidate in context.selected.values():
+        if (candidate.get('function_name')=='pp.filter_cells'
+                and qc_lineage(candidate.get('input_path'),context)[0]==context.step_id):
+            return {}
+    from agent.orchestration.scientific_inputs import ScientificDiagnostic
+    raise ScientificDiagnostic('OTSU_LINKED_FILTER_REQUIRED',
+        'Otsu fits filter minima, not import retention alone. Set min_num_fragments explicitly for an import-only request.')
+
+
+def peak_region_key(arguments):
+    return arguments.get('kwargs', {}).get('use_rep', arguments.get('use_rep'))
+
+
+def checked_raw_operand(arguments):
+    from agent.orchestration.scientific_inputs import ScientificDiagnostic
+    function=arguments.get('function_name')
+    selected=peak_region_key(arguments)
+    if function=='pp.make_peak_matrix':
+        if selected is not None and arguments.get('peaks_path') is not None:
+            raise ScientificDiagnostic('NATIVE_PEAK_REGIONS_CONFLICT','Use either a BED input or kwargs.use_rep, not both.')
+        if selected is not None and not (isinstance(selected,str) and selected or
+                isinstance(selected,list) and selected and all(isinstance(region,str) and region for region in selected)):
+            raise ScientificDiagnostic('NATIVE_PEAK_REGIONS_INVALID','Select a named region table or supply an ordered nonempty region list.')
+    elif function=='pp.call_cells' and selected is not None and not (isinstance(selected,str) and selected or
+            isinstance(selected,list) and selected and all(type(value) is int and 0<=value<2**64 for value in selected)):
+        raise ScientificDiagnostic('NATIVE_CALL_CELLS_COUNTS_INVALID','Use a numeric observation field or an ordered vector of nonnegative counts.')
+    return selected
+
+
+def use_default_peak_regions(arguments, context):
+    if (arguments.get('function_name')!='pp.make_peak_matrix' or arguments.get('peaks_path') is not None
+            or peak_region_key(arguments) is not None):
+        return arguments
+    key='regions.'+DEFAULT_PEAK_REGION_KEY
+    if context.properties(arguments.get('input_path'), (key,)).get(key):
+        return dict(arguments, kwargs={**arguments.get('kwargs', {}), 'use_rep':DEFAULT_PEAK_REGION_KEY})
+    return arguments
+
+
 def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    from .snapatac_raw_worker import import_storage
     name=arguments.get('function_name'); kwargs=arguments.get('kwargs', {})
     if name=='pp.make_fragment_file':
-        return dict(conditional_parameters=(BARCODE_EXTRACTION,), produces={'fragments':dict(format='fragments')})
+        return ScientificContract(inputs={'dataset': {'format': 'bam'}},
+            parameters={'conditions': (BARCODE_EXTRACTION,)}, outputs={'fragments': {'format': 'fragments', 'barcode_sorted': True}})
     if name=='pp.import_fragments':
-        return dict(produces={'dataset':dict(x=False, fragment_storage=True,
-            paired_fragments=kwargs.get('is_paired', True), native_values=True,
-            storage_kind='paired_fragments' if kwargs.get('is_paired',True) else 'single_end_insertions',
-            measurement='native_fragment_positions_and_lengths' if kwargs.get('is_paired',True) else 'native_single_end_insertions')})
+        paired=kwargs.get('is_paired', True)
+        storage, slot, measurement=import_storage(paired)
+        return ScientificContract(inputs={'dataset': {'format': 'fragments'}},
+            parameters={'resources': REQUIRED[name], 'optional_resources': ('whitelist',)},
+            outputs={'dataset': dict(format='h5ad', x=False, scanpy_auto_rep=False, scanpy_x_rep=False,
+                fragment_storage=True, paired_fragments=paired,
+                native_values=True, storage_kind=storage, measurement=measurement,
+                **{'obsm.'+slot: True, **dict.fromkeys(('obs.n_fragment', 'obs.frac_dup', 'obs.frac_mito'), 'numeric')},
+                **{'obs.tsse': False, 'var.selected': False})}, effects={'cell_axis': 'new'},
+            selection={'otsu':{'role':'retain_fitting_population','parameter':'min_num_fragments',
+                               'applies_if':'linked_qualified_filter'}},resolve_selection=require_linked_qc_fit)
+    needs={'format': 'h5ad'}; output={'format': 'h5ad'}; parameters={}; effects={}; selection={}
+    if name in REQUIRED:
+        parameters['resources']=REQUIRED[name]
     if name in ('pp.add_tile_matrix', 'pp.make_peak_matrix', 'pp.make_gene_matrix'):
-        requires=('x',) if kwargs.get('use_x') else ('native_values',)
-        output=dict(x=True, counting_strategy=kwargs.get('counting_strategy',arguments.get('counting_strategy','paired-insertion')))
+        needs['x' if kwargs.get('use_x') else 'native_values']=True
+        parameters['storage_by_use_x']={'true': 'x', 'false': 'native_values'} if name!='pp.add_tile_matrix' else {'false': 'native_values'}
+        if name=='pp.make_peak_matrix':
+            parameters['regions']={'alternatives': ('peaks', 'kwargs.use_rep:list', 'uns[kwargs.use_rep]'),
+                                   'native_default': 'uns.'+DEFAULT_PEAK_REGION_KEY}
+            selected=checked_raw_operand(arguments)
+            if isinstance(selected,str): needs['regions.'+selected]=True
+        output.update(x=True, scanpy_auto_rep=True, scanpy_x_rep=True,
+                      counting_strategy=kwargs.get('counting_strategy',arguments.get('counting_strategy','paired-insertion')),
+                      **{'var.selected': False})
+        effects['feature_axis']='replace'
         if not kwargs.get('inplace', name=='pp.add_tile_matrix'):
             output.update(fragment_storage=False, paired_fragments=False, native_values=False,
                 representations=(),graphs=(),root=False)
-        return dict(requires={'dataset':requires}, produces={'dataset':output})
-    if name in ('metrics.tsse', 'metrics.frag_size_distr'):
-        return dict(requires={'dataset':('fragment_storage',)})
-    return {}
+    elif name in ('metrics.tsse', 'metrics.frag_size_distr'):
+        needs['fragment_storage']=True
+        slots=('obs.tsse','uns.library_tsse','uns.frac_overlap_TSS','uns.TSS_profile') if name=='metrics.tsse' else ('uns.'+kwargs.get('add_key','frag_size_distr'),)
+        parameters['inplace_writes']=slots
+        if kwargs.get('inplace',True):
+            output.update(dict.fromkeys(slots,True))
+            if name=='metrics.tsse':output['obs.tsse']='numeric'
+        else:effects['independent_return']=True
+    elif name=='pp.filter_cells':
+        defaults=FILTER_DEFAULTS | kwargs
+        needs.update({field:'numeric' for field,bounds in FILTER_FIELDS.items() if any(defaults[key] for key in bounds)})
+        if active_qc(arguments)=='otsu':
+            if 'min_counts' not in kwargs:needs['obs.n_fragment']='numeric'
+            if 'min_tsse' not in kwargs:needs['obs.tsse']='numeric'
+        parameters.update(defaults=FILTER_DEFAULTS, reads_if_truthy_bound=FILTER_FIELDS)
+        if arguments.get('qc_selection',{}).get('reason')=='population_history_unknown':
+            parameters['required_ports']=('qc_population',)
+        selection={'otsu':{'role':'fit_omitted_minima','parameters':QC_FILTER_MINIMA,
+                           'applies_if':'uncalled_single_sample','unknown':'ask_qc_population',
+                           'inapplicable':'native_defaults_unless_explicit_otsu'}}
+    elif name=='pp.call_cells':
+        parameters['use_rep']={'required': True, 'string_axis': 'obs', 'alternative': 'aligned_vector'}
+        selected=checked_raw_operand(arguments)
+        if isinstance(selected,str):needs['obs.'+selected]='numeric'
+    if name in ('pp.filter_cells','pp.call_cells'):
+        effects.update(cell_axis='subset' if kwargs.get('inplace',True) else 'preserve',
+                       independent_return=not kwargs.get('inplace',True))
+    if name in ('metrics.tsse','metrics.frag_size_distr') or name in ('pp.filter_cells','pp.call_cells') and not kwargs.get('inplace',True):
+        effects['graph_storage']='preserve'
+    return ScientificContract(inputs={'dataset':needs}, parameters=parameters, outputs={'dataset':output},
+                              effects=effects, selection=selection,
+                              resolve_selection=coordinate_qc if name=='pp.filter_cells' else None)
 
 
 def prepare_operation(arguments, context):
     from agent.orchestration.scientific_inputs import ScientificDiagnostic, ScientificInputRequired, ScientificInputRequirement
     contract=scientific_contract(arguments)
-    for condition in contract.get('conditional_parameters', ()):
+    function=arguments.get('function_name');kwargs=arguments.get('kwargs',{})
+    if function=='pp.filter_cells' and 'qc_selection' in arguments:
+        decision,_=qc_decision(arguments,context)
+        if decision['method'] is None:
+            raise ScientificInputRequired(ScientificInputRequirement('qc_population','qc_population','scalar',
+                choices=QC_POPULATIONS,dependencies=('source:bytes',),
+                messages=('What is the cell-calling or selection history of this source population?',)),bindings=arguments)
+        arguments=dict(arguments,qc_selection=decision)
+    if function=='pp.call_cells' and peak_region_key(arguments) is None:
+        raise ScientificInputRequired(ScientificInputRequirement('kwargs','kwargs','scalar',member='use_rep',
+            applicability={'expected_types': ('str','list')}, dependencies=('source:bytes',),
+            messages=('Supply the exact observation count field or aligned count vector for OrdMag.',)))
+    selected=peak_region_key(arguments)
+    if function=='pp.call_cells' and isinstance(selected,list):
+        count=context.properties(arguments.get('input_path'),('n_obs',)).get('n_obs')
+        if count is not None and count!=len(selected):
+            raise ScientificDiagnostic('NATIVE_CALL_CELLS_COUNTS_INVALID','Count vector length must match the selected ordered observation axis.')
+    for condition in contract.parameters.get('conditions', ()):
         kwargs=arguments.get(condition['argument'], {})
         effective=[name for name in condition['members'] if kwargs.get(name) is not None]
         if len(effective)>1 or any(not isinstance(kwargs[name], str) or not kwargs[name].strip() for name in effective):
@@ -223,11 +422,29 @@ def execute(owner, args, execution_identity):
                 supplied_declarations={key: args[key] for key in ('species', 'assembly', 'matrix_semantics') if key in args}),
             software_versions=receipt['versions'], native_output_type=receipt['native_output_type'],
             result_slots=receipt['result_slots'], limitations=LIMITATIONS)
+        context=current()
+        population=args.get('qc_population')
+        decision=args.get('qc_selection')
+        if decision:
+            summary['parameters']['qc_selection']=decision
+            population=decision.get('population') or population
+        if context is not None and scientific_contract(args).effects.get('graph_storage')=='preserve':
+            context.validate_anchors()
+            for proof in context.proofs.values():
+                prior=proof.result_metadata
+                if (proof.kind in ('native_snapatac2_matrix','native_scanpy_matrix','native_episcanpy_matrix')
+                        and prior.get('matrix_path')==source['path'] and prior.get('matrix_sha256')==source['sha256']):
+                    if graphs:=prior.get('parameters',{}).get('graph_inputs'):
+                        from agent.schemas.orchestration import _serialize
+                        summary['parameters']['graph_inputs']=_serialize(graphs)
+                    population=accepted_qc_population(prior.get('parameters',{})) or population
+                    break
+        if population is not None:summary['parameters']['qc_population']=population
         if name == 'pp.make_gene_matrix':
             from .native_gene_activity import publish_description
             publish_description(stage / payload, args, receipt, summary, source)
-        if args.get('qc_thresholds') is not None:
-            summary['parameters']['qc_thresholds'] = args['qc_thresholds']
+        if active_qc(args)=='otsu':
+            summary['parameters']['qc_thresholds'] = 'otsu'
             if 'threshold_selection' in receipt:
                 summary['parameters']['threshold_selection'] = receipt['threshold_selection']
             summary['parameters']['omitted_optional_arguments'] = 'native defaults except recorded Agent choices'
@@ -248,6 +465,8 @@ def execute(owner, args, execution_identity):
             summary['parameters']['population'] = dict(stage='native_import', retained_barcodes=len(cells),
                 min_num_fragments=receipt['effective_parameters']['min_num_fragments'],
                 pre_import_barcode_count=None, reason='Native import retention; Agent did not separately count the source barcode population')
+            if args.get('whitelist_path') is not None or kwargs.get('whitelist') is not None:
+                summary['parameters']['qc_population']='restricted_population'
         elif name in ('pp.filter_cells', 'pp.call_cells'):
             summary['parameters']['population'] = dict(stage='native_cell_filter' if name == 'pp.filter_cells' else 'native_ordmag_cell_call', input_barcodes=len(before[0]),
                 selected_barcodes=len(cells) if kwargs.get('inplace', True) else receipt['selected_count'],

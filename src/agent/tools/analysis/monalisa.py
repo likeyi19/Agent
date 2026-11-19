@@ -180,3 +180,13 @@ def prepare_operation(arguments, context):
     if needs:
         raise ScientificInputRequired(*needs, bindings=arguments)
     return arguments
+
+
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    dataset={'format':'h5ad'}
+    if arguments.get('bin_key') and not arguments.get('bins_path'):
+        dataset['var.'+arguments['bin_key']]=True
+    return ScientificContract(inputs={'dataset':dataset},
+        parameters={'bins':('var[bin_key]','bins'), 'resources':('assembly_matched_genome','compatible_motif_collection')},
+        outputs={'table':{'table_format':'TSV','measurement':'native_motif_bin_enrichment'}})

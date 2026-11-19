@@ -248,3 +248,11 @@ def prepare_operation(arguments, context):
     try:parameters(values,model['conditions'])
     except ValueError as exc:raise ScientificDiagnostic('SEQUENCE_PARAMETERS_INVALID',str(exc)) from exc
     return values
+
+
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(parameters={'source_alternatives':('literal','fasta','qualified_intervals')},
+        outputs={'sequences':{'sequence_origin':'model_candidate'},
+                 'design':{'scores':'model_predictions_not_biological_validation'}},
+        effects={'starting_source_mutation':False})

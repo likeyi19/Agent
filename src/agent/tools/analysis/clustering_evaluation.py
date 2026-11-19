@@ -603,3 +603,11 @@ __all__ = [
     "CellClusteringEvaluationToolResult",
     "evaluate_cell_clustering",
 ]
+
+
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(parameters={'fields':{'analysis':'obs[cluster_key]',
+                               'ground_truth_dataset':'obs[label_key]'},'axes':'matched_ordered_observations'},
+        outputs={'clustering_evaluation':{'measurement':'external_partition_agreement'}},
+        effects={'source_mutation':False})

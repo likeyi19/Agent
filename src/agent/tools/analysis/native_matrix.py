@@ -71,7 +71,7 @@ LIMITATIONS = ('Independent native invocation, not a completed analysis workflow
 class NativeInvocationError(ValueError):
     """The native package failed on the unchanged invocation."""
     def __init__(self, message, *, code='NATIVE_FUNCTION_REJECTED'):
-        if code not in {'NATIVE_FUNCTION_REJECTED', 'NATIVE_CLUSTER_COUNT_REQUIRED'}:
+        if code not in {'NATIVE_FUNCTION_REJECTED', 'NATIVE_CLUSTER_COUNT_REQUIRED','NATIVE_ASW_UNAVAILABLE'}:
             raise ValueError('Unknown native invocation error code')
         self.code = code
         super().__init__(message)
@@ -93,8 +93,9 @@ def declarations(handle, args):
         if key in uns and isinstance(value := read_elem(uns[key]), str):
             recorded[key] = value
     effective['_source_declarations'] = recorded
-    if slot == 'X' and 'matrix_semantics' in recorded:
-        effective['matrix_semantics'] = recorded['matrix_semantics']
+    measurement=peak_h5ad.matrix_measurement(handle,slot.replace('/','.'))
+    if measurement is not None:
+        effective['matrix_semantics']=measurement
     effective['count_slot'] = slot
     return effective
 
@@ -264,49 +265,168 @@ class MatrixPackage:
         return dict(contents,representations=reps,graphs=tuple(graphs),root=valid_root,observed=True)
 
     def scientific_contract(self, arguments):
+        from dataclasses import replace
+        from functools import partial
+        from agent.orchestration.scientific_inputs import ScientificContract, ScientificDiagnostic
         from . import snapatac_raw
+        from .cell_result import count_measurement, grouping_key, matrix_transform, representation_key
+        from .native_clustering import selection_contract
         function=arguments.get('function_name');kwargs=arguments.get('kwargs',{})
+        if function not in self.FUNCTIONS:
+            return ScientificContract()
+        resolver=partial(self._inherited_output_properties,arguments)
         if self.package=='snapatac2' and function in snapatac_raw.FUNCTIONS:
-            return snapatac_raw.scientific_contract(arguments)
-        # Representation/graph consumers can legitimately consume compact H5AD
-        # without X (including EpiZoo). Only matrix operations require X here;
-        # explicitly selected layers are validated by the native input adapter.
+            return replace(snapatac_raw.scientific_contract(arguments),resolve_output=resolver)
         matrix_functions={'pp.pca','tl.pca','pp.log1p','pp.scale','pp.normalize_total',
             'pp.calculate_qc_metrics','pp.highly_variable_genes','pp.select_features',
-            'pp.filter_features','pp.binarize','pp.tfidf','tl.spectral',
+            'pp.filter_features','pp.binarize','pp.tfidf','tl.spectral','tl.diff_test',
             'RunTFIDF','FindTopFeatures','RunSVD','BinarizeCounts','corSparse','Jaccard'}
+        dataset={'format':'h5ad'};parameters={};effects={};output={'format':'h5ad'}
+        native_rep=kwargs.get('use_rep',arguments.get('use_rep'))
+        snap_obsm=self.package=='snapatac2' and function in ('pp.knn','tl.umap','tl.dbscan','pp.mnc_correct')
+        if function in matrix_functions:
+            target=self._matrix_slot(arguments.get('count_slot','X'))
+            if kwargs.get('layer'):target='layers.'+kwargs['layer']
+            elif kwargs.get('obsm'):target='obsm.'+kwargs['obsm']
+            elif kwargs.get('use_raw'):target='raw.X'
+            dataset[target]=True
+        if self.package in ('scanpy','episcanpy') and function in ('pp.neighbors','tl.tsne') and native_rep is None:
+            slot=self._matrix_slot(arguments.get('count_slot','X'))
+            dataset[('scanpy_auto_rep' if kwargs.get('n_pcs')!=0 else 'scanpy_x_rep') if slot=='x' else slot]=True
+        if self.package in ('scanpy','episcanpy') and native_rep=='X':
+            slot=self._matrix_slot(arguments.get('count_slot','X'))
+            dataset['scanpy_x_rep' if slot=='x' else slot]=True
+        if arguments.get('count_slot','X')!='X':dataset[self._matrix_slot(arguments['count_slot'])]=True
+        if function=='tl.spectral':
+            features=kwargs.get('features','selected')
+            parameters['features']={'default':'selected','string_axis':'var','null':'all_features'}
+            if isinstance(features,str):dataset['var.'+features]='boolean'
         representation=kwargs.get('use_rep',arguments.get('use_rep'))
-        matrix_input=function in matrix_functions or representation=='X'
-        requires={}
-        if matrix_input and arguments.get('count_slot','X')=='X' and not any(kwargs.get(k) for k in ('layer','obsm','use_raw')):
-            requires['dataset']=('x',)
-        if self.package=='Signac' and function in ('corSparse','Jaccard') and arguments.get('second_count_slot','X')=='X':
-            requires['second']=('x',)
-        return dict(requires=requires) if requires else {}
+        if self.package=='episcanpy' and function in ('tl.kmeans','tl.hc'):representation='X_pca'
+        if self.package=='snapatac2' and function in ('pp.knn','tl.umap','tl.dbscan') and representation is None:
+            representation='X_spectral'
+            parameters['use_rep']={'default':representation,'string_axis':'obsm'}
+        if isinstance(representation,str) and (representation!='X' or snap_obsm):dataset['obsm.'+representation]=True
+        if self.package in ('scanpy','episcanpy') and function in ('tl.leiden','tl.louvain','tl.umap','tl.dpt','tl.diffmap','tl.paga'):
+            if kwargs.get('obsp') is not None and kwargs.get('neighbors_key') is not None:
+                raise ScientificDiagnostic('NATIVE_GRAPH_SELECTOR_CONFLICT','Select either obsp or neighbors_key, not both.')
+            if kwargs.get('obsp'):
+                dataset['obsp.'+kwargs['obsp']]=True
+            else:
+                role='distances' if function=='tl.paga' and kwargs.get('model','v1.2')=='v1.2' else 'connectivities'
+                dataset['graph.scanpy_'+role+'.'+(kwargs.get('neighbors_key') or 'neighbors')]=True
+            if 'obsp' in self.FUNCTIONS[function]:parameters['adjacency']={'alternatives':('obsp[kwargs.obsp]','graph[kwargs.neighbors_key]')}
+        if self.package=='snapatac2' and function=='tl.leiden':dataset['graph.snapatac2_distances']=True
+        changed_cells=arguments.get('cell_subset') is not None or arguments.get('input_orientation')=='features_by_cells'
+        if changed_cells:
+            invalidated=tuple(name for name in dataset if name.startswith(('graph.','obsp.')) or
+                arguments.get('input_orientation')=='features_by_cells' and name.startswith('obsm.'))
+            if invalidated:parameters['invalidated_input_properties']={'dataset':invalidated}
+        if function=='tl.dpt':parameters['root']={'alternatives':('root_cell','uns.iroot'),'diffmap':'native_if_missing'}
+        if self.package=='episcanpy' and function=='pp.lsi':
+            layer=kwargs.get('tf_idf_layer','tf-idf')
+            parameters['tf_idf_layer']={'default':'tf-idf','string_axis':'layers'}
+            if not isinstance(layer,str) or not layer:
+                raise ScientificDiagnostic('NATIVE_TFIDF_LAYER_REQUIRED','Supply the exact nonempty TF-IDF layer key.')
+            dataset['layers.'+layer]=True
+        if self.package=='episcanpy' and function=='tl.geneactivity':
+            dataset[self._matrix_slot(arguments.get('count_slot','X'))]=True
+            parameters['resources']=('gene_anno',)
+            effects['feature_axis']='replace'
+            output.update(x=True,measurement='episcanpy_gene_domain_sum')
+        if self.package=='episcanpy' and function=='tl.rank_features':
+            parameters['method_attribution']='wrapper_may_replace_requested_statistic; publication_reports_native_result'
+            if kwargs.get('method','')!='':dataset['uns.omic']=True
+        requires={'dataset':dataset}
+        if self.package=='Signac' and function in ('corSparse','Jaccard'):
+            requires['second']={'format':'h5ad', self._matrix_slot(arguments.get('second_count_slot','X')):True}
+            if function=='Jaccard':parameters['required_ports']=('second',)
+            output['uns.Signac_pairwise' if function=='Jaccard' or arguments.get('second_path') is not None else 'obsp.Signac_corSparse']=True
+        if self.package=='Signac' and function=='FindTopFeatures':
+            output.update(dict.fromkeys(('var.Signac_count','var.Signac_percentile','var.Signac_native_rank'),True))
+        if self.package=='Signac' and function=='RunSVD':output.update({'varm.LSI':True,'uns.Signac_svd':True})
+        inplace=kwargs.get('inplace',True) is not False
+        if inplace:
+            if rep:=representation_key(self.package,function,kwargs):output['obsm.'+rep]=True
+            if group:=grouping_key(self.package,function,kwargs):output['obs.'+group]=True
+            if function=='pp.select_features':output['var.selected']='boolean'
+            if function=='pp.tfidf':output['layers.'+kwargs.get('layer_tfidf_key','tf-idf')]=True
+            if function=='pp.neighbors':
+                key=kwargs.get('key_added')
+                for role in ('connectivities','distances'):
+                    slot=((key+'_') if key else '')+role
+                    if key!='neighbors':
+                        output['graph.scanpy_'+role+'.'+(key or 'neighbors')]=True
+                        output['graph_slot.scanpy_'+role+'.'+(key or 'neighbors')]=slot
+                    output['obsp.'+slot]=True
+                if key is None:output['graph.snapatac2_distances']=False
+            if function=='pp.knn':output.update({'obsp.distances':True,'graph.snapatac2_distances':True,
+                                                'graph.scanpy_distances.neighbors':False})
+        else:effects['independent_return']=True
+        if arguments.get('cell_subset') is not None:effects['cell_axis']='subset'
+        if arguments.get('input_orientation')=='features_by_cells':effects['axes']='transpose'
+        if arguments.get('count_slot','X')!='X':effects['x_from']=self._matrix_slot(arguments['count_slot'])
+        target, measurement=matrix_transform(self.package,function,kwargs)
+        if function=='pp.tfidf':
+            effects['measurement_change']={'layers.'+kwargs.get('layer_tfidf_key','tf-idf'):'episcanpy_tfidf'}
+        if target is not None:
+            effects['measurement_change']={target:measurement}
+            if function=='pp.normalize_total' and isinstance(kwargs.get('layers'),(list,tuple)):
+                effects['measurement_change'].update({'layers.'+name:measurement for name in kwargs['layers']})
+            if function=='pp.normalize_total' and kwargs.get('layers')=='all':
+                effects['all_layer_measurements']=measurement
+            if target=='X':output.update(x=True,measurement=measurement)
+        for slot, measurement in effects.get('measurement_change', {}).items():
+            if not slot.startswith('obsm.'):
+                output['measurement.'+slot]=measurement
+                if (counts:=count_measurement(measurement)) is not None:
+                    output['count_values.'+slot]=counts
+        return ScientificContract(inputs=requires,parameters=parameters,outputs={'dataset':output},effects=effects,
+                                  selection=selection_contract(self.package,function),resolve_output=resolver)
 
-    def planned_output_properties(self, arguments, port, context, *, seen=()):
+    @staticmethod
+    def _matrix_slot(slot):
+        return 'x' if slot=='X' else 'layers.'+slot.removeprefix('layers/')
+
+    def _inherited_output_properties(self, arguments, port, context, *, seen=(), names=()):
         if port not in ('dataset','fragments'):
             return {}
         function=arguments.get('function_name');kwargs=arguments.get('kwargs',{})
-        from .cell_result import grouping_key, planned_count_preservation, representation_key
+        from .cell_result import grouping_key, matrix_transform, planned_count_preservation, representation_key
         from .snapatac_raw import FUNCTIONS as RAW_FUNCTIONS
+        source=arguments.get('input_path')
+        requested=tuple(name for name in names if '.' in name or name in ('scanpy_auto_rep','scanpy_x_rep'))
         if self.package=='snapatac2' and function in RAW_FUNCTIONS:
-            from .snapatac_raw import scientific_contract
             inherited=(self.input_properties(arguments,context,seen=seen)
                 if function not in ('pp.make_fragment_file','pp.import_fragments') else
-                context.planned(arguments.get('input_path'),seen=seen))
+                context.planned(source,seen=seen))
             props=dict(inherited) if function not in ('pp.make_fragment_file','pp.import_fragments') else {}
             if inherited.get('source_reference'):props['source_reference']=inherited['source_reference']
-            props.update(scientific_contract(arguments).get('produces',{}).get(port,{}))
+            if function not in ('pp.make_fragment_file','pp.import_fragments'):
+                if function in ('pp.add_tile_matrix','pp.make_peak_matrix','pp.make_gene_matrix'):
+                    requested=tuple(key for key in requested if not key.startswith(('var.','layers.','measurement.','count_values.')))
+                    if not kwargs.get('inplace',function=='pp.add_tile_matrix'):
+                        requested=tuple(key for key in requested if key.startswith('obs.'))
+                if kwargs.get('inplace',True) and function in ('pp.filter_cells','pp.call_cells'):
+                    requested=tuple(key for key in requested if not key.startswith(('graph.','graph_slot.')))
+                    props={key:value for key,value in props.items() if not key.startswith(('graph.','graph_slot.'))}
+                if requested:props.update(context.properties(source,requested,seen=seen))
             if function in ('pp.add_tile_matrix','pp.make_peak_matrix','pp.make_gene_matrix'):
                 from .snapatac_raw_worker import peak_measurement
                 storage='X_region_aggregation' if kwargs.get('use_x') else inherited.get('storage_kind')
+                props.pop('measurement',None)
                 if storage is not None:
-                    measurement=peak_measurement(storage,props['counting_strategy'])
+                    strategy=kwargs.get('counting_strategy',arguments.get('counting_strategy','paired-insertion'))
+                    measurement=peak_measurement(storage,strategy)
                     if function=='pp.make_gene_matrix':
                         measurement='snapatac2_gene_region_sum' if kwargs.get('use_x') else 'snapatac2_gene_'+measurement
-                    props['measurement']=measurement
-                if not kwargs.get('inplace',function=='pp.add_tile_matrix'):props.pop('storage_kind',None)
+                    from .cell_result import count_measurement
+                    props['measurement']=props['measurement.X']=measurement
+                    if (counts:=count_measurement(measurement)) is not None:props['count_values.X']=counts
+                if not kwargs.get('inplace',function=='pp.add_tile_matrix'):
+                    props={name:value for name,value in props.items()
+                           if name!='storage_kind' and not name.startswith(('obsm.','obsp.','graph.','uns.','var.','varm.','layers.',
+                                                                           'count_values.layers.','measurement.layers.','regions.'))}
             props.pop('observed',None)
             return props
         inherited=self.input_properties(arguments,context,seen=seen)
@@ -319,7 +439,35 @@ class MatrixPackage:
         props=dict(inherited) if retains_slots else {}
         # read_native presents an explicitly selected layer as native X. This
         # is a source selection, not an inferred or reconstructed measurement.
-        if arguments.get('count_slot','X')!='X':props['x']=True
+        if function=='tl.geneactivity':
+            props={name:value for name,value in props.items() if not name.startswith(('layers.','var.','varm.'))}
+            requested=tuple(name for name in requested if not name.startswith(('layers.','var.','varm.','count_values.layers.','measurement.layers.')))
+        if retains_slots and requested:props.update(context.properties(source,requested,seen=seen))
+        if function=='pp.knn' and kwargs.get('inplace',True):
+            selectors=tuple(name for name in requested if name.startswith('graph.scanpy_'))
+            slots=tuple('graph_slot.'+name.partition('.')[2] for name in selectors)
+            resolved=context.properties(source,slots,seen=seen)
+            for name, slot in zip(selectors,slots):
+                if resolved.get(slot)=='distances':props[name]=False
+        if function=='pp.normalize_total' and kwargs.get('layers')=='all':
+            _, measurement=matrix_transform(self.package,function,kwargs)
+            if measurement is not None:
+                for name in requested:
+                    if name.startswith('measurement.layers.'):props[name]=measurement
+                    if name.startswith('count_values.layers.'):props[name]=False
+        if arguments.get('count_slot','X')!='X':
+            props.pop('measurement',None)
+            slot=self._matrix_slot(arguments['count_slot'])
+            props.pop('x',None)
+            props.pop('count_values.X',None)
+            props.pop('measurement.X',None)
+            selected=context.properties(source,(slot,'measurement.'+slot,'count_values.'+slot),seen=seen)
+            if slot in selected:
+                props['x']=selected[slot]
+                if selected[slot]:props.update(scanpy_auto_rep=True,scanpy_x_rep=True)
+            if 'measurement.'+slot in selected:
+                props['measurement']=props['measurement.X']=selected['measurement.'+slot]
+            if 'count_values.'+slot in selected:props['count_values.X']=selected['count_values.'+slot]
         props.pop('observed',None)
         props.pop('produced_representation',None)
         if inherited.get('source_reference'):
@@ -351,25 +499,30 @@ class MatrixPackage:
                 'Parameter selection applies only to the six adapted native clustering functions.')
         if arguments.get('root_cell') is not None and function!='tl.dpt':
             raise ScientificDiagnostic('NATIVE_ROOT_NOT_APPLICABLE','root_cell applies only to DPT.')
-        if self.package not in ('scanpy','episcanpy','snapatac2') or function is None or 'input_path' not in arguments:
+        if function is None or 'input_path' not in arguments:
+            return arguments
+        if self.package=='Signac':
             return arguments
         from .snapatac_raw import FUNCTIONS as RAW_FUNCTIONS
         if self.package=='snapatac2' and function in RAW_FUNCTIONS:
             from .snapatac_raw import prepare_operation
             return prepare_operation(arguments,context)
-        props=self.input_properties(arguments,context)
-        representations=props.get('representations',())
-        rep=kwargs.get('use_rep',arguments.get('use_rep'))
-        if self.package=='episcanpy' and function in ('tl.kmeans','tl.hc'):rep='X_pca'
-        if self.package=='snapatac2' and function in ('pp.knn','tl.umap','tl.dbscan') and rep is None:rep='X_spectral'
-        if rep is not None and rep!='X' and rep not in representations:
-            raise ScientificDiagnostic('NATIVE_REPRESENTATION_REQUIRED','The selected native function requires the existing or planned representation '+str(rep)+'. Include its native producer or supply a compatible input.')
-        graph=None
-        if self.package in ('scanpy','episcanpy') and function in ('tl.leiden','tl.louvain','tl.umap','tl.dpt','tl.diffmap','tl.paga') and not kwargs.get('obsp'):
-            graph='scanpy:'+kwargs.get('neighbors_key','neighbors')
-        if self.package=='snapatac2' and function=='tl.leiden':graph='snapatac2:distances'
-        if graph is not None and graph not in props.get('graphs',()):
-            raise ScientificDiagnostic('NATIVE_GRAPH_REQUIRED','The selected native function requires a compatible existing or planned '+graph+' graph. Include its native neighbors producer or supply that graph; no package graph is substituted.')
+        if arguments.get('require_asw') and arguments.get('parameter_selection')=='asw':
+            policy=self.scientific_contract(arguments).selection.get('asw',{})
+            if policy.get('parameter')=='resolution' and 'resolution' not in kwargs:
+                value=arguments.get('input_path')
+                source=context.existing(value)
+                if source is not None:
+                    from .native_clustering import matching_graphs
+                    if self.package=='snapatac2':
+                        slot='distances'
+                    else:
+                        key='graph_slot.scanpy_connectivities.'+(kwargs.get('neighbors_key') or 'neighbors')
+                        slot=kwargs.get('obsp') or context.properties(value,(key,)).get(key)
+                    records=matching_graphs(self.package,slot,source.graph_inputs)
+                    if len(records)!=1 or records[0].get('representation_qualified') is False:
+                        raise ScientificDiagnostic('ASW_GRAPH_PREREQUISITE',
+                            'Requested ASW needs exact graph-to-representation provenance; select a verified native neighbor result.')
         metadata=self.parameter_metadata(function)
         missing=[name for name in self.FUNCTIONS.get(function,()) if metadata.get(name,{}).get('required') and name not in kwargs]
         # The authorized ASW adapter resolves these native count operands after
@@ -399,7 +552,7 @@ class MatrixPackage:
                     ids=selected_root_axis(observed.path,arguments)
                     if ids.count(arguments['root_cell'])!=1:
                         raise ScientificDiagnostic('NATIVE_ROOT_INVALID','DPT root_cell must identify one observation in the selected input population.')
-            elif not props.get('root'):
+            elif not self.input_properties(arguments,context).get('root'):
                 raise ScientificInputRequired(*parameter_requirements(context.tool,('root_cell',)),bindings=arguments)
         return arguments
 
@@ -478,10 +631,11 @@ class MatrixPackage:
             kwargs.setdefault('use_rep', args['use_rep'])
         if self.package == 'snapatac2':
             from . import snapatac_raw as raw
-            if args.get('qc_thresholds') is not None:
-                if args['qc_thresholds'] != 'otsu' or function not in ('pp.import_fragments', 'pp.filter_cells'):
+            qc=raw.active_qc(args)
+            if qc is not None:
+                if qc not in ('otsu','native_defaults') or function not in ('pp.import_fragments', 'pp.filter_cells'):
                     raise ValueError('Otsu threshold selection applies only to uncalled import or native filtering')
-                if function == 'pp.import_fragments':
+                if qc=='otsu' and function == 'pp.import_fragments':
                     kwargs = dict(kwargs)
                     kwargs.setdefault('min_num_fragments', 0)
             if args.get('counting_strategy') is not None:
@@ -571,7 +725,8 @@ class MatrixPackage:
             request['activity_inputs'] = {k: args[k] for k in ('species', 'assembly', 'count_slot', 'matrix_semantics') if k in args}
         if not raw_call and not is_r:
             source = file_closure([args['input_path']])[0]
-            request.update(source_sha256=source['sha256'], parameter_selection=args.get('parameter_selection'))
+            request.update(source_sha256=source['sha256'], parameter_selection=args.get('parameter_selection'),
+                           require_asw=args.get('require_asw',False),parameter_origin=args.get('parameter_origin'))
             context = current()
             if context is not None:
                 context.validate_anchors()
@@ -604,9 +759,10 @@ class MatrixPackage:
             if args.get('cell_subset') is not None or args.get('input_orientation') == 'features_by_cells':
                 request['graph_inputs'] = []
         if raw_call:
+            from .snapatac_raw import active_qc
             request['raw_inputs'] = {key: args[key] for key in ('input_path', 'matrix_semantics', 'species', 'assembly',
-                'qc_thresholds',
                 *(record[0] for record in raw.PORTS.values())) if key in args}
+            if qc:=active_qc(args):request['raw_inputs']['qc_thresholds']=qc
         request_sha = write(stage / 'request.json', request)
         if is_r:
             mmwrite(stage / 'input.mtx', sparse.csc_matrix(matrix.X.T))
@@ -627,6 +783,10 @@ class MatrixPackage:
                 # Diagnostics survive staging cleanup, but confer no result authority.
                 write(stage.parent / 'native-error.json', dict(error, source_sha256=source['sha256']))
                 raise NativeInvocationError(message, code='NATIVE_CLUSTER_COUNT_REQUIRED')
+            if (error.get('type')=='ExplicitASWUnavailable' and args.get('require_asw')
+                    and args.get('parameter_selection')=='asw' and error.get('request_sha256')==request_sha):
+                write(stage.parent / 'native-error.json', dict(error, source_sha256=source['sha256']))
+                raise NativeInvocationError(message,code='NATIVE_ASW_UNAVAILABLE')
             raise NativeInvocationError(message)
         # Preserve warnings/progress privately; logs confer no publication authority.
         shutil.copyfile(stage / 'native.log', stage.parent / 'native.log')
@@ -772,9 +932,11 @@ class MatrixPackage:
                 summary['parameters']['result_shapes'] = receipt.get('result_shapes', {})
             if 'input_adaptation' in receipt:
                 summary['parameters']['input_adaptation'] = receipt['input_adaptation']
-            for key in ('graph_inputs', 'parameter_selection'):
+            for key in ('graph_inputs', 'parameter_selection','native_method_attribution'):
                 if key in receipt:
                     summary['parameters'][key] = receipt[key]
+            if receipt.get('native_method_attribution',{}).get('conflict'):
+                summary['limitations'] += ' The installed epiScanpy wrapper replaced the requested ranking method; see native_method_attribution.'
             if '_cell_subset' in effective:
                 summary['parameters']['cell_subset'] = effective['_cell_subset']
             if '_grouping_projection' in effective:
@@ -819,7 +981,8 @@ class MatrixPackage:
         return self.verify_publication(path, expected_sha256=sha)
 
     def invoke(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, use_rep=None, parameter_selection=None, root_cell=None,
-               gene_activity=None, cell_subset=None, input_orientation=None, grouping_path=None, group_column=None):
+               gene_activity=None, cell_subset=None, input_orientation=None, grouping_path=None, group_column=None, require_asw=None,
+               parameter_origin=None):
         return self.execute({k: v for k, v in locals().items() if k != "self" and v is not None})
 
     def invoke_signac(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, matrix_semantics=None, second_path=None, second_sha256=None, second_count_slot=None):
@@ -827,14 +990,16 @@ class MatrixPackage:
 
     def invoke_episcanpy(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None,
                          matrix_semantics=None, use_rep=None, parameter_selection=None, root_cell=None, gene_anno_path=None,
-                         gene_anno_sha256=None, species=None, assembly=None, gene_activity=None, cell_subset=None, input_orientation=None):
+                         gene_anno_sha256=None, species=None, assembly=None, gene_activity=None, cell_subset=None, input_orientation=None, require_asw=None,
+                         parameter_origin=None):
         return self.execute({k: v for k, v in locals().items() if k != 'self' and v is not None})
 
     def invoke_snapatac2(self, input_path, output_dir, function_name, kwargs=None, input_sha256=None, count_slot=None, use_rep=None,
                         matrix_semantics=None, chrom_sizes_path=None, chrom_sizes_sha256=None, gene_anno_path=None,
                         gene_anno_sha256=None, peaks_path=None, peaks_sha256=None, whitelist_path=None,
                         whitelist_sha256=None, species=None, assembly=None, fragment_order=None, counting_strategy=None,
-                        qc_thresholds=None, parameter_selection=None, gene_activity=None, cell_subset=None, input_orientation=None):
+                        qc_thresholds=None, parameter_selection=None, gene_activity=None, cell_subset=None, input_orientation=None, require_asw=None,
+                        qc_population=None,qc_selection=None,parameter_origin=None):
         return self.execute({k: v for k, v in locals().items() if k != 'self' and v is not None})
 
 
@@ -1021,7 +1186,7 @@ SCANPY = MatrixPackage('scanpy', '1.9.8', 'episcanpy-0.4.0', {
     'tl.diffmap': ('n_comps', 'neighbors_key', 'random_state', 'copy'),
     'pp.scale': ('zero_center', 'max_value', 'copy', 'layer', 'obsm'),
     'pp.calculate_qc_metrics': ('expr_type', 'var_type', 'qc_vars', 'percent_top', 'layer', 'use_raw', 'inplace', 'log1p', 'parallel'),
-    'pp.normalize_total': ('target_sum', 'exclude_highly_expressed', 'max_fraction', 'key_added', 'layer', 'layers', 'layer_norm', 'inplace', 'copy'),
+    'pp.normalize_total': ('target_sum', 'exclude_highly_expressed', 'max_fraction', 'key_added', 'layer', 'inplace', 'copy'),
     'pp.log1p': ('base', 'copy', 'chunked', 'chunk_size', 'layer', 'obsm'),
     'pp.highly_variable_genes': ('layer', 'n_top_genes', 'min_disp', 'max_disp', 'min_mean', 'max_mean', 'span', 'n_bins', 'flavor', 'subset', 'inplace', 'batch_key', 'check_values'),
     'pp.pca': ('n_comps', 'zero_center', 'svd_solver', 'random_state', 'return_info', 'use_highly_variable', 'dtype', 'copy', 'chunked', 'chunk_size'),

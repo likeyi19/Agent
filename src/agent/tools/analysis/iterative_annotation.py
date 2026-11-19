@@ -109,6 +109,8 @@ def coordinate(arguments, execution_identity):
             native_args = dict(native_args)
             for name, value in changes.items():
                 native_args[name] = dict(native_args.get(name,{}), **value) if name=='kwargs' else value
+            if 'parameter_selection' in changes:
+                native_args['require_asw']=changes['parameter_selection']=='asw'
             applied.add(key)
         if differential_child is not None:
             preparation_started = perf_counter()
@@ -212,6 +214,7 @@ def coordinate(arguments, execution_identity):
                 native_args['cell_subset'] = dict(groupby=column, groups=[branch['cluster']])
             if i == 3:
                 native_args['parameter_selection'] = args.get('parameter_selection', 'asw')
+                if args.get('parameter_selection')=='asw':native_args['require_asw']=True
             previous, local_native = invoke(branch['branch_id'], function, 'run_snapatac2', native_args,
                 parent_inputs={'input_path': 'input_path'} if previous is None else None)
             local.append(previous)

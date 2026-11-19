@@ -91,7 +91,7 @@ def test_human_choice_recompiles_the_captured_graph_without_interpretation_or_pl
         planning_model_factory_registry=PlanningModelFactoryRegistry({"scripted": lambda _: Model()}))
     app.create_session("session")
     bam = tmp_path / "input.bam"
-    bam.write_bytes(b"Opaque registration fixture; never consumed by native science")
+    bam.write_bytes(b"BAM\x01")
     record = app.resources.register("bam", bam, input_type="attachment", session_id="session",
                                     label="Input BAM", attribution="Offline test")
     binding = app.resources.compose_group([record.resource_id], attachment_candidates=True)

@@ -63,7 +63,7 @@ def annotation_tool_spec():
     optional['previous_annotation_path'] = arg((str, Path), 'Exact selected accepted annotation for dependency-checked result editing.', source=S.REQUEST_INPUT_OR_UPSTREAM_RESULT)
     ports = [Consumer('source', (member('dataset','input_path'),), True,
         request_sources=(request('input_path', rm('dataset','input_path')),),
-        accepted_upstream_types=('raw_scatac_dataset.v1','scatac_matrix_h5ad.v1','hierarchical_annotation_h5ad.v1','native_matrix_h5ad.v1'),required_properties=('x',))]
+        accepted_upstream_types=('raw_scatac_dataset.v1','scatac_matrix_h5ad.v1','hierarchical_annotation_h5ad.v1','native_matrix_h5ad.v1'))]
     for name in ('grouping', 'activity', 'activity_source'):
         ports.append(Consumer('groups' if name=='grouping' else name, (member('dataset',name+'_path'),), False,
             request_sources=(request(name+'_path',rm('dataset',name+'_path')),),
@@ -81,7 +81,7 @@ def annotation_tool_spec():
             planning_fields={k:_planning_result('Accepted hierarchical annotation and complete evidence.',
                 bindable=True,artifact=A.RAW_SCATAC if k=='annotated_h5ad_path' else A.SCATAC_CELL_TYPE_ANNOTATION)
                 for k in owner.RESULT_FIELDS if k.endswith(('_path','_sha256'))}),
-        classify, preparation_owner=prepare_operation, source_encodings={'source':('h5ad',),'groups':('tsv',)}, source_input_types={'source':('h5ad',), 'groups':('groups',)}, recovery_policy_version='hierarchical-annotation-v1',
+        classify, scientific_contract=owner.scientific_contract, preparation_owner=prepare_operation, source_encodings={'source':('h5ad',),'groups':('tsv',)}, source_input_types={'source':('h5ad',), 'groups':('groups',)}, recovery_policy_version='hierarchical-annotation-v1',
         durable_hooks=DurableToolHooks(coordinator.coordinate, owner.recover),
         scientific_authority=ScientificAuthorityHooks(owner.KIND, ('dataset','annotation'), pub.describe,
             pub.publication_record, pub.reuse_result, pub.proof_metadata),
@@ -103,7 +103,7 @@ def annotation_tool_spec():
             'native fragment/insertion storage. An explicit use_x=True setting enables that SnapATAC2 X route.',
             'Deterministic iteration uses native Scanpy Wilcoxon/BH, CellMarker exact matching, SciPy hypergeometric ORA/BH, '
             'local peak-space SnapATAC2 feature selection/Spectral/KNN/Leiden with bounded ASW and native child-versus-rest differential peaks. '
-            'Default maximum five levels. No per-iteration model planning.',
+            'No per-iteration model planning.',
             'UMAP is optional: reuse accepted coordinates without refitting. '
             'Labels are computational candidates, not biological validation.', capability_ids=('marker_annotation',)),
         application_inputs=frozenset({'cellmarker_id','cellmarker_identity','operation_overrides','previous_annotation_path',

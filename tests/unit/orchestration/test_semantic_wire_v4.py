@@ -878,7 +878,8 @@ def test_schema_correlates_every_source_kind_with_selected_tool_ports(registry) 
     for name, target in targets.items():
         assert set(target['enum']) <= expected[name]
         assert not _accepts_target(target, 'invented')
-    assert 'qc_thresholds' in targets['run_snapatac2']['enum']
+    assert 'qc_thresholds' not in targets['run_snapatac2']['enum']
+    assert 'qc_selection' not in targets['run_snapatac2']['enum']
     assert 'pca_embed_cells' not in targets
 
 

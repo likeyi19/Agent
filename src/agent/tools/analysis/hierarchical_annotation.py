@@ -586,3 +586,6 @@ def presentation_data(path, sha, *, level=None):
                       for row in branch_views if row['branch_id'] in group_order},
         branches=branch_views[:60],
         branches_omitted=max(0,len(hierarchy['branches'])-60))
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(inputs={'source':{'x':True}})

@@ -387,7 +387,7 @@ def run_case(root, package, function, source=None, representation=None, umap=Fal
         assert [s.step_id for s in later.steps] == (['clusters', 'umap'] if umap else ['clusters'])
         assert isinstance(later.plan.steps[0].arguments['input_path'], PriorOutputRef)
         edited = later.steps[0].result['parameters']['parameter_selection']
-        assert edited['origin'] == 'explicit' and not edited['candidates']
+        assert edited['origin'] == ('explicit' if parameter in change else 'retained_fitted') and not edited['candidates']
         assert edited['selected_value'] == change.get(parameter, selection['selected_value'])
         edit_evidence.append(_serialize(edited))
     artifact = next(a for a in app.scientific_artifact_handles('asw', revision.revision_id) if a.filename.endswith('.h5ad'))
@@ -530,6 +530,7 @@ def test_repeated_clustering_edit_targets_exact_step_and_pins_descendant_value(t
     assert later.steps[0].result['parameters']['effective_native_parameters']['resolution']==1.7
     assert later.steps[1].result['parameters']['effective_native_parameters']['resolution']==effective['clusters']
     assert all(not s.result['parameters']['parameter_selection']['candidates'] for s in later.steps)
+    assert later.steps[1].result['parameters']['parameter_selection']['origin']=='retained_fitted'
     defaults=app.submit_turn('asw','defaults','',expected_generation=2,rerun_revision_id=revision.revision_id,
         parameter_overrides=[dict(tool='run_scanpy',native_function='tl.leiden',step_id='previous',
                                   argument='parameter_selection',value='native_defaults')])
@@ -581,6 +582,41 @@ def test_unqualified_or_sparse_precomputed_graph_does_not_invent_distances():
     _, evidence=asw.invoke(native,a,'scanpy','tl.leiden',{},'asw',[record])
     assert calls==[1] and evidence['status']=='unavailable' and evidence['sample_count']==0
     assert not evidence['candidates'] and 'complete pairwise' in evidence['reason']
+
+
+def test_explicit_asw_cannot_fall_back_and_explicit_operand_still_wins():
+    a=fixture_data(12)
+    calls=[]
+    def native(a,resolution=1):
+        calls.append(resolution)
+        a.obs['leiden']=pd.Categorical(['0']*a.n_obs)
+    with pytest.raises(asw.ExplicitASWUnavailable) as error:
+        asw.invoke(native,a,'scanpy','tl.leiden',{},'asw',[],require_asw=True)
+    assert error.value.evidence['unavailable_kind']=='missing_prerequisite'
+    assert calls==[]
+    _, evidence=asw.invoke(native,a,'scanpy','tl.leiden',{'resolution':0.7},'asw',[],require_asw=True)
+    assert evidence['origin']=='explicit' and calls==[0.7]
+
+
+@pytest.mark.parametrize('null_key',[False,True])
+def test_real_episcanpy_reports_requested_and_executed_rank_method(tmp_path,monkeypatch,null_key):
+    from os import environ
+    from test_execution_consolidation import _scanpy_runtime
+    from agent.tools.analysis.native_matrix import EPISCANPY
+    _scanpy_runtime(monkeypatch)
+    monkeypatch.setenv('AGENT_EPISCANPY_PYTHON',environ['AGENT_SCANPY_PYTHON'])
+    data=fixture_data(24)
+    data.obs['groups']=pd.Categorical(['a']*12+['b']*12)
+    data.uns['omic']='ATAC'
+    path=tmp_path/'source.h5ad';data.write_h5ad(path)
+    kwargs=dict(groupby='groups',use_raw=False,method='wilcoxon')
+    if null_key:kwargs['key_added']=None
+    result=EPISCANPY.execute(dict(input_path=str(path),output_dir=str(tmp_path/'rank'),
+        function_name='tl.rank_features',kwargs=kwargs))
+    attribution=result['parameters']['native_method_attribution']
+    assert attribution==dict(requested_wrapper_method='wilcoxon',executed_method='t-test_overestim_var',conflict=True)
+    assert result['parameters']['kwargs']['method']=='wilcoxon'
+    assert ('uns.rank_genes_groups' if null_key else 'uns.rank_features_groups') in result['result_slots']
 
 
 def test_custom_umap_provenance_is_source_scoped_and_never_scored(tmp_path, monkeypatch):

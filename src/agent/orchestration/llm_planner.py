@@ -1064,9 +1064,8 @@ def _parse_plan_steps(
             )
             arguments[argument_name] = argument_value
 
-        from agent.tools.analysis.native_clustering import ELIGIBLE
-        if (tool_name.removeprefix('run_'), arguments.get('function_name')) in ELIGIBLE:
-            arguments.setdefault('parameter_selection', 'asw')
+        from .native_parameters import select_native_parameters
+        arguments=select_native_parameters(registry.get(tool_name), arguments)
 
         raw_dependencies = raw_step["depends_on"]
         if not isinstance(raw_dependencies, list):

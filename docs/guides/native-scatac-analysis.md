@@ -38,12 +38,15 @@ requirements are unchanged.
 
 ## Raw barcode QC
 
-For an ordinary **uncalled, single-sample** fragment population, planning selects
-`qc_thresholds=otsu` on `pp.import_fragments` and `pp.filter_cells`, with native
-`metrics.tsse` between them. Import then uses `min_num_fragments=0`, retaining all
-observed barcodes without a depth prefilter, including those below the former
-native default of 200. Native chromosome handling and explicit whitelist
-restrictions still apply; no separate source-barcode census is claimed.
+For an established **uncalled, single-sample** population, the selected filter
+fits its omitted minima by Otsu. When it consumes the same population from a
+planned import, Agent coordinates retention with that import: omitted
+`min_num_fragments` becomes zero, instead of the native default of 200.
+Resource handling still applies; no separate barcode census is claimed.
+Agent does not infer uncalled status from the file format, barcode tags, or
+sample size. If the history is unknown, Preparation asks for the selected
+population's history. Select `qc_thresholds=native_defaults` to skip fitting.
+Otsu does not write TSSe; an enabled TSS criterion still needs the exact field.
 SnapATAC2 still owns import, sorting, QC measurements, filtering and counting.
 Explicit import retention always prevails and its truncation remains visible.
 
@@ -153,10 +156,11 @@ K-means and hierarchical clustering use all of `X_pca`, as required by the
 installed epiScanpy APIs. UMAP is not a substitute for the clustering input.
 No PCA, Spectral, EpiZoo, KNN or UMAP calculation is repeated by the scan.
 
-One cluster, invalid label counts, unassigned labels in the fixed sample, or an
-unusable representation yield undefined scores, never invented numbers. If no
-candidate is valid, the native default is retained and selection is reported as
-unavailable. For epiScanpy kmeans/hc, unavailable ASW with no count/default leaves
+One cluster, invalid label counts, or unassigned labels in the fixed sample
+yield undefined scores, never invented numbers. Missing evidence and unsupported
+method variants are recorded separately from undefined scores. An implicit
+selection can retain an applicable native default; an explicit ASW request does
+not silently run the default. For epiScanpy kmeans/hc, unavailable ASW with no count/default leaves
 the attempted Run failed and retains its candidate diagnostics. The Interaction
 then asks for function-scoped `kwargs.num_clusters` through the existing parameter
 question. Its explicit answer runs the same prepared task with that count, without
@@ -168,8 +172,9 @@ fallback; explicit native calls remain available.
 
 The selected value, origin, candidate scores, sample details and native identities
 are recorded in ordinary result parameters, receipts and reports. Adjust parameters
-shows the actual selected value. Editing another setting preserves it, including
-on affected downstream clustering steps; unchanged upstream results remain exact
+shows the actual selected value. Editing another setting preserves a fitted
+value as fitted evidence, not as a new explicit researcher choice. This applies
+to affected downstream clustering steps; unchanged upstream results remain exact
 accepted references. Native Leiden, Louvain, K-means, hierarchical and DBSCAN
 written grouping slots are recognized by the existing display, figures, annotation,
 evaluation and download owners. Inherited observation columns confer no authority.

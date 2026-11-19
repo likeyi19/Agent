@@ -53,7 +53,7 @@ def tool_spec():
             request_sources=(request('genome_path',rm('path','genome_path'),rm('sha256','genome_sha256')),)),
         *(scalar(k,required=k in required) for k in (*required,*optional) if k not in ('input_path','genome_path','genome_sha256'))]
     from .native_delivery import delivery_spec
-    return ToolSpec(source_encodings={'dataset':('h5ad',),'genome':('fasta',)}, source_input_types={'dataset':('h5ad',), 'genome':('fasta',)}, native_functions=NativeFunctionCatalog('motifmatchr', (('matchMotifs', tuple(name for name, _ in owner.NATIVE_ARGUMENTS)),)),scientific_delivery=delivery_spec(owner,'scientific_motif_matches'),name=owner.TOOL,function=owner.run_motifmatchr,required_arguments=required,optional_arguments=optional,
+    return ToolSpec(scientific_contract=owner.scientific_contract, source_encodings={'dataset':('h5ad',),'genome':('fasta',)}, source_input_types={'dataset':('h5ad',), 'genome':('fasta',)}, native_functions=NativeFunctionCatalog('motifmatchr', (('matchMotifs', tuple(name for name, _ in owner.NATIVE_ARGUMENTS)),)),scientific_delivery=delivery_spec(owner,'scientific_motif_matches'),name=owner.TOOL,function=owner.run_motifmatchr,required_arguments=required,optional_arguments=optional,
         preparation_owner=owner.prepare_operation, parameter_prerequisites=owner.parameter_prerequisites,
         result_contract=ResultContract('NativeMotifMatchesResult',owner.RESULT_FIELDS,planning_fields={k:_planning_result(
             'Exact native motif result; no cell accessibility analysis.',bindable=True,artifact=A.MOTIF_MATCHES)

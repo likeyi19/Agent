@@ -394,3 +394,11 @@ def prepare_operation(arguments, context):
     if needs:
         raise ScientificInputRequired(*needs, bindings=arguments)
     return arguments
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    slot=arguments.get('count_slot','X')
+    selected='X' if slot=='X' else 'layers.'+slot.removeprefix('layers/')
+    return ScientificContract(inputs={'dataset':{'format':'h5ad','x' if slot=='X' else selected:True,
+                                                  'count_values.'+selected:True}},
+        outputs={'scores':{'format':'h5ad','x':True,'dense.x':True,'dense.z_scores':True,'layers.z_scores':True,
+                           'measurement':'chromVAR_bias_corrected_deviations'}}, effects={'feature_axis':'replace'})

@@ -59,6 +59,8 @@ def tool_spec(owner):
             'Explicit resolution/num_clusters always prevails. Other functions retain native defaults. '
             'epiScanpy kmeans/hc require num_clusters when native_defaults is requested.',
             choices=('asw', 'native_defaults'), scientific_parameter=True, conversational_choice=True)
+        optional['require_asw'] = arg((bool,), 'Internal flag for an explicit ASW request.')
+        optional['parameter_origin'] = arg((str,), 'Internal provenance for a carried-forward fitted value.',choices=('retained_fitted',))
     if any('use_rep' in members for members in owner.FUNCTIONS.values()):
         optional['use_rep'] = arg((str,),
             'Exact representation for a function exposing native use_rep; X_epizoo is the compact EpiZoo embedding. '
@@ -82,7 +84,10 @@ def tool_spec(owner):
             '(log10, floor 100) and tsse (linear, floor 1), skimage Otsu with 5000 bins. '
             'Explicit minima prevail independently. Preserve called cells; no automatic OrdMag stacking. '
             'Explicit native calls omit this choice and retain native defaults.',
-            choices=('otsu',), scientific_parameter=True, conversational_choice=True, planner_choice=True)
+            choices=('otsu','native_defaults'), scientific_parameter=True, conversational_choice=True)
+        optional['qc_population'] = arg((str,), 'Exact source population history for selected QC: uncalled one sample, study-selected/called, depth-prefiltered, or multiple samples.',
+            choices=raw.QC_POPULATIONS, scientific_parameter=True, conversational_choice=True)
+        optional['qc_selection'] = arg((Mapping,), 'Internal effective QC strategy and population evidence.')
         optional['counting_strategy'] = arg((str,),
             'Native pp.make_peak_matrix/pp.add_tile_matrix/pp.make_gene_matrix counting strategy. For research tasks select a representation compatible '
             'with the current objective and stated downstream method: fragment gives fragment-body overlaps, '
@@ -118,13 +123,18 @@ def tool_spec(owner):
             second_count_slot=arg((str,), 'Second input X or selected layer, independently bound.', scientific_parameter=True, conversational_exact_string=True))
     from .native_parameters import scalar_port
     base_scalar = scalar
-    scalar = lambda k, **kw: scalar_port(owner.TOOL, ('tl.dpt',) if k=='root_cell' else tuple(owner.FUNCTIONS), k, **kw) if ({**required, **optional}[k].planning.scientific_parameter) else base_scalar(k, **kw)
+    def scalar(key, **kw):
+        if not {**required, **optional}[key].planning.scientific_parameter:
+            return base_scalar(key, **kw)
+        functions={'root_cell':('tl.dpt',),'qc_population':('pp.import_fragments','pp.filter_cells'),
+                   'qc_thresholds':('pp.import_fragments','pp.filter_cells')}.get(key,tuple(owner.FUNCTIONS))
+        return scalar_port(owner.TOOL,functions,key,**kw)
     ports = [Consumer('dataset', (member('dataset', 'input_path'),), True,
         request_sources=(request('input_path', rm('dataset', 'input_path')),),
         accepted_upstream_types=('raw_scatac_dataset.v1', 'scatac_matrix_h5ad.v1', 'native_matrix_h5ad.v1', 'cell_embedding_h5ad.v1', 'hierarchical_annotation_h5ad.v1')
             + (('native_fragments_file.v1',) if owner.package == 'snapatac2' else ())),
         *(scalar(k, required=k in required) for k in (*required, *optional)
-            if k not in {'input_path', 'second_path', 'grouping_path', *raw_fields})]
+            if k not in {'input_path', 'second_path', 'grouping_path', 'require_asw', 'qc_selection', 'parameter_origin', *raw_fields})]
     if owner.package == 'scanpy':
         ports.append(Consumer('grouping', (member('dataset', 'grouping_path'),), False,
             request_sources=(request('grouping_path', rm('dataset', 'grouping_path')),),
@@ -171,11 +181,7 @@ def tool_spec(owner):
         'no annotation method or region vocabulary is mandatory. Explicit native calls retain omitted defaults, '
         'and explicit user kwargs or counting choices prevail. Reuse accepted fragment storage when a later '
         'matrix needs different counting; do not relabel or silently convert an existing measurement. '
-        'For ordinary uncalled raw fragments, select qc_thresholds=otsu on import and filter_cells. '
-        'Import then retains all observed barcodes unless the user supplies its retention threshold. '
-        'Accepted older imports retain their recorded populations; do not describe Otsu fitted after a depth '
-        'prefilter as an untruncated sample fit. Use original fragments when a fresh uncalled population is needed. '
-        'Native filter_cells receives the sample Otsu minima directly; explicit minima prevail. '
+        'Population-scoped QC selection is determined by the selected scientific owner. Do not assume uncalled status. '
         'Already called inputs retain established identities unless filtering is requested. '
         'Barcode correction and a whitelist alone do not establish called-cell identities. '
         'pp.call_cells is explicit native OrdMag, never an additional default before or after Otsu. '
@@ -183,14 +189,8 @@ def tool_spec(owner):
         'Never substitute old Agent TSS 4 or global fragment-body counting defaults. '
         'A user request to retain low-depth/all barcodes may explicitly bind '
         'min_num_fragments=0; do not lower thresholds just for a small dataset. Imported barcodes and later filtered '
-        'barcodes are distinct populations. Native import has no X measurement: use native pp.add_tile_matrix '
-        'or pp.make_peak_matrix when a matrix is needed. '
+        'barcodes are distinct populations. '
         'Processed compatible H5AD needs no raw reimport or cell calling. '
-        'SnapATAC2 spectral representation requires pp.select_features then tl.spectral. '
-        'SnapATAC2 Leiden additionally requires pp.knn. '
-        'SnapATAC2 tl.umap consumes the selected representation directly and fits its own neighbors; '
-        'do not add pp.knn for UMAP because its saved graph is not consumed. '
-        'SnapATAC2 pp.knn writes its native distances graph, not Scanpy connectivities. '
         'Reuse accepted exact matrices/graphs across turns. '
         'EpiZoo is a separate model-based embedding: consume its dataset port (embedding-only H5AD), '
         'selecting use_rep=X_epizoo for representation consumers. Never reconstruct counts or apply '
@@ -213,8 +213,8 @@ def tool_spec(owner):
     ) if owner.package == 'episcanpy' else 'No genome is required for these matrix functions. '
     notes = tuple(sentence + '.' for sentence in raw_guidance.strip().rstrip('.').split('. '))
     from agent.application.native_raw_handoff import prepare_operation
-    return ToolSpec(source_encodings={p.name:((('h5ad','bam','fragments') if owner.package=='snapatac2' else ('h5ad',)) if p.name in ('dataset','second') else {'chrom_sizes':('fai','chromosome_sizes_tsv'),'gene_anno':('gtf','gff'),'peaks':('bed',),'whitelist':('barcode_whitelist',)}[p.name]) for p in ports if p.name in ('dataset','second') or any(m.field_name in raw_fields for m in p.members)}, source_input_types={p.name: (('h5ad','bam','external_fragments') if owner.package=='snapatac2' and p.name=='dataset' else ('h5ad',) if p.name in ('dataset','second') else ('attachment','scientific_reference')) for p in ports if p.name in ('dataset','second') or any(m.field_name in raw_fields for m in p.members)}, preparation_owner=prepare_operation, planned_output_properties=owner.planned_output_properties, native_functions=NativeFunctionCatalog(owner.package, tuple((name, tuple(members)) for name, members in owner.FUNCTIONS.items()), parameter_metadata=owner.parameter_metadata, output_available=owner.output_available, scientific_contract=owner.scientific_contract),name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
-        application_inputs=frozenset({*raw_fields,'kwargs'}),
+    return ToolSpec(source_encodings={p.name:((('h5ad','bam','fragments') if owner.package=='snapatac2' else ('h5ad',)) if p.name in ('dataset','second') else {'chrom_sizes':('fai','chromosome_sizes_tsv'),'gene_anno':('gtf','gff'),'peaks':('bed',),'whitelist':('barcode_whitelist',)}[p.name]) for p in ports if p.name in ('dataset','second') or any(m.field_name in raw_fields for m in p.members)}, source_input_types={p.name: (('h5ad','bam','external_fragments') if owner.package=='snapatac2' and p.name=='dataset' else ('h5ad',) if p.name in ('dataset','second') else ('attachment','scientific_reference')) for p in ports if p.name in ('dataset','second') or any(m.field_name in raw_fields for m in p.members)}, preparation_owner=prepare_operation, native_functions=NativeFunctionCatalog(owner.package, tuple(owner.FUNCTIONS.items()), parameter_metadata=owner.parameter_metadata, output_available=owner.output_available),scientific_contract=owner.scientific_contract,name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
+        application_inputs=frozenset({*raw_fields,'kwargs',*({'qc_selection'} if owner.package=='snapatac2' else set())}),
         scientific_delivery=delivery_spec(owner, 'scientific_native_result', h5ad_roles=('result.h5ad',)),
         result_contract=ResultContract('NativeMatrixResult', owner.RESULT_FIELDS, planning_fields={
             k: _planning_result('Exact native publication/file; null outputs are unavailable for this function.', bindable=True, artifact=A.RAW_SCATAC)
@@ -230,20 +230,14 @@ def tool_spec(owner):
             'Invoke only the named supported native function with explicit kwargs unchanged and unspecified native defaults omitted. '
             'Preserve source bytes, ordered axes and distinct result semantics. '
             'Select native methods by scientific capabilities and researcher intent, with no package priority.',
-            'Scanpy/epiScanpy Leiden, UMAP and PAGA require compatible Scanpy neighbors; PAGA also needs groups. '
-            'Compose pp.neighbors and clustering when those prerequisites are absent. DPT needs compatible '
-            'neighbors, tl.diffmap and supplied root-cell information (uns.iroot); do not invent a root.',
-            'Use use_rep (or explicit native kwargs.use_rep) for representation consumers, including X_epizoo. '
-            'Scanpy UMAP consumes its neighbors graph, not a use_rep argument. Never substitute incompatible '
-            'package graphs. Explicit parameters prevail.',
-            'AI Research uses shared bounded ASW for omitted '
-            'Leiden resolution, epiScanpy Louvain resolution and epiScanpy kmeans/hc num_clusters. '
-            'Do not plan candidate scans or invent numeric values. epiScanpy kmeans/hc consume X_pca. '
-            'Other omitted parameters retain native defaults. Honor explicit parameter_selection=native_defaults.', *notes),
+            'Use the exact representation key for compatible consumers, including X_epizoo. '
+            'Never substitute incompatible package graphs or invent a DPT root.',
+            'Use only the documented automatic strategy for that operation. Do not plan candidate scans or invent numeric values.', *notes),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports), producer_ports=(
             Producer('matrix', owner.CONTRACT, (member('path', 'manifest_path'), member('sha256', 'manifest_sha256'))),
             Producer('dataset', 'native_matrix_h5ad.v1', (member('dataset','matrix_path'),member('sha256','matrix_sha256')), lineage_from_port='dataset'),
-            *((Producer('fragments', 'native_fragments_file.v1', (member('dataset', 'fragments_path'),), lineage_from_port='dataset'),)
+            *((Producer('fragments', 'native_fragments_file.v1', (member('dataset', 'fragments_path'),), lineage_from_port='dataset',
+                        observation_sha256_field='fragments_sha256'),)
                 if owner.package == 'snapatac2' else ()))))
 
 

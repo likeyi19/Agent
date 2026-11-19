@@ -258,3 +258,23 @@ def prepare_operation(arguments, context):
     if needs:
         raise ScientificInputRequired(*needs, bindings=arguments)
     return arguments
+
+
+def scientific_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    function=arguments.get('function_name')
+    if function=='make_cicero_cds':
+        slot=arguments.get('count_slot','X')
+        needs={'format':'h5ad','x' if slot=='X' else 'layers.'+slot.removeprefix('layers/'):True}
+        if key:=arguments.get('reduced_coordinates_key'):
+            needs['obsm.'+key]=True
+        return ScientificContract(inputs={'dataset':needs},
+            parameters={'coordinate_slot':'obsm[reduced_coordinates_key]','region_ids':'chr_start_end'},
+            outputs={'cds':{'format':'cicero_cds_exchange'},'table':{'table_format':'TSV'}},
+            effects={'cell_axis':'aggregate'})
+    if function in ('run_cicero','estimate_distance_parameter'):
+        return ScientificContract(inputs={'dataset':{'format':'cicero_cds_exchange'}},
+            parameters={'required_ports':('genomic_coords',)} if function=='run_cicero' else {'genomic_coords_default':'native_hg19'},
+            outputs={'cds':{'format':'cicero_cds_exchange'},'table':{'table_format':'TSV',
+                'measurement':'native_coaccessibility' if function=='run_cicero' else 'native_distance_parameter'}})
+    return ScientificContract()

@@ -179,11 +179,123 @@ def inspect(source, *, private_paths=(), privacy=False, observation_fields=None,
         return size
 
 
-def scientific_properties(path, names):
+def _axis_size(handle, axis):
+    frame=metadata_item(handle,axis)
+    index=frame.attrs.get('_index') if isinstance(frame,h5py.Group) else None
+    if isinstance(index,bytes):index=index.decode('utf-8')
+    values=metadata_item(handle,axis+'/'+index) if isinstance(index,str) else None
+    return len(values) if isinstance(values,h5py.Dataset) and values.ndim==1 else None
+
+
+def _numeric_shape(item, *, dense=False):
+    if isinstance(item,h5py.Dataset):
+        return tuple(item.shape) if item.ndim==2 and item.dtype.kind in ('fi' if dense else 'biufc') else None
+    if not dense and isinstance(item,h5py.Group) and item.attrs.get('encoding-type') in ('csr_matrix','csc_matrix',b'csr_matrix',b'csc_matrix'):
+        from anndata.io import sparse_dataset
+        matrix=sparse_dataset(item)
+        return tuple(matrix.shape) if len(matrix.shape)==2 and matrix.dtype.kind in 'biufc' else None
+    return None
+
+
+def matrix_measurement(handle, slot):
+    from anndata.io import read_elem
+    layer=slot.removeprefix('layers.')
+    if '/' in slot or not (slot=='X' or slot.startswith('layers.') and layer):
+        return None
+    path='uns/matrix_semantics' if slot=='X' else 'uns/layer_semantics/'+layer
+    item=metadata_item(handle,path)
+    if isinstance(item,h5py.Dataset) and item.ndim==0:
+        inspect(handle,require_matrix=False,metadata_paths=(path,),max_logical_bytes=4096)
+        value=read_elem(item)
+        if isinstance(value,str):return value
+    return None
+
+
+def scientific_properties(path, names, *, graph_inputs=()):
     """Read storage capabilities without loading matrices or recomputing science."""
+    if not h5py.is_hdf5(path):
+        from agent.tools.data.fragment_io import observed_format
+        return {name:value for name,value in {'format':observed_format(path) if 'format' in names else None,
+                'x':False}.items() if name in names and value is not None}
     inspect(path,require_matrix=False,max_logical_bytes=None)
-    properties={}
+    properties={'format': 'h5ad'} if 'format' in names else {}
     with h5py.File(path,'r') as handle:
+        n_cells,n_features=(_axis_size(handle,axis) for axis in ('obs','var'))
+        if 'n_obs' in names and n_cells is not None:properties['n_obs']=n_cells
+        def adjacency(key):
+            return bool(isinstance(key,str) and key and '/' not in key and
+                _numeric_shape(metadata_item(handle,'obsp/'+key))==(n_cells,n_cells))
+        for name in names:
+            section, separator, key = name.partition('.')
+            if section=='regions' and key and '/' not in key:
+                table=metadata_item(handle,'uns/'+key)
+                properties[name]=False
+                if not isinstance(table,h5py.Group) or table.attrs.get('encoding-type') not in ('dataframe',b'dataframe'):
+                    continue
+                columns=table.attrs.get('column-order',())
+                if not len(columns):continue
+                first=columns[0].decode('utf-8') if isinstance(columns[0],bytes) else columns[0]
+                if not isinstance(first,str) or not first or '/' in first:continue
+                column=metadata_item(handle,'uns/'+key+'/'+first)
+                if isinstance(column,h5py.Group) and column.attrs.get('encoding-type') in ('categorical',b'categorical'):
+                    codes=metadata_item(column,'codes')
+                    if not isinstance(codes,h5py.Dataset) or not len(codes):continue
+                    column=metadata_item(column,'categories')
+                properties[name]=isinstance(column,h5py.Dataset) and column.ndim==1 and bool(len(column)) and (
+                    h5py.check_string_dtype(column.dtype) is not None)
+                continue
+            if section in ('measurement','count_values'):
+                from .cell_result import count_measurement
+                value=matrix_measurement(handle,key)
+                if value is not None and section=='count_values':value=count_measurement(value)
+                if value is not None:properties[name]=value
+                continue
+            if separator and section in ('obs','var','layers','obsm','obsp','uns','raw','varm','varp'):
+                item=metadata_item(handle, section+'/'+key) if key and '/' not in key else None
+                properties[name]=item is not None
+                if section in ('obs','var') and isinstance(item,h5py.Dataset) and item.ndim==1:
+                    if len(item)!=(n_cells if section=='obs' else n_features):properties[name]=False
+                    elif item.dtype.kind=='b':properties[name]='boolean'
+                    elif item.dtype.kind in 'iuf':properties[name]='numeric'
+                if section=='uns' and isinstance(item,h5py.Group):
+                    if item.attrs.get('encoding-type') in ('dataframe',b'dataframe'):
+                        properties[name]='dataframe'
+                elif section=='layers':properties[name]=_numeric_shape(item)==(n_cells,n_features)
+                elif section=='obsm' and key not in ('fragment_paired','fragment_single','base_values'):
+                    shape=_numeric_shape(item)
+                    properties[name]=shape is not None and shape[0]==n_cells
+                elif section=='obsp':properties[name]=adjacency(key)
+            elif separator and section in ('graph','graph_slot'):
+                from anndata.io import read_elem
+                from .native_clustering import scanpy_graph_slot
+                mode, _, neighbors=key.partition('.')
+                group=metadata_item(handle,'uns/'+neighbors) if neighbors and '/' not in neighbors else None
+                properties[name]=False
+                if key=='snapatac2_distances':
+                    native=any(row.get('graph')=='distances' and row.get('function')=='snapatac2.pp.knn'
+                               for row in graph_inputs)
+                    foreign=any(row.get('distance_slot')=='distances' for row in graph_inputs)
+                    properties[name]=adjacency('distances') and (native or not (foreign or
+                        metadata_item(handle,'uns/neighbors') is not None and adjacency('connectivities')))
+                elif mode in ('scanpy_connectivities','scanpy_distances') and isinstance(group,h5py.Group):
+                    role=mode.removeprefix('scanpy_')
+                    metadata={}
+                    if neighbors!='neighbors':
+                        fields=('connectivities_key','distances_key')
+                        paths=tuple('uns/'+neighbors+'/'+field for field in fields)
+                        if any(metadata_item(handle,path) is None for path in paths):continue
+                        inspect(handle,require_matrix=False,metadata_paths=paths,max_logical_bytes=1024**2)
+                        metadata={field:read_elem(metadata_item(handle,path)) for field,path in zip(fields,paths)}
+                        if any(not isinstance(value,str) or not value for value in metadata.values()):continue
+                    slot=scanpy_graph_slot(neighbors,role,metadata)
+                    if section=='graph_slot':
+                        if isinstance(slot,str):properties[name]=slot
+                    else:
+                        properties[name]=adjacency(slot) and not any(row.get('graph')==slot and
+                            row.get('function')=='snapatac2.pp.knn' for row in graph_inputs)
+            elif separator and section == 'dense':
+                slot=metadata_item(handle,'X' if key=='x' else 'layers/'+key)
+                properties[name]=_numeric_shape(slot,dense=True)==(n_cells,n_features)
         paired=metadata_item(handle,'obsm/fragment_paired') is not None
         single=metadata_item(handle,'obsm/fragment_single') is not None
         values=metadata_item(handle,'obsm/base_values') is not None
@@ -191,29 +303,17 @@ def scientific_properties(path, names):
                           native_values=paired or single or values)
         if paired or single or values:
             properties['storage_kind']='paired_fragments' if paired else 'single_end_insertions' if single else 'native_base_values'
-        if 'x' in names:
-            # Opening a backed AnnData still materializes obsm. Native fragment
-            # storage can be genome-sized, so validate only the selected X object.
-            from anndata.io import sparse_dataset
-            matrix=metadata_item(handle,'X')
-            encoding=matrix.attrs.get('encoding-type') if matrix is not None else None
-            if isinstance(encoding,bytes):encoding=encoding.decode('utf-8')
-            if isinstance(matrix,h5py.Dataset):
-                properties['x']=matrix.ndim==2 and matrix.dtype.kind in 'biufc'
-            elif isinstance(matrix,h5py.Group) and encoding in ('csr_matrix','csc_matrix'):
-                backed=sparse_dataset(matrix)
-                properties['x']=len(backed.shape)==2 and backed.dtype.kind in 'biufc'
-            else:properties['x']=False
-            if properties['x']:
-                axes=[]
-                for axis in ('obs','var'):
-                    frame=metadata_item(handle,axis)
-                    index=frame.attrs.get('_index') if isinstance(frame,h5py.Group) else None
-                    if isinstance(index,bytes):index=index.decode('utf-8')
-                    values=metadata_item(handle,axis+'/'+index) if isinstance(index,str) else None
-                    axes.append(len(values) if isinstance(values,h5py.Dataset) and values.ndim==1 else None)
-                shape=matrix.shape if isinstance(matrix,h5py.Dataset) else backed.shape
-                properties['x']=tuple(axes)==tuple(shape)
+        if 'x' in names:properties['x']=_numeric_shape(metadata_item(handle,'X'))==(n_cells,n_features)
+        if 'scanpy_x_rep' in names:
+            named=metadata_item(handle,'obsm/X')
+            shape=_numeric_shape(named)
+            properties['scanpy_x_rep']=(shape is not None and shape[0]==n_cells if named is not None else
+                                        _numeric_shape(metadata_item(handle,'X'))==(n_cells,n_features))
+        if 'scanpy_auto_rep' in names:
+            matrix=_numeric_shape(metadata_item(handle,'X'))==(n_cells,n_features)
+            pca=_numeric_shape(metadata_item(handle,'obsm/X_pca'))
+            properties['scanpy_auto_rep']=matrix or (n_features is not None and n_features>50
+                                                    and pca is not None and pca[0]==n_cells)
     return {name:properties[name] for name in names if name in properties}
 
 

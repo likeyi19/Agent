@@ -572,3 +572,17 @@ def prepare_operation(arguments, context):
     if values.get('condition') is not None and values['condition'] not in model['conditions']:
         raise ScientificDiagnostic('SEQUENCE_CONDITION_UNSUPPORTED','The supplied condition is not an exact qualified DHS64 condition.')
     return values
+
+
+def prediction_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(parameters={'source_alternatives':('literal','fasta','qualified_intervals')},
+        outputs={'predictions':{'measurement':'model_predicted_DNase'},
+                 'sequences':{'sequence_origin':'supplied_or_reference'}},effects={'sequence_order':'preserve'})
+
+
+def evaluation_contract(arguments):
+    from agent.orchestration.scientific_inputs import ScientificContract
+    return ScientificContract(parameters={'alignment':('sequence_identity','condition','measurement')},
+        outputs={'evaluation':{'measurement':'prediction_observation_agreement'}},
+        effects={'prediction_mutation':False})

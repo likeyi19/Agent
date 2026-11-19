@@ -4,7 +4,7 @@ This adapter preserves identity and delegates bounded metadata reads to the
 existing field/assembly owners. It never registers accepted results as uploads.
 """
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from agent.schemas import StepOutputRef, PriorOutputRef
 from agent.schemas.verification_authority import digest
@@ -24,6 +24,10 @@ class ExistingObject:
     path: str
     sha256: str
     accepted_binding: object = None
+    table_format: str | None = None
+    object_type: str | None = None
+    graph_inputs: tuple = ()
+    publication_parameters: Mapping = field(default_factory=dict)
 
     def matches_sha256(self, value, registry):
         """Compare a literal digest or its exact accepted atomic-port member."""
@@ -72,21 +76,24 @@ class ExistingObject:
         return dict(source_path=self.path, source_sha256=self.sha256)
 
 
+def identity_parent(value, selected, registry):
+    if value.step_id not in selected:return None
+    tool_name,arguments=selected[value.step_id]
+    semantic=registry.get(tool_name).semantic_planning
+    if semantic is None:return None
+    ports=[port for port in semantic.producer_ports if any(member.field_name==value.output_key for member in port.members)]
+    if len(ports)!=1 or ports[0].identity_from_port is None:return None
+    consumer=next(port for port in semantic.consumer_ports if port.name==ports[0].identity_from_port)
+    return arguments.get(consumer.members[0].field_name)
+
+
 def identity_source(value, selected, registry):
     """Follow only an explicit byte-transparent producer contract."""
     seen = set()
     while isinstance(value, StepOutputRef):
-        if value.step_id in seen or value.step_id not in selected:
-            return None
+        if value.step_id in seen:return None
         seen.add(value.step_id)
-        tool_name, arguments = selected[value.step_id]
-        spec = registry.get(tool_name)
-        ports = [p for p in spec.semantic_planning.producer_ports
-                 if any(m.field_name == value.output_key for m in p.members)]
-        if len(ports) != 1 or ports[0].identity_from_port is None:
-            return None
-        consumer = next(p for p in spec.semantic_planning.consumer_ports if p.name == ports[0].identity_from_port)
-        value = arguments.get(consumer.members[0].field_name)
+        value=identity_parent(value,selected,registry)
     return value
 
 
@@ -104,8 +111,13 @@ def existing_object(value, selected, registry, *, store=None):
         if sha_field is None:
             raise AuthorityError('Accepted source port has no exact observable file identity.')
         sha = stored.result[sha_field]
+        if not isinstance(path,(str,Path)) or not isinstance(sha,str):
+            raise AuthorityError('Selected operation did not publish this observable file and digest.')
         checked_file(path, sha)
-        return ExistingObject(str(path), sha, value.binding)
+        table_format=stored.result.get('result_format') if port.semantic_type=='native_genomic_table.v1' else None
+        graph_inputs=stored.result.get('parameters', {}).get('graph_inputs', ()) if port.semantic_type=='native_matrix_h5ad.v1' else ()
+        parameters=stored.result.get('parameters',{}) if port.semantic_type=='native_matrix_h5ad.v1' else {}
+        return ExistingObject(str(path), sha, value.binding, table_format, stored.result.get('object_type'), tuple(graph_inputs), parameters)
     if isinstance(value, (str, Path)):
         return ExistingObject(str(value), file_sha256(value))
     return None

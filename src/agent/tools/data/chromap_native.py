@@ -105,7 +105,7 @@ def execute(values, execution_identity=None):
         if type(kw.get(key)) in (int, float) and kw[key] > 32:
             raise ValueError('Chromap threads exceed the execution bound 32')
     # Every external file is a separately captured port, never a CLI expression.
-    required = ('reference_path',) if args['function_name'] == 'index' else ('reference_path', 'index_path', 'read1_path', 'read2_path')
+    required = tuple(PORTS[port] for port in ('reference', *scientific_contract(args).parameters.get('required_ports', ())))
     if any(not args.get(key) for key in required):
         raise ValueError('Missing native Chromap input: ' + ', '.join(key for key in required if not args.get(key)))
     sources = []
@@ -186,7 +186,22 @@ def invoke(reference_path, output_dir, function_name, index_path=None, read1_pat
     return execute({k: v for k, v in locals().items() if v is not None})
 
 
-def planned_output_properties(arguments, port, context, *, seen=()):
+MAP_INPUTS = ('index','read1','read2')
+
+
+def scientific_contract(arguments):
+    from functools import partial
+    from agent.orchestration.scientific_inputs import ScientificContract
+    function = arguments.get('function_name')
+    if function == 'map':
+        return ScientificContract(parameters={'required_ports': MAP_INPUTS},
+            outputs={'fragments':{'format':'fragments'}}, resolve_output=partial(_output_reference, arguments))
+    if function == 'index':
+        return ScientificContract(outputs={'index':{'format':'chromap_index'}})
+    return ScientificContract()
+
+
+def _output_reference(arguments, port, context, *, seen=(), names=()):
     if port=='fragments' and arguments.get('function_name')=='map' and arguments.get('reference_path') and arguments.get('reference_sha256'):
         return dict(source_reference=dict(step_id=context.step_id,path=arguments['reference_path'],sha256=arguments['reference_sha256']))
     return {}

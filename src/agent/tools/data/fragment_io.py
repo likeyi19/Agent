@@ -95,6 +95,26 @@ def _bgzf_lines(path):
             if len(line) > m.MAX_LINE: m.fail('EXTERNAL_FRAGMENTS_RECORD_INVALID')
             yield line
 
+
+def observed_format(path):
+    """Identify BAM magic or one recognizable fragment; leave other bytes unknown."""
+    from itertools import islice
+    try:
+        kind=encoding(path)
+        with (gzip.open(path,'rb') if kind in ('gzip','bgzf') else open(path,'rb')) as stream:
+            if stream.read(4)==b'BAM\x01':
+                return 'bam'
+        for line in islice(lines(path,kind), 64):
+            if line.startswith(b'#'):
+                continue
+            if len(line)<=m.MAX_LINE:
+                parse_record(line.rstrip(b'\r\n')+b'\n')
+                return 'fragments'
+            break
+    except (m.ExternalFragmentsError,OSError,EOFError,zlib.error):
+        pass
+    return 'non_hdf5'
+
 def parse_record(line, dictionary=None):
     """Read record structure; a supplied reference additionally owns contig bounds.
 

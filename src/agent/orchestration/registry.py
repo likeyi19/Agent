@@ -24,12 +24,14 @@ from agent.tools import (
     validate_scATAC_feature_space,
 )
 from agent.tools.analysis.replicate_pseudobulk import M81ScientificError
+from agent.tools.analysis import clustering_evaluation as evaluation_owner, label_transfer as transfer_owner
+from agent.tools.analysis.differential_accessibility_backend import scientific_contract as da_scientific_contract
+from agent.tools.data.scatac import scientific_contract as inspection_scientific_contract
 from agent.tools.analysis.epizoo_embedding import (
-    DATASET_PROPERTIES as EPIZOO_DATASET_PROPERTIES,
     EpiZooResourceIdentityError,
     validate_expected_resource_identity,
     validate_resource_provenance,
-    planned_output_properties as epizoo_planned_output_properties,
+    scientific_contract as epizoo_scientific_contract,
 )
 from agent.tools.analysis.differential_accessibility import M82ScientificError
 from agent.tools.analysis.differential_accessibility_backend import (
@@ -364,14 +366,9 @@ class SemanticConsumerPortSpec:
     accepted_upstream_types: tuple[str, ...] = ()
     required_lineage: SemanticLineage | None = None
     upstream_member_names: tuple[tuple[str, str, str], ...] = ()
-    required_properties: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _planning_text(self.name, "consumer port name", 128)
-        if not isinstance(self.required_properties, tuple):
-            raise TypeError('Scientific input properties must be a tuple.')
-        for name in self.required_properties:
-            _planning_text(name, 'required scientific property', 128)
         if not isinstance(self.members, tuple) or not self.members or not all(
             isinstance(member, SemanticPortMember) for member in self.members
         ):
@@ -419,11 +416,9 @@ class SemanticProducerPortSpec:
     accepted_file_sha256_field: str | None = None
     identity_from_port: str | None = None
     observation_sha256_field: str | None = None
-    guaranteed_properties: tuple[tuple[str, object], ...] = ()
 
     def __post_init__(self) -> None:
         _planning_text(self.name, "producer port name", 128)
-        object.__setattr__(self, 'guaranteed_properties', tuple(dict(self.guaranteed_properties).items()))
         _planning_text(self.semantic_type, "producer semantic_type", 128)
         if not isinstance(self.members, tuple) or not self.members or not all(
             isinstance(member, SemanticPortMember) for member in self.members
@@ -734,12 +729,9 @@ class NativeFunctionCatalog:
     functions: tuple[tuple[str, tuple[str, ...]], ...]
     parameter_metadata: Callable | None = field(default=None, compare=False, repr=False)
     output_available: Callable | None = field(default=None, compare=False, repr=False)
-    scientific_contract: Callable | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self):
         _planning_text(self.package, 'native package', 128)
-        if self.scientific_contract is not None and not callable(self.scientific_contract):
-            raise TypeError('Native scientific contract owner must be callable.')
         if (not isinstance(self.functions, tuple) or not self.functions
                 or len(dict(self.functions)) != len(self.functions)):
             raise ValueError('Native functions must have unique registered names.')
@@ -772,7 +764,7 @@ class ToolSpec:
     # request inputs. This supplies questions, never execution/validity authority.
     parameter_prerequisites: Callable[[Mapping[str, object]], tuple[str, ...]] | None = None
     preparation_owner: Callable | None = None
-    planned_output_properties: Callable | None = None
+    scientific_contract: Callable | None = field(default=None, compare=False, repr=False)
     source_input_types: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     source_request_aliases: Mapping[str, str] = field(default_factory=dict)
     source_encodings: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
@@ -781,6 +773,14 @@ class ToolSpec:
     # Reviewed, internal annotation orchestration only. No production tool opts
     # in until its coordinator/publication contract is implemented.
     annotation_children: frozenset[str] = field(default_factory=frozenset)
+
+    def selected_scientific_contract(self, arguments):
+        from .scientific_inputs import ScientificContract
+        owner = self.scientific_contract
+        contract = owner(arguments) if owner else ScientificContract()
+        if not isinstance(contract, ScientificContract):
+            raise TypeError('Scientific owner must return a ScientificContract.')
+        return contract
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -793,8 +793,8 @@ class ToolSpec:
             raise ValueError('Annotation children must be distinct registered tool names.')
         if self.annotation_children and (self.durable_hooks is None or self.retryable_error_codes):
             raise ValueError('Annotation orchestration requires durable hooks and no automatic retries.')
-        if self.planned_output_properties is not None and not callable(self.planned_output_properties):
-            raise TypeError('Planned output property owner must be callable.')
+        if self.scientific_contract is not None and not callable(self.scientific_contract):
+            raise TypeError('Selected scientific contract owner must be callable.')
         if self.preparation_owner is not None and not callable(self.preparation_owner):
             raise TypeError('Selected-operation preparation owner must be callable.')
         ports = {p.name: p for p in (() if self.semantic_planning is None else self.semantic_planning.consumer_ports)}
@@ -1035,8 +1035,13 @@ def _validate_semantic_tool_spec(spec: ToolSpec) -> None:
 
     consumer_set = set(consumer_names)
     for port in semantic.producer_ports:
-        if port.observation_sha256_field is not None and (len(port.members)!=1 or spec.result_contract.required_fields.get(port.observation_sha256_field)!=(str,)):
-            raise ValueError('Observable publication files require one result member and its exact digest.')
+        if port.observation_sha256_field is not None:
+            digest_types=spec.result_contract.required_fields.get(port.observation_sha256_field)
+            conditional=(spec.native_functions is not None and spec.native_functions.output_available is not None
+                and digest_types==(str,type(None)) and len(port.members)==1
+                and spec.result_contract.required_fields.get(port.members[0].field_name)==digest_types)
+            if len(port.members)!=1 or digest_types!=(str,) and not conditional:
+                raise ValueError('Observable publication files require one result member and its exact digest.')
         if port.accepted_file_sha256_field is not None:
             field = port.members[0].field_name
             metadata = spec.result_contract.planning_fields.get(field)
@@ -1829,6 +1834,7 @@ def build_default_tool_registry() -> ToolRegistry:
     inspect_spec = ToolSpec(
         source_encodings={'dataset': ('h5ad',)}, source_input_types={'dataset': ('h5ad',)}, source_request_aliases={'dataset':'input_path'},
         name="inspect_scATAC",
+        scientific_contract=inspection_scientific_contract,
         function=inspect_scATAC,
         required_arguments={
             "path": _planning_argument(
@@ -1878,7 +1884,6 @@ def build_default_tool_registry() -> ToolRegistry:
                     "dataset",
                     (_semantic_member("dataset", "path"),),
                     True,
-                    required_properties=('x',),
                     accepted_upstream_types=(
                         "raw_scatac_dataset.v1", "scatac_matrix_h5ad.v1", "hierarchical_annotation_h5ad.v1", "native_matrix_h5ad.v1"
                     ),
@@ -1917,7 +1922,7 @@ def build_default_tool_registry() -> ToolRegistry:
     embedding_spec = ToolSpec(
         source_encodings={'dataset': ('h5ad',)}, source_input_types={'dataset': ('h5ad',)},
         preparation_owner=prepare_epizoo_operation,
-        planned_output_properties=epizoo_planned_output_properties,
+        scientific_contract=epizoo_scientific_contract,
         name="epizoo_embed_cells",
         function=epizoo_embed_cells,
         application_inputs=frozenset({'checkpoint_path', 'expected_resource_identity'}),
@@ -2074,7 +2079,6 @@ def build_default_tool_registry() -> ToolRegistry:
                         ),
                     ),
                     accepted_upstream_types=("raw_scatac_dataset.v1", "scatac_matrix_h5ad.v1", "hierarchical_annotation_h5ad.v1", "native_matrix_h5ad.v1"),
-                    required_properties=('x',),
                 ),
                 _semantic_argument_port("output_dir", required=True),
                 _semantic_argument_port("species", required=True),
@@ -2109,8 +2113,7 @@ def build_default_tool_registry() -> ToolRegistry:
             producer_ports=(
                 SemanticProducerPortSpec('dataset', 'cell_embedding_h5ad.v1',
                     (_semantic_member('dataset', 'analysis_path'),), lineage_from_port='dataset',
-                    accepted_file_sha256_field='analysis_sha256',
-                    guaranteed_properties=tuple(EPIZOO_DATASET_PROPERTIES.items())),
+                    accepted_file_sha256_field='analysis_sha256'),
                 SemanticProducerPortSpec(
                     "embedding",
                     "epizoo_embedding_bundle.v1",
@@ -2126,6 +2129,7 @@ def build_default_tool_registry() -> ToolRegistry:
         ),
     )
     evaluation_spec = ToolSpec(
+        scientific_contract=evaluation_owner.scientific_contract,
         source_encodings={'analysis': ('h5ad',), 'ground_truth_dataset': ('h5ad',)}, source_input_types={'analysis': ('h5ad',), 'ground_truth_dataset': ('h5ad',)},
         name="evaluate_cell_clustering",
         function=evaluate_cell_clustering,
@@ -2276,6 +2280,7 @@ def build_default_tool_registry() -> ToolRegistry:
         ),
     )
     label_transfer_spec = ToolSpec(
+        scientific_contract=transfer_owner.scientific_contract,
         source_encodings={'reference_dataset': ('h5ad',), 'query_dataset': ('h5ad',)}, source_input_types={'reference_dataset': ('h5ad',), 'query_dataset': ('h5ad',)},
         name="transfer_cell_labels",
         function=transfer_cell_labels,
@@ -2576,6 +2581,7 @@ def build_default_tool_registry() -> ToolRegistry:
     )
     from agent.tools.analysis import replicate_pseudobulk as feature_owner
     feature_space_spec = ToolSpec(
+        scientific_contract=feature_owner.feature_space_contract,
         preparation_owner=feature_owner.prepare_feature_space,
         source_encodings={'input_path': ('h5ad',)}, source_input_types={'input_path': ('h5ad',)},
         name="validate_scATAC_feature_space",
@@ -2776,6 +2782,7 @@ def build_default_tool_registry() -> ToolRegistry:
         ),
     )
     pseudobulk_spec = ToolSpec(
+        scientific_contract=feature_owner.pseudobulk_contract,
         preparation_owner=feature_owner.prepare_pseudobulk,
         application_inputs=frozenset({'group_annotation_path'}),
         name="build_replicate_pseudobulk",
@@ -2933,6 +2940,7 @@ def build_default_tool_registry() -> ToolRegistry:
     )
     from agent.tools.analysis import differential_accessibility as da_owner
     differential_accessibility_spec = ToolSpec(
+        scientific_contract=da_scientific_contract,
         preparation_owner=da_owner.prepare_operation,
         name="run_replicate_differential_accessibility",
         function=run_replicate_differential_accessibility,

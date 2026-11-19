@@ -312,23 +312,19 @@ def _metadata(manifest, methods, source_sha256, *, integrated=False):
 
 def create_analysis_export(source, destination, manifest, *, source_sha256,
                            source_size_bytes, manifest_sha256, max_bytes):
-    from agent.tools.analysis.h5ad_delivery import _BoundedDestination
+    from agent.tools.analysis.h5ad_delivery import export_destination
     result, methods = _compact_result(source, manifest, max_bytes)
     result.uns[EXPORT_KEY] = _metadata(manifest, methods, source_sha256)
-    with h5py.File(_BoundedDestination(destination, max_bytes), 'w') as handle:
+    with export_destination(destination, max_bytes) as handle:
         from anndata.io import write_elem
         write_elem(handle, '/', result)
-    destination.seek(0, 2)
-    if destination.tell() > max_bytes:
-        raise ValueError('Compact analysis export exceeds its size bound.')
-    destination.seek(0)
 
 
 def create_integrated_export(source, original, destination, manifest, *, source_sha256, max_bytes):
     """Copy a pinned source logically in bounded blocks, then add exact results."""
     from anndata.io import read_elem, write_elem
     from .matrix_delivery import _copy, _redactions
-    from agent.tools.analysis.h5ad_delivery import _BoundedDestination
+    from agent.tools.analysis.h5ad_delivery import export_destination
     from agent.tools.analysis.peak_h5ad import inspect
     from agent.tools.analysis.categorical import ordered_ids, require_same_cells
     result, methods = _compact_result(source, manifest, max_bytes)
@@ -341,7 +337,7 @@ def create_integrated_export(source, original, destination, manifest, *, source_
         require_same_cells(ordered_ids(cells, source='Original data'), tuple(result.obs_names))
         omitted = _redactions(supplied, preserve_annotation=False)
         metadata['omitted_private_metadata_fields'] = len(omitted)
-        with h5py.File(_BoundedDestination(destination, max_bytes), 'w') as exported:
+        with export_destination(destination, max_bytes) as exported:
             _copy(supplied, exported, omitted)
             for slot, values in (('obs', result.obs), ('obsm', result.obsm)):
                 group = exported.require_group(slot)
@@ -368,7 +364,6 @@ def create_integrated_export(source, original, destination, manifest, *, source_
             if key in uns:
                 raise ValueError('Original and export provenance keys collide.')
             write_elem(uns, key, metadata)
-    destination.flush(); destination.seek(0)
     # Storage/privacy check only: never replay the accepted scientific method.
     inspect(destination, privacy=True)
     destination.seek(0)

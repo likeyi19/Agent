@@ -11,7 +11,9 @@ import pytest
 from scipy import sparse
 
 from agent.application import statistical_delivery as owner
+from agent.application.delivery_policy import DeliveryPolicy
 from agent.application.matrix_delivery import MatrixDownloadPreparer, MatrixDeliveryError
+from agent.tools.analysis.h5ad_delivery import DESTINATION_OVERHEAD_BYTES
 
 
 def fixture(tmp_path, tool):
@@ -73,3 +75,66 @@ def test_axis_only_delivery_does_not_admit_missing_count_matrix(tmp_path):
     with pytest.raises(ValueError,match='requires X'):
         inspect(item.path)
     inspect(item.path,require_matrix=False)
+
+
+def test_native_peak_export_reencodes_filters_and_enforces_completed_size(tmp_path):
+    from anndata.io import write_elem
+    from agent.application.native_delivery import definitions
+
+    plugin = pytest.importorskip('hdf5plugin')
+    counts = np.random.default_rng(4).integers(1, 65537, size=(64, 4096), dtype=np.uint32)
+    data = ad.AnnData(
+        sparse.csr_matrix(counts),
+        obs=pd.DataFrame(index=[f'cell-{i}' for i in range(64, 0, -1)]),
+        var=pd.DataFrame(
+            {'chrom': ['chr1'] * 4096},
+            index=[f'chr1:{i * 10}-{i * 10 + 9}' for i in range(4096, 0, -1)],
+        ),
+    )
+    path = tmp_path / 'result.h5ad'
+    with h5py.File(path, 'w') as handle:
+        handle.attrs.update({'encoding-type': 'anndata', 'encoding-version': '0.1.0'})
+        write_elem(handle, 'X', data.X, dataset_kwargs=plugin.Blosc(
+            cname='zstd', clevel=5, shuffle=plugin.Blosc.BITSHUFFLE))
+        write_elem(handle, 'obs', data.obs, dataset_kwargs={'compression': 'gzip'})
+        write_elem(handle, 'var', data.var)
+        write_elem(handle, 'uns', {'method': {
+            'source_path': '/private/input.h5ad', 'counting': 'paired-insertion',
+        }})
+        assert handle['X/data'].compression == 'unknown'
+        for key in ('var/_index', 'var/chrom'):
+            assert handle[key].chunks is None
+            assert h5py.check_string_dtype(handle[key].dtype).length is None
+
+    before = path.read_bytes()
+    spec = dict(definitions())['run_snapatac2']
+    item = SimpleNamespace(
+        path=path, managed_root=tmp_path, sha256=hashlib.sha256(before).hexdigest(),
+        size_bytes=len(before), contract=spec.contract, role='result.h5ad',
+        manifest=dict(tool_name='run_snapatac2', function_name='snapatac2.pp.make_peak_matrix',
+                      accepted_step_sha256='a' * 64),
+        manifest_sha256=None,
+    )
+    preparer = MatrixDownloadPreparer()
+    with preparer.prepare(item) as snapshot:
+        payload = b''.join(snapshot.iter_chunks())
+        assert len(payload) > len(before) + DESTINATION_OVERHEAD_BYTES
+        assert snapshot.source_sha256 == item.sha256
+    result = ad.read_h5ad(BytesIO(payload))
+    pd.testing.assert_frame_equal(result.obs, data.obs)
+    pd.testing.assert_frame_equal(result.var, data.var)
+    assert sparse.isspmatrix_csr(result.X) and result.X.dtype == counts.dtype
+    assert (result.X != data.X).nnz == 0
+    assert result.uns['method'] == {'counting': 'paired-insertion'}
+    assert result.uns['agent_scientific_export']['source_sha256'] == item.sha256
+    with h5py.File(BytesIO(payload), 'r') as handle:
+        assert handle['X/data'].compression == 'gzip'
+
+    capped = MatrixDownloadPreparer(DeliveryPolicy(delivered_bytes=len(before) + DESTINATION_OVERHEAD_BYTES))
+    with pytest.raises(MatrixDeliveryError) as error:
+        capped.prepare(item)
+    assert error.value.code == 'SCIENTIFIC_DOWNLOAD_LIMIT'
+    assert capped.active_count == 0
+    assert capped._reserved_bytes == 0
+    assert preparer.active_count == 0
+    assert path.read_bytes() == before

@@ -698,8 +698,13 @@ class MatrixDownloadPreparer:
                 raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_UNAVAILABLE')
             if original_size > self.policy.source_bytes:
                 raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT')
-            delivered_limit = min(original_size + size + h5ad_delivery.DESTINATION_OVERHEAD_BYTES,
-                                  self.policy.delivered_bytes)
+        if statistical or native_h5ad or integrated:
+            # Logical copies can change compression and HDF5 heap allocation.
+            # The encoded source size only bounds the input reservation.
+            delivered_limit = min(self.policy.delivered_bytes,
+                                  self.policy.temporary_bytes - size - original_size)
+            if delivered_limit <= 0:
+                raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_BUSY')
         extra_sources = artifact.manifest['sources'] if composed else ()
         if (composed and (not 1 <= len(extra_sources) <= 32 or any(
                 type(s['size_bytes']) is not int or not 0 < s['size_bytes'] <= self.policy.source_bytes
@@ -812,6 +817,8 @@ class MatrixDownloadPreparer:
             if not matrix and exc.code == 'MATRIX_DOWNLOAD_BUSY':
                 raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_BUSY') from exc
             raise
+        except h5ad_delivery.H5ADExportLimitError as exc:
+            raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT') from exc
         except (ValueError, TypeError, RuntimeError, OSError, ImportError, KeyError, SystemError) as exc:
             raise MatrixDeliveryError(prefix + '_DOWNLOAD_UNAVAILABLE') from exc
         finally:

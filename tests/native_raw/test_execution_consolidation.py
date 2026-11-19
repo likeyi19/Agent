@@ -1,8 +1,10 @@
 """Production catalog/semantic contracts; real native numerical work on small inputs."""
+import hashlib
 import json
 from pathlib import Path
 
 import anndata as ad
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
@@ -174,25 +176,59 @@ def test_native_plan_edit_read_download_and_exact_upstream_reuse(tmp_path, monke
 
 
 
-def test_compact_epizoo_export_preserves_values_and_cells_without_counts(tmp_path):
+@pytest.mark.parametrize('integrated', [False, True])
+def test_epizoo_export_preserves_values_and_checks_completed_size(tmp_path, integrated):
+    from io import BytesIO
     from agent.tools.analysis.epizoo_embedding import _publish_compact_embedding
-    from agent.application.analysis_delivery import create_analysis_export, EXPORT_KEY
+    from agent.application.analysis_delivery import create_analysis_export, create_integrated_export, EXPORT_KEY
+    from agent.tools.analysis.h5ad_delivery import H5ADExportLimitError
+
     values = np.random.default_rng(3).normal(size=(3,512)).astype('float32')
     np.save(tmp_path/'embedding.npy',values)
     (tmp_path/'cells.txt').write_text('c3\nc1\nc2\n')
     result = _publish_compact_embedding(dict(embedding_path=str(tmp_path/'embedding.npy'),
         cell_ids_path=str(tmp_path/'cells.txt')), overwrite=False)
     source=Path(result['analysis_path']); before=source.read_bytes()
-    destination=tmp_path/'download.h5ad'
-    with source.open('rb') as supplied, destination.open('w+b') as output:
-        create_analysis_export(supplied,output,dict(stage='embedding',n_cells=3),
-            source_sha256=result['analysis_sha256'],source_size_bytes=len(before),
-            manifest_sha256=None,max_bytes=1024*1024)
-    delivered=ad.read_h5ad(destination)
-    assert delivered.X is None and delivered.n_vars==0
+    manifest = dict(stage='embedding', n_cells=3)
+    original = BytesIO()
+    counts = np.array([[1, 0], [2, 4], [0, 3]], dtype=np.uint32)
+    if integrated:
+        original_data = ad.AnnData(
+            X=counts,
+            obs=pd.DataFrame(index=['c3', 'c1', 'c2']),
+            var=pd.DataFrame(index=['peak-2', 'peak-1']),
+            uns={'private_path': '/private/original.h5ad'},
+        )
+        with h5py.File(original, 'w') as handle:
+            ad.io.write_elem(handle, '/', original_data)
+        manifest['original_source'] = {'sha256': hashlib.sha256(original.getvalue()).hexdigest()}
+
+    def export(destination, max_bytes):
+        with source.open('rb') as supplied:
+            if integrated:
+                create_integrated_export(supplied, original, destination, manifest,
+                    source_sha256=result['analysis_sha256'], max_bytes=max_bytes)
+            else:
+                create_analysis_export(supplied, destination, manifest,
+                    source_sha256=result['analysis_sha256'], source_size_bytes=len(before),
+                    manifest_sha256=None, max_bytes=max_bytes)
+
+    destination = BytesIO()
+    export(destination, 1024 * 1024)
+    delivered = ad.read_h5ad(destination)
+    if integrated:
+        assert delivered.var_names.tolist() == ['peak-2', 'peak-1']
+        np.testing.assert_array_equal(delivered.X, counts)
+        assert 'private_path' not in delivered.uns
+    else:
+        assert delivered.X is None and delivered.n_vars == 0
     assert delivered.obs_names.tolist()==['c3','c1','c2']
     np.testing.assert_array_equal(delivered.obsm['X_epizoo'],values)
     assert not delivered.uns[EXPORT_KEY]['clustering_present']
+    too_small = BytesIO()
+    with pytest.raises(H5ADExportLimitError):
+        export(too_small, destination.getbuffer().nbytes - 1)
+    assert too_small.getbuffer().nbytes == 0
     assert source.read_bytes()==before
 
 

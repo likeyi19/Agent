@@ -1,6 +1,7 @@
 """Shared bounded HDF5 download I/O; no scientific algorithm or authority."""
 
 from collections.abc import Mapping
+from contextlib import contextmanager
 import re
 
 import h5py
@@ -21,6 +22,10 @@ class H5ADDeliveryError(ValueError):
 
     def __init__(self):
         super().__init__('The accepted HDF5 file is ineligible for safe export.')
+
+
+class H5ADExportLimitError(ValueError):
+    """The completed derivative exceeded its admitted delivery budget."""
 
 
 def _reject(condition):
@@ -108,35 +113,20 @@ def _safe_objects(file, max_bytes, *, numeric_kinds=frozenset({'i', 'f'}), max_d
 
 
 
-class _BoundedDestination:
-    """Enforce the transport's reservation during HDF5 file-object writes."""
-
-    def __init__(self, stream, maximum):
-        self.stream, self.maximum = stream, maximum
-
-    def write(self, value):
-        _reject(self.stream.tell() + len(value) > self.maximum)
-        return self.stream.write(value)
-
-    def truncate(self, size=None):
-        size = self.stream.tell() if size is None else size
-        _reject(type(size) is not int or not 0 <= size <= self.maximum)
-        return self.stream.truncate(size)
-
-    def read(self, *args):
-        return self.stream.read(*args)
-
-    def readinto(self, value):
-        return self.stream.readinto(value)
-
-    def seek(self, *args):
-        return self.stream.seek(*args)
-
-    def tell(self):
-        return self.stream.tell()
-
-    def flush(self):
-        return self.stream.flush()
+@contextmanager
+def export_destination(stream, max_bytes):
+    """Check the derivative size before it can be inspected or delivered."""
+    # A size exception from the file object's write callback can crash HDF5
+    # while it unwinds a variable-length write. Check after HDF5 has closed.
+    with h5py.File(stream, 'w') as handle:
+        yield handle
+    stream.flush()
+    stream.seek(0, 2)
+    size = stream.tell()
+    stream.seek(0)
+    if size > max_bytes:
+        stream.truncate()
+        raise H5ADExportLimitError('Prepared H5AD exceeds its admitted byte limit.')
 
 
 

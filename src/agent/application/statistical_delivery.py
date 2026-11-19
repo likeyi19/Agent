@@ -89,7 +89,7 @@ def create_statistical_export(source_stream, destination_stream, manifest, *, so
             accepted_step_sha256=manifest['accepted_step_sha256'],
             omitted_private_metadata_fields=len(omitted),
             authority_scope='export-does-not-issue-scientific-authority')
-        with h5py.File(io._BoundedDestination(destination_stream, max_bytes), 'w') as target:
+        with io.export_destination(destination_stream, max_bytes) as target:
             matrix._copy(source, target, omitted)
             uns = target.require_group('uns')
             # A researcher may upload an earlier privacy export. Its delivery
@@ -100,6 +100,5 @@ def create_statistical_export(source_stream, destination_stream, manifest, *, so
                 del uns[io.EXPORT_KEY]
                 metadata['supersedes_supplied_export_marker'] = True
             io._write_metadata(uns.create_group(io.EXPORT_KEY), metadata)
-    destination_stream.flush(); destination_stream.seek(0)
     inspect(destination_stream, privacy=True, require_matrix=require_matrix)
     destination_stream.seek(0)

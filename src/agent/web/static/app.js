@@ -2412,7 +2412,10 @@ async function openRequestedParameter(option, questionTurnId) {
     showParameters({sessionId: state.session.session_id, generation: state.session.generation,
       question: {question_turn_id: questionTurnId, handle: option.handle},
       steps: [{step_id: option.step_id, tool: option.tool, native_function: option.native_function, functions: tool.functions,
-        port: option.port, source: option.source, parameters: specs.map((spec) => {
+        // Canonical Requirements identify an operation operand with port; their
+        // exact question owns its source binding. Other offers use source scope.
+        ...(option.requirement_id ? {} : {port: option.port, source: option.source}),
+        parameters: specs.map((spec) => {
           let previous = spec.kwarg && !option.member ? option.previous_value?.[spec.argument] : option.previous_value;
           const matches = (recorded?.steps || []).filter((step) => step.tool === option.tool &&
             step.native_function === option.native_function).flatMap((step) => step.parameters.filter((p) =>

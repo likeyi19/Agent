@@ -16,7 +16,7 @@ import numpy as np
 
 from agent.tools.analysis.sequence_optimization import RESULT_FIELDS as _DESIGN_FIELDS
 from agent.tools.analysis.sequence_generation import RESULT_FIELDS as _GENERATION_FIELDS
-from agent.tools.analysis.macs3 import RESULT_FIELDS as _PEAK_FIELDS, FACT_FIELDS as _PEAK_FACTS
+from agent.tools.analysis import macs3 as _MACS3
 from agent.tools.analysis import archr as _ARCHR
 from agent.tools.analysis import monalisa as _MONALISA
 from agent.tools.analysis import cicero_cds as _CICERO_CDS
@@ -335,7 +335,7 @@ _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
     'run_motifmatchr': _ToolProjection(frozenset(_MATCH_FIELDS), _MATCH_FACTS, 'motifmatchr-native-v1', (
         _ArtifactProjection('manifest_path','native_motif_matches_manifest',('native_completion','exact_ordered_peaks_and_motifs','resource_and_artifact_integrity'),digest_field='manifest_sha256'),
         _ArtifactProjection('matches_path','native_motif_matches_sparse',('native_boolean_matches','all_source_peaks'),digest_field='matches_sha256'))),
-    'call_scATAC_peaks': _ToolProjection(frozenset(_PEAK_FIELDS), _PEAK_FACTS, 'macs3-frag-unit-record-v1', (
+    _MACS3.TOOL: _ToolProjection(frozenset(_MACS3.RESULT_FIELDS), _MACS3.FACT_FIELDS, _MACS3.POLICY, (
         _ArtifactProjection('manifest_path','scatac_peaks_manifest',('native_completion','exact_population','resource_and_artifact_integrity'),digest_field='manifest_sha256'),)),
     'compute_motif_accessibility': _ToolProjection(frozenset(_MOTIF_FIELDS), _MOTIF_FACTS, 'chromvar-native-v1', (
         _ArtifactProjection('manifest_path','motif_accessibility_manifest',('native_completion','exact_ordered_axes','resource_and_artifact_integrity'),digest_field='manifest_sha256'),

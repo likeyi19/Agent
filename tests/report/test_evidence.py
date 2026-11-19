@@ -9,10 +9,10 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.sparse import csr_matrix
 
 import agent.report.evidence as evidence_module
 from agent.orchestration import (
-    ResultContract,
     ToolRegistry,
     build_default_tool_registry,
     verify_step,
@@ -42,6 +42,10 @@ from agent.tools import (
     evaluate_cell_clustering,
     transfer_cell_labels,
 )
+from agent.tools._file_identity import file_closure
+from agent.tools.analysis import macs3
+from agent.tools.analysis.native_matrix import SNAPATAC2
+from agent.tools.analysis.sequence_prediction import write
 
 
 def _passed(target_type: str, target_id: str) -> VerificationResult:
@@ -384,20 +388,134 @@ def test_unapproved_future_result_field_is_not_projected(
     assert '"must"' not in text
 
 
-def test_contract_drift_fails_closed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(evidence_module, "verify_step", _accept_fresh_step)
+def test_active_evidence_projections_match_registry_contracts() -> None:
+    registry = build_default_tool_registry()
+    mismatches = {}
+    for name, projection in evidence_module._TOOL_PROJECTIONS.items():
+        if registry.contains(name):
+            spec = registry.get(name)
+            fields = frozenset(spec.result_contract.required_fields)
+            expected = (projection.contract_fields, projection.recovery_identity)
+            if (fields, spec.recovery_policy_version) != expected:
+                mismatches[name] = (fields ^ projection.contract_fields,
+                                    spec.recovery_policy_version, projection.recovery_identity)
+    assert not mismatches
+
+
+def test_macs3_v2_evidence_projects_current_facts_and_manifest() -> None:
+    spec = build_default_tool_registry().get(macs3.TOOL)
+    projection = evidence_module._TOOL_PROJECTIONS[macs3.TOOL]
+    assert spec.recovery_policy_version == projection.recovery_identity == macs3.POLICY
+    assert spec.result_contract.required_fields == macs3.RESULT_FIELDS
+    assert projection.contract_fields == frozenset(macs3.RESULT_FIELDS)
+    assert projection.fact_fields == macs3.FACT_FIELDS
+    assert all(field in macs3.RESULT_FIELDS for field in projection.fact_fields)
+    assert [(item.result_field, item.digest_field) for item in projection.artifacts] == [
+        ("manifest_path", "manifest_sha256"),
+    ]
+
+
+def _recorded_publication(owner, arguments, facts, sources):
+    root = Path(arguments["output_dir"])
+    manifest = root / "manifest.json"
+    digest = write(manifest, {
+        "contract": owner.CONTRACT,
+        "profile": owner.PROFILE,
+        "native_completion": "succeeded",
+        "arguments": arguments,
+        "result": facts,
+        "files": file_closure(root.iterdir()),
+        "sources": file_closure(sources),
+    })
+    return owner.verify_publication(manifest, expected_sha256=digest)
+
+
+def test_verified_snapatac2_macs3_run_composes_evidence(tmp_path: Path) -> None:
+    # Represent completed native publications with small files. The real owner
+    # verifiers check the manifests, resolved inputs, and file digests below.
+    fragments = tmp_path / "fragments.tsv"
+    fragments.write_text("chr1\t10\t20\tcell-1\t1\n")
+    snap_dir = tmp_path / "snapatac2"
+    snap_dir.mkdir()
+    fragment_h5ad = snap_dir / "result.h5ad"
+    dataset = ad.AnnData(shape=(1, 0), obs=pd.DataFrame(index=["cell-1"]))
+    dataset.obsm["fragment_paired"] = csr_matrix(([10], ([0], [10])), shape=(1, 100))
+    dataset.write_h5ad(fragment_h5ad)
+    for name in ("metadata.json", "native-receipt.json"):
+        (snap_dir / name).write_text("{}")
+    snap_args = {"function_name": "pp.import_fragments", "input_path": str(fragments),
+                 "output_dir": str(snap_dir), "kwargs": {"chrom_sizes": {"chr1": 100}}}
+    snap = _recorded_publication(SNAPATAC2, snap_args, {
+        "status": "succeeded", "contract_version": SNAPATAC2.CONTRACT,
+        "function_name": snap_args["function_name"], "n_cells": 1, "n_features": 0,
+        "measurement": "native_fragment_positions_and_lengths", "parameters": {},
+        "source_identity": file_closure([fragments])[0], "software_versions": {},
+        "native_output_type": "h5ad", "result_slots": ["obsm.fragment_paired"],
+        "limitations": "Technical fixture",
+    }, [fragments])
+
+    peak_dir = tmp_path / "macs3"
+    peak_dir.mkdir()
+    for name in (*macs3.FILES, "cells.tsv"):
+        (peak_dir / name).touch()
+    bed = peak_dir / "features.bed"
+    bed.write_text("chr1\t10\t20\tchr1:10-20\n")
+    peak_args = {"input_path": str(fragment_h5ad), "output_dir": str(peak_dir),
+                 "effective_genome_size": 100, "genome_size_basis": "Technical fixture"}
+    peaks = _recorded_publication(macs3, peak_args, {
+        "status": "succeeded", "contract_version": macs3.CONTRACT, "n_peaks": 1,
+        "n_barcodes": 1, "n_observed_barcodes": 1, "n_fragment_records": 1,
+        "total_source_support": None, "population": "pooled exact selected native H5AD cells",
+        "species": "human", "assembly": "fixture", "contigs": ["chr1"],
+        "parameters": macs3.settings(peak_args, {"chr1": 100}), "native_statistics": {},
+        "source_identity": file_closure([fragment_h5ad])[0], "limitations": macs3.LIMITATIONS,
+    }, [fragment_h5ad])
+
+    registry = _guarded_registry()
+    imported = PlanStep("import", SNAPATAC2.TOOL, snap_args)
+    called = PlanStep("peaks", macs3.TOOL, {
+        **peak_args, "input_path": StepOutputRef("import", "matrix_path"),
+    }, ("import",))
+    plan = AgentPlan("peak-plan", "peak-request", "fixture", (imported, called))
+    steps = tuple(StepExecutionResult(
+        step.step_id, step.tool_name, StepStatus.SUCCEEDED, 1, arguments, result,
+        verify_step(step, arguments, result, registry, dependency_results=dependencies),
+    ) for step, arguments, result, dependencies in (
+        (imported, snap_args, snap, {}), (called, peak_args, peaks, {"import": snap}),
+    ))
+    assert all(step.verification.passed for step in steps)
+    run = AgentRunResult("peak-request:run", "peak-request", RunStatus.SUCCEEDED,
+                         False, plan=plan, steps=steps, verification=verify_run(plan, steps))
+    assert run.verification.passed
+
+    evidence = build_analysis_evidence(run, tmp_path / "evidence", registry=registry)
+    assert verify_analysis_evidence(run, evidence, registry=registry).passed
+    payload = json.loads(Path(evidence["evidence_path"]).read_text())
+    assert evidence["tool_names"] == [SNAPATAC2.TOOL, macs3.TOOL]
+    assert payload["workflow"]["ordered_steps"][1]["depends_on"] == ["import"]
+    assert payload["steps"][1]["facts"]["n_peaks"] == 1
+    assert payload["steps"][1]["recovery_identity"] == macs3.POLICY
+    peak_artifact, = [row for row in payload["artifacts"] if row["producing_step_id"] == "peaks"]
+    assert peak_artifact["artifact_path"] == peaks["manifest_path"]
+    assert peak_artifact["integrity"]["authoritative_digest"]["value"] == peaks["manifest_sha256"]
+
+    bed.write_text("chr1\t10\t21\tchr1:10-21\n")
+    assert verify_analysis_evidence(run, evidence, registry=registry).error.code == (
+        "EVIDENCE_SOURCE_STEP_REVALIDATION_FAILED"
+    )
+
+
+@pytest.mark.parametrize("drift", ["result_field", "recovery_policy"])
+def test_contract_drift_fails_closed(drift: str, tmp_path: Path) -> None:
     base = build_default_tool_registry()
     inspect = base.get("inspect_scATAC")
-    fields = dict(inspect.result_contract.required_fields)
-    fields["future_required_field"] = (str,)
-    changed = replace(
-        inspect,
-        result_contract=ResultContract(
-            "FutureInspection", fields, inspect.result_contract.validator
-        ),
-    )
+    if drift == "result_field":
+        changed = replace(inspect, result_contract=replace(
+            inspect.result_contract,
+            required_fields={**inspect.result_contract.required_fields, "future_required_field": (str,)},
+        ))
+    else:
+        changed = replace(inspect, recovery_policy_version="incompatible-policy-v2")
     registry = ToolRegistry(
         (changed,) + tuple(base.get(name) for name in base.names() if name != "inspect_scATAC")
     )

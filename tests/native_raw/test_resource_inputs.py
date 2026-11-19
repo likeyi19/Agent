@@ -84,6 +84,20 @@ def test_separate_library_components_are_native_inputs_without_bundle(inputs):
     assert [k for s in result.steps for k in s.arguments if k.endswith('_path') and k!='input_path']==['chrom_sizes_path','gene_anno_path','peaks_path']
 
 
+def test_qualified_release_name_matches_inside_multilingual_preference(inputs):
+    from agent.application.resource_continuation import ground_catalog_preference, preference_matches
+    hg19 = replace(inputs.genes, label='Human hg19 GENCODE 19 annotation')
+    hg38 = replace(inputs.genes, input_set_id='newer', label='Human hg38 GENCODE 49 annotation')
+    preference = {'literal': '人类 GENCODE 19 基因注释', 'start': 2, 'end': 20}
+    grounded = ground_catalog_preference(preference, (hg19, hg38))
+    assert grounded == {'literal': 'GENCODE 19', 'start': 5, 'end': 15}
+    assert preference_matches(grounded, (hg19, hg38)) == [hg19]
+    unknown = {'literal': '人类 GENCODE 1 基因注释', 'start': 2, 'end': 19}
+    assert ground_catalog_preference(unknown, (hg19, hg38)) == unknown
+    alias = replace(hg19, input_set_id='another-release-19')
+    assert preference_matches(grounded, (hg19, alias)) == [hg19, alias]
+
+
 def test_true_feature_ambiguity_and_default_are_distinct(inputs):
     other=inputs.component('different-release','peaks',inputs.bed2)
     choices=(inputs.full,other)

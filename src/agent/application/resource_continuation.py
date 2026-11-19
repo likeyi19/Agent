@@ -6,6 +6,7 @@ qualification still occur through the ordinary execution path.
 """
 from dataclasses import replace
 from collections.abc import Mapping
+import re
 from agent.schemas.orchestration import _serialize
 from .session_state import digest, SessionError
 from .turn_decisions import IntentError
@@ -125,6 +126,22 @@ def preference_matches(preference, choices, *, label=lambda s:s.label,
     exact = [s for s in choices if name in (' '.join(label(s).casefold().split()), identity(s),
         *(' '.join(value.casefold().split()) for value in aliases(s)))]
     return exact or [s for s in choices if name in ' '.join(label(s).casefold().split())]
+
+
+def ground_catalog_preference(preference, choices, *, aliases=lambda s:()):
+    """Keep the exact quoted release name when surrounding words differ from the catalog."""
+    if preference is None or preference_matches(preference, choices, aliases=aliases):
+        return preference
+    releases = re.compile(r'(?<!\w)[a-z][a-z0-9_-]*[ \t]+[0-9]+(?:[.-][0-9]+)*(?![\w.-])', re.I)
+    offered = {' '.join(release.casefold().split()) for choice in choices
+               for text in (choice.label, *aliases(choice)) for release in releases.findall(text)}
+    matches = [m for m in releases.finditer(preference['literal'])
+               if ' '.join(m.group().casefold().split()) in offered]
+    if len(matches) != 1:
+        return preference
+    match, = matches
+    start = preference['start']
+    return dict(literal=match.group(), start=start + match.start(), end=start + match.end())
 
 
 def match_preference(preference, choices, *, aliases=lambda s:()):

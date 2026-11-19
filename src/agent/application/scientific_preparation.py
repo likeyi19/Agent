@@ -360,7 +360,19 @@ def prepare(sessions, interaction, admitted, *, record=None, intake_needs=None, 
         # Parsed invalidity always wins; no scientific owner or prompt hides it.
         owner_requirements, bindings_receipt = [], []
         if analysis.disposition is not AnalysisDisposition.INVALID:
+            from .native_raw_handoff import coordinates
+            history = records.active_answers(state.interactions, record)
             scoped_resources = records.resource_bindings(state.interactions, record)
+            source_scopes = {op.step_id: set(records.operation_sources(op.step_id, analysis.operations,
+                             app.registry, lineage=True)) for op in analysis.operations}
+            declarations = [(source_scopes[op.step_id], {key: op.arguments.get(key)
+                             for key in ('species', 'assembly')}) for op in analysis.operations
+                            if any(op.arguments.get(key) is not None for key in ('species', 'assembly'))]
+            coordinate_choices = [(answer, requirement) for answer, requirement in history
+                                  if answer['kind'] == 'resource' and answer['value'].get('coordinates')]
+            task = (record if 'task' in record else records.origin_record(state.interactions, record))['task']
+            intake_owner = task['context'].get('intake_owner')
+            captured_source = task['sources']
             field_questions = {(answer['step_id'], answer['argument']): next(
                 i for i in state.interactions if i.turn_id == answer['question_turn_id'])
                 for answer, _ in records.active_answers(state.interactions, record)
@@ -369,10 +381,30 @@ def prepare(sessions, interaction, admitted, *, record=None, intake_needs=None, 
                 original = dict(arguments)
                 scoped = dict(admitted)
                 selected_resources = scoped_resources.get(step_id, {})
-                paths = set(records.operation_sources(step_id, analysis.operations, app.registry, lineage=True))
-                intake_owner = records.intake_task(sessions.load(sessions._interaction_session_id).interactions, record)
-                captured_source = records.origin_record(sessions.load(sessions._interaction_session_id).interactions, record)['task']['sources']
-                scoped, applies = scoped_source_admission(admitted, intake_owner, captured_source, paths)
+                paths = source_scopes[step_id]
+                scoped, _ = scoped_source_admission(admitted, intake_owner, captured_source, paths)
+                raw = scoped.get(str(intake_owner) + '_context', {})
+                if raw.get('adapter') != 'native-inputs.v1':
+                    raw = {}
+                ids = raw.get('selected') or ()
+                if isinstance(ids, str):
+                    ids = (ids,)
+                selected_coordinates = coordinates([raw['catalog'].get(key) for key in ids])
+                matched = []
+                own = {}
+                references = {}
+                for answer, requirement in coordinate_choices:
+                    if paths and paths == source_scopes.get(answer['step_id']):
+                        value = answer['value']
+                        matched.append(value['coordinates'])
+                        references.setdefault(requirement['port'], set()).add(value['handle'].removeprefix('resource.'))
+                        if step_id == answer['step_id']:
+                            own.update(value['coordinates'])
+                scoped['source_coordinates'] = coordinates(matched) | own | selected_coordinates | coordinates(
+                    [row for scope, row in declarations if paths and paths == scope]) | {
+                    key: raw[key] for key in ('species', 'assembly') if raw.get(key) is not None}
+                scoped['coordinate_resources'] = {port: next(iter(ids)) for port, ids in references.items()
+                                                  if len(ids) == 1}
                 try:
                     from pathlib import Path
                     from agent.tools.analysis.categorical import has_field
@@ -476,7 +508,7 @@ def prepare(sessions, interaction, admitted, *, record=None, intake_needs=None, 
             source_steps=records.operation_dependencies(req['step_id'], analysis.operations)) for req in requirements]
         if requirements:
             result = records.question(record, interaction, requirements, blocked=analysis.blocked_checks)
-            return dict(admitted, preparation_result=result), None, None, None
+            return dict(admitted, preparation_result=result, native_resource_bindings=bindings_receipt), None, None, None
         from .local_resources import ResourceAdmissionError
         try:
             validate_direct_source(state.interactions, record)
@@ -924,6 +956,8 @@ def interpreted_source(sessions, interaction, decision):
     original, previous = records.intake_context(interaction, preceding)
     field = records.intake_task(preceding, previous.preparation)
     if decision.pending != '@roles' or state.interactions[-1].turn_id != interaction.turn_id:
+        raise IntentError('invalid_prerequisite')
+    if getattr(decision, field) is None and not decision.arguments and not decision.unknown_fields:
         raise IntentError('invalid_prerequisite')
     admitted, needs = source_admission(sessions, interaction, decision)
     # Interpret resource intent through the scientific owner, then bind the

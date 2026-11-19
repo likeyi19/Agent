@@ -398,6 +398,7 @@ def prepare_operation(arguments, context):
     from agent.orchestration.scientific_inputs import ScientificInputRequired,ScientificInputRequirement,ScientificDiagnostic,parameter_requirements
     method=arguments.get('selection_method','descriptive')
     if method in ('explicit','descriptive'):
+        arguments = context.coordinate_arguments(arguments, arguments.get('input_path'))
         missing=[name for name in ('input_path','species','assembly','coordinate_system') if not arguments.get(name)]
         if method=='explicit' and not arguments.get('feature_ids'):missing.append('feature_ids')
         if method=='descriptive' and not arguments.get('matrix_semantics'):missing.append('matrix_semantics')

@@ -340,10 +340,11 @@ def build_semantic_planning_prompt(
             tool[1][name] = (*compact[:4], guidance) if port[4] is None else compact
     catalog['catalog_format']['guidance_tail'] = 'Pad to 5 with null.'
     catalog['catalog_format']['input_lineage'] = 'Five-item input ports omit null required_lineage; guidance is last.'
-    catalog['application_prepared_ports'] = {name: [port.name
+    prepared_ports = {name: [port.name
         for port in registry.get(name).semantic_planning.consumer_ports
         if port.required and all(member.field_name in registry.get(name).application_inputs for member in port.members)]
         for name in catalog['tools'] if registry.get(name).application_inputs}
+    catalog['application_prepared_ports'] = {name: ports for name, ports in prepared_ports.items() if ports}
     from ._catalog_compaction import share_catalog_values
     catalog['tools'], shared, names, marker = share_catalog_values(catalog['tools'])
     catalog['catalog_format']['catalog_reference'] = '{<catalog_ref_key>:i}=catalog_values[i]; catalog_keys maps keys to original names.'
@@ -359,7 +360,7 @@ def build_semantic_planning_prompt(
         "semantic_prompt_version": SEMANTIC_PLANNING_PROMPT_VERSION,
         "instructions": (
             'Use catalog.scientific_contracts to compose actual requirements and outputs. False means known absent; omitted facts are not proof. An H5AD is not by itself a feature matrix. Never invent source facts.',
-            'Plan the complete scientific objective directly from Registry tools. A package request may require multiple calls. Function-qualified sources fix each native function and its own kwargs; never substitute them. Chain dataset outputs to preserve dependencies and slots.',
+            'Plan the complete objective from Registry tools. Function-qualified sources fix each named native call and its kwargs. Add legitimate prerequisites unless excluded by the researcher. Chain dataset outputs to preserve dependencies and slots.',
             'Consider stated downstream research goals when selecting compatible methods and registered representation choices for the current task. A future goal does not authorize executing it now. Preserve explicit scientific preferences and omitted defaults of explicit native-function calls; never fabricate user parameters. Reuse compatible accepted upstream data for a later representation, with a distinct recorded native operation rather than relabelling measurements. Genuine unresolved scientific alternatives require clarification, not a fixed workflow or preference by integration order.',
             'Compose missing scientifically legitimate prerequisites for the goal. Reuse compatible existing results and qualified supplied groups. Do not ask the researcher to compute available prerequisites manually. registered_choices lists eligible tool/port names; their exact domains are in catalog input-port guidance.choices. Bind source={kind:registered_choice,choice:<offered value>} only there and only without a supplied user value. Select using the scientific source declarations and Registry method requirements; this is a recorded Planner choice, never a user instruction. Other absent optional values keep native defaults.',
             'The user_request retains the whole research objective. research_context.task separates requested non-computational delivery from science. Explanation, descriptive comparison and presentation are post-run responsibilities, not invented Registry tools. Delivery intentions marked deferred are not fulfilled by this plan. Do not classify supported science as unsupported solely because subsequent delivery is requested.',
@@ -372,6 +373,7 @@ def build_semantic_planning_prompt(
             'deterministic_scoped: compiler-bound from explicit scope; do not emit source. optional_explicit: per-step scope, no fanout, defaults on omission.',
             'Required: unique input or fitting producer; sources add dependencies; controls order.',
             'A missing external file, resource, parameter or existing-field choice does not prevent planning a supported operation: omit only its unresolved consumer port and let canonical Preparation obtain the registered owner requirement. Never invent an unavailable input selector or file, return unsupported solely for missing input, or choose an existing field the researcher asked to select. Connect required Agent-produced fields/representations through compatible producer dataset ports; no researcher field choice is needed for a guaranteed planned output.',
+            'Required alternatives: preserve supplied features or use applicable existing inputs. If derived features are needed, connect a legitimate registered producer and preserve the intended dataset and population.',
             'Candidates: no execution permission; compiler/resource/preflight/admission required.',
             'Exclude artifacts/references/checkpoints/upstream authority and incompatible lineage, ambiguous source identity or invalid DAGs. Unsupported: unavailable capabilities or explicit implementations, incompatibility or no legitimate candidate.',
         ),

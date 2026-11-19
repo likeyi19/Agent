@@ -39,6 +39,118 @@ def _proposal():
     return dict(schema_version=4, decision=dict(kind="plan", steps=steps))
 
 
+@pytest.mark.parametrize('reference_answer', ['exact', 'prose'])
+def test_bam_reference_and_regions_continue_with_one_population_answer(tmp_path, monkeypatch, reference_answer):
+    from agent.application import preparation_state as records
+    from agent.schemas import VerificationResult, VerificationCheck
+    from test_preparation_owner_contracts import Model, setup
+    import hashlib
+    import pysam
+
+    clarification = '确认：这份 BAM 比对到人类 UCSC hg19（GRCh37）。请使用资源库中与 hg19 匹配的人类 GENCODE 19 基因注释。'
+
+    class Handoff(Model):
+        def complete(self, *, prompt, response_schema):
+            value = json.loads(prompt)
+            if 'turn_schema_version' in value:
+                self.calls.append(value)
+                if value['utterance'] == clarification:
+                    return json.dumps(dict(turn_schema_version=1, decision=dict(kind='answer_roles',
+                        pending='@roles', roles=[], arguments=[], unknown_fields=[],
+                        bam=dict(declaration_dict(BamDeclaration(species='human', assembly='hg19')),
+                                 resource_preference=dict(literal='人类 GENCODE 19 基因注释',
+                                     evidence='请使用资源库中与 hg19 匹配的人类 GENCODE 19 基因注释。')))))
+                return json.dumps(dict(turn_schema_version=1, decision=dict(kind='request_roles',
+                    target='run_snapatac2', required_roles=[], roles=[], bam=declaration_dict(
+                        BamDeclaration(source='source.0', species='human', feature_source='source.1')))))
+            if 'semantic_prompt_version' in value:
+                self.calls.append(value)
+                proposal = _proposal()
+                extract, imported, matrix, *_ = proposal['decision']['steps']
+                def qc(step, function, parent):
+                    return dict(step_id=step, tool='run_snapatac2', control_dependencies=[], sources=[
+                        dict(target='dataset', source=dict(kind='step_port', step=parent, source_port='dataset')),
+                        dict(target='function_name', source=dict(kind='registered_choice', choice=function))])
+                matrix['sources'][0]['source']['step'] = 'filter'
+                proposal['decision']['steps'] = [extract, imported, qc('tsse', 'metrics.tsse', 'import'),
+                    qc('filter', 'pp.filter_cells', 'tsse'), matrix, qc('sibling', 'pp.filter_cells', 'tsse')]
+                return json.dumps(proposal)
+            return super().complete(prompt=prompt, response_schema=response_schema)
+
+    model = Handoff()
+    app, executor = setup(tmp_path, model)
+    bam = tmp_path / 'sample.bam'
+    with pysam.AlignmentFile(bam, 'wb', header=dict(SQ=[dict(SN='chr1', LN=100)], RG=[dict(ID='cell')])) as output:
+        read = pysam.AlignedSegment()
+        read.query_name = 'test'
+        read.query_sequence = 'A'
+        read.flag = 4
+        read.set_tag('RG', 'cell')
+        output.write(read)
+    bed = tmp_path / 'researcher.bed'
+    bed.write_text('chr1\t1\t5\n')
+    files = [app.resources.register(path.name, path, input_type='attachment', session_id='session',
+             label=path.name, attribution='Regression fixture').resource_id for path in (bam, bed)]
+    supplied = app.resources.compose_group(files, attachment_candidates=True)
+    def resource(assembly, port, contents):
+        path = tmp_path / (assembly + '.' + port)
+        path.write_text(contents)
+        label = 'Human hg19 GENCODE 19 annotation' if (assembly, port) == ('hg19', 'gene_anno') else assembly + ' ' + port
+        return ScientificInputSet(assembly + '-' + port, label,
+            {'species': 'human', 'assembly': assembly, port + '_path': str(path),
+             port + '_sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
+    resources = (resource('hg19', 'chrom_sizes', 'chr1\t100\n'),
+                 resource('hg38', 'chrom_sizes', 'chr1\t200\n'),
+                 resource('hg19', 'gene_anno', 'hg19 technical fixture'),
+                 resource('hg38', 'gene_anno', 'hg38 technical fixture'))
+    intercepted = []
+    def preflight(plan):
+        intercepted.append(plan)
+        return VerificationResult(False, 'plan', plan.plan_id,
+            (VerificationCheck('withheld', False, 'No native work in this test'),))
+    monkeypatch.setattr(executor, 'preflight', preflight)
+    first = app.submit_turn('session', 'initial', 'Compute TSS enrichment, filter and count over my BED.',
+        expected_generation=0, registered_input=supplied, input_sets=resources)
+    original = app._application.sessions.load('session').interactions[0]
+    assert first.status == 'clarification', first.to_dict()
+    calls = len(model.calls)
+    def choose(turn, outcome, identity, next_turn):
+        offer = next(o for o in outcome.clarification_choices if o['choice_identity'] == identity)
+        return app.submit_turn('session', next_turn, '', expected_generation=0, input_sets=resources,
+            clarification_choice=dict(question_turn_id=turn, handle=offer['handle']))
+    tagged = choose('initial', first, 'native-parameter.barcode_tag.RG', 'barcode')
+    if reference_answer == 'exact':
+        selected = choose('barcode', tagged, 'resource.hg19-chrom_sizes', 'reference')
+        assert len(model.calls) == calls
+    else:
+        selected = app.submit_turn('session', 'reference', clarification, expected_generation=0, input_sets=resources)
+    state = app._application.sessions.load('session')
+    current = state.interactions[-1]
+    if reference_answer == 'exact':
+        assert current.preparation['answers'][0]['value']['coordinates'] == {'species': 'human', 'assembly': 'hg19'}
+    else:
+        assert current.admitted['bam']['assembly'] == 'hg19'
+        assert current.admitted['bam']['resource_preference']['literal'] == 'GENCODE 19'
+    assert {r['argument'] for r in records.observation(current)['requirements']} == {'qc_population'}
+    reasons = ('explicit', 'automatic') if reference_answer == 'exact' else ('automatic', 'explicit')
+    assert [(r['port'], r['assembly'], r['reason']) for r in current.admitted['native_resource_bindings']
+            if r['port'] in ('chrom_sizes', 'gene_anno')] == [
+                ('chrom_sizes', 'hg19', reasons[0]), ('gene_anno', 'hg19', reasons[1])]
+    calls = len(model.calls)
+    final = choose('reference', selected, 'study_selected', 'population')
+    assert final.error.code == 'PLAN_PREFLIGHT_FAILED', final.to_dict()
+    steps = {step.step_id: step for step in intercepted[-1].steps}
+    assert steps['extract'].arguments['kwargs']['barcode_tag'] == 'RG'
+    assert steps['matrix'].arguments['peaks_path'] == str(bed)
+    assert steps['tsse'].arguments['gene_anno_path'] == str(tmp_path / 'hg19.gene_anno')
+    assert all(steps[step].arguments['qc_selection']['population'] == 'study_selected'
+               for step in ('filter', 'sibling'))
+    state = app._application.sessions.load('session')
+    assert len(model.calls) == calls
+    assert {i.preparation['candidate_id'] for i in state.interactions} == {original.preparation['candidate_id']}
+    assert {i.preparation['task_id'] for i in state.interactions} == {original.preparation['task_id']}
+
+
 @pytest.mark.parametrize("failure", [None, "candidate_source", "candidate_step", "preflight", "catalog", "generation"])
 def test_human_choice_recompiles_the_captured_graph_without_interpretation_or_planning(
         tmp_path, monkeypatch, failure):

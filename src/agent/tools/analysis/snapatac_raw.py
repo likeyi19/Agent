@@ -67,6 +67,31 @@ BARCODE_CHOICES = (
 )
 
 
+def barcode_offers(arguments, context):
+    """Offer a read-group tag when the captured BAM declares and uses it."""
+    from itertools import islice
+    from agent.application.source_observations import identity_source
+
+    source = identity_source(arguments.get('input_path'), context.selected, context.registry)
+    if not isinstance(source, (str, Path)):
+        return BARCODE_CHOICES
+    try:
+        import pysam
+
+        with pysam.AlignmentFile(str(source), 'rb', check_sq=False) as bam:
+            groups = {row['ID'] for row in bam.header.to_dict().get('RG', ()) if 'ID' in row}
+            if groups:
+                for read in islice(bam.fetch(until_eof=True), 32):
+                    tag = read.get_tag('RG') if read.has_tag('RG') else None
+                    if isinstance(tag, str) and tag in groups:
+                        return (dict(handle='native-parameter.barcode_tag.RG',
+                                     label='Use BAM read-group tag (barcode_tag=RG)',
+                                     argument='kwargs', value={'barcode_tag': 'RG'}), *BARCODE_CHOICES)
+    except (ImportError, OSError, ValueError):
+        pass  # Native extraction owns parsing. The manual choices remain available.
+    return BARCODE_CHOICES
+
+
 def parameter_metadata(function, metadata):
     """Keep the selected-member editor typed even without runtime discovery."""
     result=dict(metadata)
@@ -141,6 +166,14 @@ def qc_decision(arguments, context):
         return {'method':'native_defaults','reason':'explicit_filter_minima'},qc_lineage(arguments.get('input_path'),context)[0]
     origin,history=qc_lineage(arguments.get('input_path'),context)
     declared=arguments.get('qc_population')
+    if declared is None and history is None:
+        source = arguments.get('input_path')
+        known = {peer['qc_population'] for _, peer in context.selected.values()
+                 if peer.get('function_name') == 'pp.filter_cells' and peer.get('qc_population')
+                 and (qc_lineage(peer.get('input_path'), context)[0] == origin if origin is not None
+                      else source is not None and peer.get('input_path') == source)}
+        if len(known) == 1:
+            declared = known.pop()
     if history and declared and history!=declared and declared!='uncalled_single_sample':
         raise ScientificDiagnostic('QC_POPULATION_CONFLICT','The declared QC population conflicts with its selected source lineage.')
     population=history or declared
@@ -203,9 +236,10 @@ def use_default_peak_regions(arguments, context):
     if (arguments.get('function_name')!='pp.make_peak_matrix' or arguments.get('peaks_path') is not None
             or peak_region_key(arguments) is not None):
         return arguments
-    key='regions.'+DEFAULT_PEAK_REGION_KEY
-    if context.properties(arguments.get('input_path'), (key,)).get(key):
-        return dict(arguments, kwargs={**arguments.get('kwargs', {}), 'use_rep':DEFAULT_PEAK_REGION_KEY})
+    for region in scientific_contract(arguments).parameters['regions']['dataset_defaults']:
+        key = 'regions.' + region
+        if context.properties(arguments.get('input_path'), (key,)).get(key):
+            return dict(arguments, kwargs={**arguments.get('kwargs', {}), 'use_rep': region})
     return arguments
 
 
@@ -235,10 +269,20 @@ def scientific_contract(arguments):
         needs['x' if kwargs.get('use_x') else 'native_values']=True
         parameters['storage_by_use_x']={'true': 'x', 'false': 'native_values'} if name!='pp.add_tile_matrix' else {'false': 'native_values'}
         if name=='pp.make_peak_matrix':
-            parameters['regions']={'alternatives': ('peaks', 'kwargs.use_rep:list', 'uns[kwargs.use_rep]'),
-                                   'native_default': 'uns.'+DEFAULT_PEAK_REGION_KEY}
+            parameters['regions'] = {
+                'required': True,
+                'alternatives': {'peaks': 'Exact supplied or upstream BED on this coordinate system',
+                    'kwargs.use_rep:list': 'Ordered explicit region list',
+                    'kwargs.use_rep:str': 'Usable region table at that key in dataset.uns'},
+                'dataset_defaults': (DEFAULT_PEAK_REGION_KEY,),
+                'feature_axis': 'Use the selected region definitions',
+            }
             selected=checked_raw_operand(arguments)
-            if isinstance(selected,str): needs['regions.'+selected]=True
+            if isinstance(selected, str):
+                needs['regions.' + selected] = True
+            elif selected is None:
+                parameters['required_ports'] = ('peaks',)
+            effects.update(cell_axis='preserve', feature_space='selected_regions')
         output.update(x=True, scanpy_auto_rep=True, scanpy_x_rep=True,
                       counting_strategy=kwargs.get('counting_strategy',arguments.get('counting_strategy','paired-insertion')),
                       **{'var.selected': False})
@@ -275,7 +319,10 @@ def scientific_contract(arguments):
                        independent_return=not kwargs.get('inplace',True))
     if name in ('metrics.tsse','metrics.frag_size_distr') or name in ('pp.filter_cells','pp.call_cells') and not kwargs.get('inplace',True):
         effects['graph_storage']='preserve'
-    return ScientificContract(inputs={'dataset':needs}, parameters=parameters, outputs={'dataset':output},
+    inputs = {'dataset': needs}
+    if name == 'pp.make_peak_matrix':
+        inputs['peaks'] = {'format': 'bed'}
+    return ScientificContract(inputs=inputs, parameters=parameters, outputs={'dataset':output},
                               effects=effects, selection=selection,
                               resolve_selection=coordinate_qc if name=='pp.filter_cells' else None)
 
@@ -315,7 +362,7 @@ def prepare_operation(arguments, context):
         choice=next((row for row in BARCODE_CHOICES if row==answer), None)
         if choice is None:
             raise ScientificInputRequired(ScientificInputRequirement('kwargs', 'kwargs', 'resource',
-                offers=BARCODE_CHOICES, dependencies=('source:bytes',), applicability=condition,
+                offers=barcode_offers(arguments, context), dependencies=('source:bytes',), applicability=condition,
                 messages=('Choose one barcode-extraction mechanism for the selected BAM.',)))
         raise ScientificInputRequired(ScientificInputRequirement('kwargs', 'kwargs', 'scalar',
             member=choice['member'], dependencies=('source:bytes',),

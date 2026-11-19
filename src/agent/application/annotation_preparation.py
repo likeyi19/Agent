@@ -355,7 +355,7 @@ def preparer(sessions, interaction, admitted, *, requirement_bindings=None, bind
                 reference_species=next((key for key in ('human','mouse')
                     if species_name(reference_species)==species_name(key)),reference_species)
             receipt = dict(catalog=catalog, custom={}, species=reference_species,
-                assembly=declared.assembly,
+                assembly=declared.assembly or admitted.get('source_coordinates', {}).get('assembly'),
                 selected=None if declared.resource is None else declared.resource.removeprefix('resource.'))
             raw = next((admitted.get(field + '_context', {}) for field in ('fastq', 'fragments', 'bam')
                 if admitted.get(field + '_context', {}).get('adapter') == 'native-inputs.v1'), {})
@@ -401,5 +401,8 @@ def preparer(sessions, interaction, admitted, *, requirement_bindings=None, bind
 
 
 def prepare_operation(arguments, context):
-    return preparer(context.sessions, context.interaction, context.admitted,
+    source = arguments.get('input_path')
+    admitted = dict(context.admitted, source_coordinates=context.coordinate_context(source))
+    arguments = context.coordinate_arguments(arguments, source)
+    return preparer(context.sessions, context.interaction, admitted,
         requirement_bindings=context.answers, bindings=context.receipts)(context.tool, arguments, context.selected)

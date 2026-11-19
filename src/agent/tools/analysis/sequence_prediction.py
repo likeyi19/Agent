@@ -555,6 +555,7 @@ def prepare_sequence_input(arguments, context):
             first=stream.read(4096).lstrip()
         checked_file(observed.path,observed.sha256)
         if first and not first.startswith(b'>'):
+            arguments = context.coordinate_arguments(arguments, arguments.get('sequence_path'))
             if not arguments.get('assembly'):
                 raise ScientificInputRequired(*parameter_requirements(context.tool,('assembly',)))
             from .sequence_reference import matching_genome_entries,qualified_genome_entries

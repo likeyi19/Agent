@@ -80,7 +80,14 @@ def declaration_input(registry, declaration, ordinary):
 
 def parameter_matches(steps, row, registry, admitted):
     from agent.application.turn_decisions import IntentError
+    tool = registry.get(row['tool'])
+    declared = {source.selector for port in tool.semantic_planning.consumer_ports
+                if any(member.field_name == row['argument'] for member in port.members)
+                for source in port.request_sources} if tool.native_functions is not None else set()
+    supported = {function for function in function_choices(tool)
+                 if input_name(tool.name, function, row['argument']) in declared}
     selected = [s for s in steps if s.tool_name == row['tool']
+                and (not supported or s.arguments.get('function_name') in supported)
                 and (row.get('native_function') is None or s.arguments.get('function_name') == row['native_function'])]
     if row.get('port') is not None:
         from agent.application.local_resources import _group_port, plan_source_path

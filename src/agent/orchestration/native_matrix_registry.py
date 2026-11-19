@@ -170,11 +170,7 @@ def tool_spec(owner):
         'For explicit native-function requests omit task-only fragment_order; omitted kwargs retain native defaults. '
         'TBI is unused. No canonical fragment import or internal source profile is required. '
         'metrics.tsse consumes native fragment H5AD and GTF/GFF gene_anno. pp.filter_cells is a separate native selection '
-        'with its own method. pp.make_peak_matrix consumes imported native H5AD and optional peaks BED. '
-        'Its peaks port accepts installed reference regions, researcher-supplied BED or the accepted '
-        'call_scATAC_peaks peaks port. Existing regions require no peak caller. For de novo MACS3 peaks, '
-        'call_scATAC_peaks consumes the selected native fragment H5AD, and pp.make_peak_matrix consumes '
-        'that same dataset plus the accepted peak BED. '
+        'with its own method. pp.make_peak_matrix requires one of its declared region inputs. '
         'Its native default is paired-insertion. Research tasks may select the registered counting_strategy '
         'choice for a scientifically justified downstream method, without inventing a user declaration. '
         'Choose methods and compatible regions from the objective and available references, not integration order; '
@@ -214,7 +210,9 @@ def tool_spec(owner):
     notes = tuple(sentence + '.' for sentence in raw_guidance.strip().rstrip('.').split('. '))
     from agent.application.native_raw_handoff import prepare_operation
     return ToolSpec(source_encodings={p.name:((('h5ad','bam','fragments') if owner.package=='snapatac2' else ('h5ad',)) if p.name in ('dataset','second') else {'chrom_sizes':('fai','chromosome_sizes_tsv'),'gene_anno':('gtf','gff'),'peaks':('bed',),'whitelist':('barcode_whitelist',)}[p.name]) for p in ports if p.name in ('dataset','second') or any(m.field_name in raw_fields for m in p.members)}, source_input_types={p.name: (('h5ad','bam','external_fragments') if owner.package=='snapatac2' and p.name=='dataset' else ('h5ad',) if p.name in ('dataset','second') else ('attachment','scientific_reference')) for p in ports if p.name in ('dataset','second') or any(m.field_name in raw_fields for m in p.members)}, preparation_owner=prepare_operation, native_functions=NativeFunctionCatalog(owner.package, tuple(owner.FUNCTIONS.items()), parameter_metadata=owner.parameter_metadata, output_available=owner.output_available),scientific_contract=owner.scientific_contract,name=owner.TOOL, function=owner.invoke, required_arguments=required, optional_arguments=optional,
-        application_inputs=frozenset({*raw_fields,'kwargs',*({'qc_selection'} if owner.package=='snapatac2' else set())}),
+        application_inputs=frozenset({*raw_fields,'kwargs',
+            *({'species','assembly'} if owner.package in ('snapatac2','episcanpy') else set()),
+            *({'qc_selection'} if owner.package=='snapatac2' else set())}),
         scientific_delivery=delivery_spec(owner, 'scientific_native_result', h5ad_roles=('result.h5ad',)),
         result_contract=ResultContract('NativeMatrixResult', owner.RESULT_FIELDS, planning_fields={
             k: _planning_result('Exact native publication/file; null outputs are unavailable for this function.', bindable=True, artifact=A.RAW_SCATAC)

@@ -1102,7 +1102,8 @@ def _analyze_candidate(
             for name, value in values.items():
                 argument = tool.required_arguments.get(name, tool.optional_arguments.get(name))
                 if (argument is None or argument.planning is None or not argument.planning.scientific_parameter
-                        or argument.planning.accepted_artifact_kinds or name in tool.application_inputs and name!='kwargs'
+                        or argument.planning.accepted_artifact_kinds
+                        or name in tool.application_inputs and name not in ('kwargs', 'species', 'assembly')
                         or name == 'function_name' and name in states[step_id].arguments):
                     raise SemanticPlanCompileError('INVALID_REQUEST_BINDING',
                         'Answer overlay cannot replace source identity or a selected method.')
@@ -1111,6 +1112,8 @@ def _analyze_candidate(
                 except ValueError as exc:
                     raise SemanticPlanCompileError('INVALID_REQUEST_BINDING', 'Invalid typed requirement answer.',
                         diagnostic_fields=dict(step_id=step_id, tool_name=tool.name, argument_name=name)) from exc
+                if name == 'kwargs':
+                    value = {**states[step_id].arguments.get(name, {}), **value}
                 states[step_id].arguments[name] = value
 
     from .native_parameters import bind_structured_parameters
@@ -1147,6 +1150,14 @@ def _analyze_candidate(
             *registry.get(step.tool_name).optional_arguments,
         )
     }
+    for step in candidate.steps:
+        tool = registry.get(step.tool_name)
+        function = states[step.step_id].arguments.get('function_name')
+        for rule in contract.request_bindings:
+            if (rule.tool_name == tool.name and rule.target_port in tool.source_input_types
+                    and request_source_applies(tool, rule.selector, function)
+                    and rule.selector in request.inputs):
+                selected_argument_names.add(rule.input_name)
     bound_request_inputs = {
         input_name
         for state in states.values()
@@ -1206,7 +1217,7 @@ def _analyze_candidate(
             validate_input_properties(states[step.step_id].arguments,scientific_context)
         except ScientificDiagnostic as exc:
             raise SemanticPlanCompileError(exc.code,str(exc),diagnostic_fields=dict(step_id=step.step_id,tool_name=tool.name)) from exc
-    for step in candidate.steps:
+    for step in _semantic_order(candidate):
         tool = registry.get(step.tool_name)
         state = states[step.step_id]
         if prepare_inputs is not None and not deferred_preparation:

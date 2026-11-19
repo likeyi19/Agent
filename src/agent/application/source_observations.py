@@ -76,14 +76,16 @@ class ExistingObject:
         return dict(source_path=self.path, source_sha256=self.sha256)
 
 
-def identity_parent(value, selected, registry):
+def identity_parent(value, selected, registry, *, coordinate_lineage=False):
     if value.step_id not in selected:return None
     tool_name,arguments=selected[value.step_id]
     semantic=registry.get(tool_name).semantic_planning
     if semantic is None:return None
     ports=[port for port in semantic.producer_ports if any(member.field_name==value.output_key for member in port.members)]
-    if len(ports)!=1 or ports[0].identity_from_port is None:return None
-    consumer=next(port for port in semantic.consumer_ports if port.name==ports[0].identity_from_port)
+    if len(ports)!=1:return None
+    parent = ports[0].lineage_from_port if coordinate_lineage else ports[0].identity_from_port
+    if parent is None:return None
+    consumer=next(port for port in semantic.consumer_ports if port.name==parent)
     return arguments.get(consumer.members[0].field_name)
 
 

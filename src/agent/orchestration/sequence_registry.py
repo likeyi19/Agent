@@ -68,7 +68,7 @@ def tool_specs():
         owner.KIND,owner.execute,'Predict human DNase accessibility from DNA sequences using released DHS64 folds 0, 1 and 3.',
         ('Supply exactly one sequence string or sequences source: ordinary FASTA or BED3–6 with explicit qualified assembly. Accepted sequences are reusable; no H5AD, cells or embeddings are involved.',
          'Default continuous-head arithmetic fold mean; retain all fold values and disagreement. ACGT only, 1–500 bases, native trailing zero padding, no clipping or invented genomic context. This is not enhancer activity, expression, MPRA or ATAC prediction.',
-         'Prediction needs no observed truth. Use evaluate_regulatory_predictions separately only for supplied compatible observed DNase measurements.'), scientific_contract=owner.prediction_contract,  preparation_owner=owner.prepare_operation, source_input_types={'sequences':('fasta','attachment','h5ad')}, source_encodings={'sequences':('fasta','bed')})
+         'Prediction needs no observed truth. Use evaluate_regulatory_predictions separately only for supplied compatible observed DNase measurements.'), scientific_contract=owner.prediction_contract,  preparation_owner=owner.prepare_operation, application_inputs=frozenset({'assembly'}), source_input_types={'sequences':('fasta','attachment','h5ad')}, source_encodings={'sequences':('fasta','bed')})
     prediction, prior = bundle('predictions','prediction_manifest',A.SEQUENCE_PREDICTIONS,True,('regulatory_predictions.v1',))
     observed, truth = bundle('observations','observations',A.SEQUENCE_OBSERVATIONS,True)
     evaluate = spec(owner.EVALUATE, owner.evaluate_regulatory_predictions,

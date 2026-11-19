@@ -294,4 +294,5 @@ def prepare_operation(arguments, context):
 def scientific_contract(arguments):
     from agent.orchestration.scientific_inputs import ScientificContract
     return ScientificContract(inputs={'dataset':{'format':'h5ad','paired_fragments':True}},
-                              outputs={'peaks':{'table_format':'BED'}})
+                              outputs={'peaks':{'format':'bed','table_format':'BED'}},
+                              effects={'peak_population':'selected_fragment_dataset'})

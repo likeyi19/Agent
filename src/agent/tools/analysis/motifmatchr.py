@@ -331,6 +331,7 @@ def preparation_requirements(arguments, context):
 
 def prepare_operation(arguments, context):
     from agent.orchestration.scientific_inputs import ScientificInputRequired
+    arguments = context.coordinate_arguments(arguments, arguments.get('input_path'), observe=False)
     needs = preparation_requirements(arguments, context)
     if needs:
         raise ScientificInputRequired(*needs, bindings=arguments)

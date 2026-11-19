@@ -75,6 +75,44 @@ def test_existing_storage_is_bounded_and_x_null_is_not_matrix(tmp_path,monkeypat
     assert scientific_properties(path,('x','fragment_storage'))==dict(x=False,fragment_storage=True)
 
 
+def test_peak_matrix_requires_a_region_source_and_accepts_the_macs3_port(tmp_path):
+    from agent.orchestration.semantic_compiler import (AnalysisDisposition, SemanticPlanCandidate,
+        SemanticPlanStep, SemanticRequestInputSource as Input, SemanticStepOutputSource as Output,
+        SemanticRegisteredChoiceSource as Choice, analyze_candidate)
+
+    registry = build_default_tool_registry()
+    req = AgentRequest('regions', 'Use the selected cell population to build a peak matrix',
+        dict(input_path=str(tmp_path / 'fragments.h5ad'), output_dir=str(tmp_path / 'output')))
+    sources = (Input('dataset', 'input_path'), Choice('function_name', 'pp.make_peak_matrix'))
+    unbound = SemanticPlanCandidate((SemanticPlanStep('matrix', 'run_snapatac2', sources),))
+    analysis = analyze_candidate(req, unbound, registry)
+    assert analysis.disposition is AnalysisDisposition.NEEDS_INPUT
+    assert [(need.step_id, need.port) for need in analysis.requirements] == [('matrix', 'peaks')]
+    macs = SemanticPlanStep('call', 'call_scATAC_peaks', (Input('dataset', 'input_path'),))
+    matrix = SemanticPlanStep('matrix', 'run_snapatac2', sources + (Output('peaks', 'call', 'peaks'),))
+    composed = analyze_candidate(req, SemanticPlanCandidate((matrix, macs)), registry,
+        bindings={'call': {'effective_genome_size': 100, 'genome_size_basis': 'technical fixture'}})
+    assert composed.disposition is AnalysisDisposition.COMPLETE, composed.error
+    assert composed.operations[0].arguments['peaks_path'] == StepOutputRef('call', 'peaks_path')
+
+
+def test_peak_region_table_and_explicit_list_are_effective_inputs(tmp_path):
+    from agent.application.native_raw_handoff import prepare_operation
+
+    path = tmp_path / 'regions.h5ad'
+    dataset = ad.AnnData(np.eye(2))
+    dataset.uns['peaks'] = pd.DataFrame({'region': ['chr1:1-5']})
+    dataset.write_h5ad(path)
+    ctx = context()
+    args = dict(function_name='pp.make_peak_matrix', input_path=str(path), kwargs={'use_x': True})
+    prepared = prepare_operation(args, ctx)
+    assert prepared['kwargs']['use_rep'] == 'peaks'
+    validate_input_properties(prepared, ctx)
+    args['kwargs']['use_rep'] = ['chr1:5-10']
+    assert prepare_operation(args, ctx) == args
+    validate_input_properties(args, ctx)
+
+
 @pytest.mark.parametrize('member,value', [('barcode_tag','RG'),('barcode_regex','^([^:]+)')])
 def test_exact_choice_then_value_rechecks_same_candidate_without_model(tmp_path,member,value):
     from test_preparation_owner_contracts import Model,setup

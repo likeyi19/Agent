@@ -1539,6 +1539,12 @@ def _offered_schema(schema, public, *, utterance=None):
         if 'resource' in props:
             props['resource'] = nullable(exact('offered_' + field + '_resource',
                 [r['handle'] for r in d.get(field + '_resources', ()) if 'handle' in r]))
+    if len(sources) < 2:
+        bam = defs['bam']
+        bam['properties']['feature_source'] = {'type': 'null'}
+        without_companion = _object({key: value for key, value in bam['properties'].items()
+                                     if key != 'feature_source'})
+        defs['bam'] = {'anyOf': [without_companion, bam]}
     defs['retained']['properties']['result'] = result
     for form in defs['export']['anyOf']:
         form['properties']['measurement'] = measurement
@@ -1613,11 +1619,16 @@ def _offered_schema(schema, public, *, utterance=None):
             p['candidate'] = candidate
         if kind.startswith('answer_') and 'pending' in p:
             expected = {'answer_parameters': '@parameters', 'answer_roles': '@roles', 'answer_resources': '@resources'}[kind]
+            source_field = pending.get('source_declaration_field', pending.get('field'))
             # Canonical spp resource choices can belong to an intake question.
             if kind == 'answer_resources':
                 if not resources:
                     continue
                 p['choice'] = resource
+            elif kind == 'answer_roles' and source_field in ('fastq','bam','fragments','annotation','epizoo'):
+                if source_field not in p or (source_field == 'annotation' and
+                        any(field in p for field in ('fastq','bam','fragments'))):
+                    continue
             elif pending.get('handle') != expected:
                 continue
             p['pending'] = dict(type='string', enum=[expected])
@@ -1704,10 +1715,12 @@ def _intent_instructions():
         'Raw/composed declarations use their existing request_roles variant with empty required_roles/roles and explicit metadata in the corresponding declaration, not duplicated scientific arguments. Its schema-constrained target identifies the declaration entry owner, not a fixed workflow; preserve the full original processing and exploration objective for Planner composition. Missing fields remain null; unknown_fields retracts only offered declaration metadata explicitly made unknown, never source/role/resource identities. Exact resource handles must be offered; a named reference preference requires verbatim resource_preference literal/evidence. Declared species/assembly is not a named-reference selection. File membership and biological history cannot be inferred.',
         'A package alone is not a single-function request. Capture only explicitly requested methods, never internal workflow decisions. Every explicit native function_name declaration uses value=<registered function> AND native_function=<same registered function>, with verbatim researcher literal/evidence. Scope each native parameter and kwargs member to its explicit function. Example: PCA then neighbors uses separate pp.pca and pp.neighbors scopes, not two unscoped function_name values. The Planner assigns step IDs and dependencies; do not attach original-file scope to downstream consumers of derived outputs.',
         'arguments contains only explicit tool/argument declarations. Copy literal verbatim and quote a uniquely locating exact current-utterance evidence clause containing it once. Numeric literal is the numeric token alone; preserve exact decimal/rational text. Values and members keep their explicit types, including invalid scientific values; never repair them or manufacture defaults. Repeated numeric values require distinct evidence clauses. Conflicting values require clarification unless explicitly corrected.',
+        'Use matrix_semantics only for a researcher declaration about an existing input measurement. Keep requested output measurements in the task objective.',
         'For structured parameters, verbatim explicit JSON is one literal; prose assignments use members with canonical name, kind and separate literal/evidence. Do not fabricate JSON or combine conflicting JSON/prose. kind=string excludes quote delimiters and preserves Unicode/case/whitespace; number preserves tokens; boolean quotes explicit true/false, yes/no or equivalent; json quotes an actual JSON value.',
         'For normalized offered choices value is canonical, while literal and evidence remain verbatim researcher text: Chinese “用 Scanpy 构建邻居图” can use literal=构建邻居图, value=pp.neighbors, native_function=pp.neighbors; it cannot use literal=pp.neighbors unless those bytes occur in the utterance. Exact field/representation strings such as X_pca remain exact literals. observation_source mode=offered associates a clearly selected field with its captured source; mode=literal requires the explicitly named column. If the researcher asks to choose an existing field through the interface, omit its declaration and let Preparation inspect the selected consumer source and offer actual fields. Do not clarify before planning or select a field on their behalf. Agent-produced fields are Planner/Preparation dependencies, never researcher declarations. Roles and field source must agree; never borrow another source’s field or change mode after refusal.',
         'Qualitative or ambiguous requested values remain local in execute_plan.missing_parameters, using exact tool, argument, native_function/member and applicable source/port, plus the exact evidence clause. Omitted optional values are not missing requests. A request to keep native defaults ordinarily leaves remaining kwargs omitted; it does not declare the clustering-only parameter_selection selector on unrelated functions. Use that selector only for the offered applicable clustering policy explicitly requested. Do not invent numeric alternatives, optimizer scans or additional operations. Explanatory parameter questions stay read-only.',
-        'Pending answers continue only the offered question and original objective. Use the exact pending handle and offered source/parameter/resource identities; partial explicit answers are allowed. Unrelated messages, new objectives, cancellation and uncertainty never answer a pending request. Canonical spp resource choices select only their captured consumer requirement, not biological source metadata. No stale or cross-task identity is valid.',
+        'Pending answers continue the offered question and original objective. Use the exact pending handle and offered source, parameter and resource identities. Partial explicit answers are allowed. A qualified reference selection carries its recorded coordinates for the selected scientific source. Unrelated messages, new objectives, cancellation and uncertainty never answer a pending request. No stale or cross-task identity is valid.',
+        'For a pending source question, capture any explicit source identity or scientific correction in the matching answer_roles declaration, including when the message also names a compatible reference component. For example, “这份 BAM 比对到人类 UCSC hg19（GRCh37）。请使用资源库中与 hg19 匹配的人类 GENCODE 19 基因注释。” sets bam.species=human and bam.assembly=hg19 and records GENCODE 19 as the verbatim bam.resource_preference literal using the exact utterance span. Preserve the captured source; use null for fields the current reply leaves unchanged.',
         'Execute an offered execution_candidate only with its exact candidate ID and a complete explicit command clause as evidence. Interest or agreement alone is not authorization. Do not reconstruct its workflow. A rationale question uses answer_guidance with a quoted guidance_predecessor reference (or @candidate if unique); new objectives use candidate=null.',
         'Accepted outputs/groups and result_referents have distinct exact identities. Select a referent only when unique. @focus and @previous require the scientific predecessor, never ordinary clarification. subject=null asserts no new subject and preserves an existing resolved subject; @other requires unambiguous offered context. Categorical labels are detail fields, not annotation subjects. No recency/order/filename guessing.',
         'context=current only for explicit use or modification of captured accepted analysis; context=none for independent input/work. input_results selects offered accepted groups, never source.N. references select exact accepted results. retain_parameters selects requested exact result/argument settings of the same tool/input; never turn old defaults or generated prose into current explicit declarations. Current explicit changes override their own fields only.',

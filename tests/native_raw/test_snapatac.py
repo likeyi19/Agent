@@ -202,9 +202,22 @@ def test_native_ordmag_accepts_ordered_json_vector(native,inputs):
     assert result['result_slots']==['uns.agent_native_return']
 
 
-def test_native_peak_matrix_accepts_explicit_region_list(native,inputs):
+@pytest.mark.parametrize('source_kind', ['list', 'named_table'])
+def test_native_peak_matrix_accepts_explicit_regions(native,inputs,source_kind):
     source=imported(inputs)
-    result=call(inputs,'pp.make_peak_matrix',input_path=source['matrix_path'],
-        kwargs=dict(use_rep=['chr1:4900-5100']))
+    path = source['matrix_path']
+    regions = ['chr1:4900-5100']
+    if source_kind == 'named_table':
+        import shutil
+        import h5py
+        import pandas as pd
+        from anndata.io import write_elem
+
+        path = str(inputs['root'] / 'named-regions.h5ad')
+        shutil.copyfile(source['matrix_path'], path)
+        with h5py.File(path, 'r+') as handle:
+            write_elem(handle['uns'], 'requested_regions', pd.DataFrame({'region': regions}))
+        regions = 'requested_regions'
+    result=call(inputs,'pp.make_peak_matrix',input_path=path,kwargs=dict(use_rep=regions))
     assert result['n_features']==1
     assert result['measurement']=='paired_insertion_counts'

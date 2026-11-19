@@ -103,6 +103,46 @@ class OperationPreparationContext:
         properties.update(contract.outputs.get(port.name, {}))
         return properties
 
+    def coordinate_context(self, source, *, observe=True):
+        """Use the task's exact source scope and the selected producer's declarations."""
+        from agent.schemas import PriorOutputRef, StepOutputRef
+        from agent.application.source_observations import identity_parent
+        planned = {}
+        seen = set()
+        while isinstance(source, StepOutputRef) and source.step_id not in seen:
+            parent = identity_parent(source, self.selected, self.registry, coordinate_lineage=True)
+            if parent is None:
+                break
+            seen.add(source.step_id)
+            _, arguments = self.selected[source.step_id]
+            for key in ('species', 'assembly'):
+                if arguments.get(key) is not None:
+                    planned.setdefault(key, arguments[key])
+            source = parent
+        values = self.admitted.get('source_coordinates', {}) | planned
+        if not observe or values.get('assembly') is not None:
+            return values
+        from pathlib import Path
+        import h5py
+        if (isinstance(source, PriorOutputRef) or
+                isinstance(source, (str, Path)) and h5py.is_hdf5(source)):
+            observed = self.existing(source)
+            if observed is None or not h5py.is_hdf5(observed.path):
+                return values
+            from agent.tools.analysis.sequence_reference import assembly_observations
+            claims = assembly_observations(observed.path, observed.sha256)['observations']
+            labels = {label for row in claims for label in row['values']}
+            if len(labels) == 1 and any(row['complete'] for row in claims):
+                return dict(values, assembly=labels.pop())
+        return values
+
+    def coordinate_arguments(self, arguments, source, *, observe=True):
+        keys = self.tool.application_inputs.intersection(('species', 'assembly')) - arguments.keys()
+        if keys:
+            values = self.coordinate_context(source, observe=observe)
+            return {**arguments, **{key: values[key] for key in keys if values.get(key) is not None}}
+        return arguments
+
     def properties(self, value, names, *, seen=()):
         """Future guarantees or checked existing storage, never inferred biology."""
         properties=self.planned(value, seen=seen, names=names)

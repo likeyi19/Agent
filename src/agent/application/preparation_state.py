@@ -237,7 +237,12 @@ def scalar_bindings(interactions, record):
     bound = {}
     for answer, _ in active_answers(interactions, record):
         if answer['kind'] == 'resource' and answer['value'].get('argument') == answer['argument'] and 'value' in answer['value']:
-            bound.setdefault(answer['step_id'], {})[answer['argument']] = _serialize(answer['value']['value'])
+            values = bound.setdefault(answer['step_id'], {})
+            value = _serialize(answer['value']['value'])
+            if answer['argument'] == 'kwargs' and 'kwargs' in values:
+                values['kwargs'].update(value)
+            else:
+                values[answer['argument']] = value
             continue
         if answer['kind'] != 'scalar':
             continue
@@ -420,6 +425,10 @@ def active_answers(interactions, record):
     for row in reversed(chain):
         for change in row.get('declarations', ()):
             paths = source_identities(change['scope']['sources'])
+            declaring = by_id.get(change.get('evidence', {}).get('interaction_id'))
+            admission = {} if declaring is None else declaring.admitted or {}
+            selected = (admission.get('raw_resource_choice') or '').removeprefix('resource.')
+            components = (admission.get('raw_resource_evidence', {}).get(selected) or {}).get('components', {})
             def affected(requirement):
                 sources = set(requirement.get('source_dependencies', ()))
                 if not sources and isinstance(requirement.get('applicability', {}).get('source'), str):
@@ -431,8 +440,13 @@ def active_answers(interactions, record):
                 dependencies = requirement.get('dependencies', ())
                 member = change['member']
                 declared = any(d.endswith(':declaration:' + member) for d in dependencies)
-                return source_match and (declared or member in {'source','members','resource','resource_preference'})
-            active = {key:value for key,value in active.items() if not affected(value[1])}
+                reference_change = member in {'resource', 'resource_preference'} and (
+                    requirement['port'] in components if components
+                    else any(d.endswith(':declaration:assembly') for d in dependencies))
+                return source_match and (declared or reference_change or member in {'source', 'members'})
+            active = {key: value for key, value in active.items() if not affected(value[1])
+                      or (value[0]['kind'] == 'resource' and change['value'] is not None
+                          and value[0]['value'].get('coordinates', {}).get(change['member']) == change['value'])}
         for answer in row['answers']:
             question_turn = by_id[answer['question_turn_id']]
             requirement = next(r for r in observation(question_turn)['requirements']
@@ -605,6 +619,7 @@ def public_question(interaction, preceding):
         result.update(required_roles=_serialize(origin.admitted['required_roles']), roles=_serialize(previous.admitted['roles']))
     elif field in {'fastq','bam','fragments','annotation','epizoo'}:
         result['declarations'] = _serialize(previous.admitted[field])
+        result['source_declaration_field'] = field
     requirements = observation(previous)['requirements']
     resource_requirements = {r['requirement_id'] for r in requirements if r['kind'] in ('resource', 'input_resource')}
     result['resource_answer_choices'] = [dict(handle=c['handle'], label=c['label'])

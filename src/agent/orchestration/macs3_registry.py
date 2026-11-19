@@ -42,7 +42,7 @@ def tool_spec():
         scientific_authority=ScientificAuthorityHooks(kind=owner.KIND,producer_ports=('peaks',),describe=owner.describe,
             publication_record=owner.publication_record,reuse_result=owner.reuse_result,proof_metadata=owner.proof_metadata,independent_active_publications=True),
         planning=_tool_planning(PlanningToolRole.OPERATION,'Discover experimental accessible peaks with native MACS3 from the selected SnapATAC2 fragment-backed H5AD.',
-            'BAM first uses native pp.make_fragment_file with its actual barcode tag/regex, then pp.import_fragments; native QC/filtering precedes peak calling when requested. The selected H5AD cell population is pooled without cell-type labels or clustering prerequisites.',
+            'Pool the selected fragment-backed H5AD population without a clustering prerequisite.',
             'SnapATAC2 exports its native paired fragments. MACS3 uses FRAG --max-count 1 with no second Tn5 shift. Explicit effective genome size and its scientific basis are required; peak q-values are not differential accessibility.',
             'The peaks port supplies exact native BED regions to run_snapatac2 pp.make_peak_matrix. Its dataset must be the selected fragment-backed H5AD, not the BED. Retain that source for Gene Activity. Installed reference regions (including compatible cCREs) and researcher-supplied BED use the same peak-matrix path directly; neither requires peak calling.',capability_ids=('raw_preprocessing',)),
         semantic_planning=SemanticToolSpec(consumer_ports=tuple(ports),producer_ports=(

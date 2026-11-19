@@ -325,7 +325,9 @@ _TOOL_PROJECTIONS: Mapping[str, _ToolProjection] = {
         for p in (*_NATIVE_TABLE_PACKAGES, _MONALISA, _ARCHR)},
     **{p.TOOL: _ToolProjection(frozenset(p.RESULT_FIELDS), p.FACT_FIELDS, p.POLICY, (
         _ArtifactProjection('manifest_path', p.KIND + '_manifest', ('native_completion', 'exact_ordered_axes', 'artifact_integrity'), digest_field='manifest_sha256'),
-        _ArtifactProjection('matrix_path', 'native_matrix_h5ad', ('native_result_slots', 'ordered_input_identity'), digest_field='matrix_sha256')))
+        _ArtifactProjection('matrix_path', 'native_matrix_h5ad', ('native_result_slots', 'ordered_input_identity'), digest_field='matrix_sha256'),
+        *((_ArtifactProjection('fragments_path', 'native_fragments_file', ('native_output_semantics', 'ordered_input_identity'),
+                               digest_field='fragments_sha256'),) if p.package == 'snapatac2' else ())))
         for p in _NATIVE_MATRIX_PACKAGES},
     'run_chromvar': _ToolProjection(frozenset(_CHROMVAR_NATIVE_FIELDS), _CHROMVAR_NATIVE_FACTS, 'chromvar-native-statistics-v1', (
         _ArtifactProjection('manifest_path','native_chromvar_manifest',('native_completion','exact_ordered_axes','artifact_integrity'),digest_field='manifest_sha256'),
@@ -802,13 +804,17 @@ def _resolved_arguments_match(
 
 def _project_artifacts(
     step_id: str,
-    tool_name: str,
+    tool: object,
+    arguments: Mapping[str, object],
     result: Mapping[str, object],
     projection: _ToolProjection,
 ) -> list[dict[str, JsonValue]]:
     artifacts: list[dict[str, JsonValue]] = []
     for artifact in projection.artifacts:
-        if (tool_name == 'run_motifmatchr' and artifact.result_field == 'matches_path'
+        if tool.native_functions is not None and tool.native_functions.output_available is not None:
+            if not tool.native_functions.output_available(arguments, artifact.result_field):
+                continue
+        if (tool.name == 'run_motifmatchr' and artifact.result_field == 'matches_path'
                 and result.get('parameters', {}).get('kwargs', {}).get('out') == 'positions'):
             continue
         path = result.get(artifact.result_field)
@@ -840,7 +846,7 @@ def _project_artifacts(
         artifacts.append(
             {
                 "producing_step_id": step_id,
-                "tool_name": tool_name,
+                "tool_name": tool.name,
                 "result_field": artifact.result_field,
                 "artifact_kind": artifact.kind,
                 "artifact_path": path,
@@ -1135,7 +1141,7 @@ def _prepare_evidence(
         )
         evidence_artifacts.extend(
             _project_artifacts(
-                step.step_id, step.tool_name, step_result.result, projection
+                step.step_id, spec, step_result.resolved_arguments, step_result.result, projection
             )
         )
         registry_identities.append(

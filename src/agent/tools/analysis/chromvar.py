@@ -379,6 +379,7 @@ def prepare_operation(arguments, context):
     from dataclasses import replace
     from . import motifmatchr
     from agent.orchestration.scientific_inputs import parameter_requirements, ScientificInputRequired
+    arguments = context.coordinate_arguments(arguments, arguments.get('input_path'), observe=False)
     observed_args = dict(arguments)
     source = context.existing(arguments.get('input_path'))
     if source is not None:

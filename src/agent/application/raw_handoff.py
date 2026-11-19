@@ -85,13 +85,16 @@ class BamDeclaration:
     source_profile: str | None = None
     resource: str | None = None
     resource_preference: dict | None = None
+    feature_source: str | None = None
 
     def __post_init__(self):
         from .resource_continuation import validate_preference
         validate_preference(self.resource_preference)
         from agent.tools.data.scatac_library_context import _namespace
-        if self.source is not None and (type(self.source) is not str or re.fullmatch(r'source\.(?:[0-9]|1[0-5])', self.source) is None):
-            raise ValueError('Invalid BAM source handle.')
+        handles = source_handles(self)
+        if (any(type(value) is not str or re.fullmatch(r'source\.(?:[0-9]|1[0-5])', value) is None
+                for value in handles) or len(set(handles)) != len(handles)):
+            raise ValueError('BAM and region roles require distinct captured sources.')
         if self.namespace is not None:
             _namespace(self.namespace)
         for value, choices in ((self.assay, ('SCATAC', 'TENX_ATAC')),
@@ -208,7 +211,9 @@ def source_handles(declared):
         return [h for h in (declared.source, declared.groups_source) if h is not None]
     if isinstance(declared, FragmentsDeclaration):
         return [h for h in (declared.source, declared.index_source, declared.feature_source, declared.genome_source, declared.genome_index_source) if h is not None]
-    return ([declared.source] if declared.source else []) if isinstance(declared, BamDeclaration) else [m.source for m in declared.members]
+    if isinstance(declared, BamDeclaration):
+        return [h for h in (declared.source, declared.feature_source) if h is not None]
+    return [m.source for m in declared.members]
 
 
 def _field(interaction):
@@ -251,7 +256,8 @@ def declaration(value, field='fastq'):
             raise ValueError('Invalid fragment declaration shape.')
         return FragmentsDeclaration(**value)
     if field == 'bam':
-        if type(value) is not dict or set(value) - {'resource_preference'} != set(BamDeclaration.__dataclass_fields__) - {'resource_preference'}:
+        optional = {'resource_preference', 'feature_source'}
+        if type(value) is not dict or set(value) - optional != set(BamDeclaration.__dataclass_fields__) - optional:
             raise ValueError('Invalid BAM declaration shape.')
         return BamDeclaration(**value)
     if type(value) is not dict or set(value) - {'resource_preference'} != set(FastqDeclaration.__dataclass_fields__) - {'resource_preference'}:
@@ -326,6 +332,8 @@ def declaration_dict(value):
     result = asdict(value)
     if result.get('resource_preference') is None:
         result.pop('resource_preference', None)
+    if isinstance(value, BamDeclaration) and value.feature_source is None:
+        result.pop('feature_source')
     if isinstance(value,EpiZooDeclaration):
         for key in ('chain_source','reference_species'):
             if result[key] is None: result.pop(key)
@@ -384,6 +392,7 @@ def schema(field='fastq'):
             species=context_text, assembly=context_text,
             barcode_policy=optional(('corrected_cb_already_corrected',)),
             source_profile=optional(('agent-cb-paired-atac.v2',)),
+            feature_source=dict(identity, description='Exact attached BED when the researcher requests counts over those supplied regions.'),
             resource_preference=preference_schema()))
     return _object(dict(resource=identity, assay=optional(('TENX_ATAC',)), layout=optional((FastqLayout.A.value, FastqLayout.B.value)),
         namespace={'anyOf': [{'type': 'string', 'minLength': 1, 'maxLength': MAX_FASTQ_NAMESPACE}, {'type': 'null'}]},
@@ -763,6 +772,7 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
     """The raw declaration variant of existing role request/answer admission."""
     from .turn_decisions import RequestRoles, IntentError
     from .resource_continuation import catalog
+    from .input_sets import ScientificInputSet
     from .local_resources import LocalResourceAdmission
     from .preparation_state import captured_owner
     state = sessions.load(sessions._interaction_session_id)
@@ -804,6 +814,12 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
     source_evidence = None
     previous = empty(field) if source is None else declaration(_serialize(source.admitted[field]), field)
     addition = getattr(decision, field) or empty(field)
+    if native and addition.resource_preference is not None:
+        from .resource_continuation import ground_catalog_preference
+        choices = tuple(ScientificInputSet(**_serialize(row)) for row in rows)
+        preference = ground_catalog_preference(addition.resource_preference, choices,
+            aliases=lambda choice: (evidence.get(choice.input_set_id) or {}).get('aliases', ()))
+        addition = replace(addition, resource_preference=preference)
     declared = merge(previous, addition, pending=True,
                      unknown_fields=() if initial else decision.unknown_fields)
     if field == 'epizoo':
@@ -846,7 +862,7 @@ def admit(sessions, interaction, decision, input_sets, *, reference_resources=No
         revision_id=interaction.base_revision_id, resource_catalog=rows, raw_resource_evidence=evidence,
         raw_resource_choice=(declared.resource or ('resource.' + selected.input_set_id if selected is not None
             else source.admitted.get('raw_resource_choice') if source is not None else None)),
-        **{field: declaration_dict(declared), field + '_addition': declaration_dict(getattr(decision, field) or empty(field)),
+        **{field: declaration_dict(declared), field + '_addition': declaration_dict(addition),
            field + '_sources': binding.attribution(), field + '_arguments': values},
         inputs=values, registered_input=binding.attribution(), roles=[],
         arguments=[asdict(a) for a in decision.arguments])

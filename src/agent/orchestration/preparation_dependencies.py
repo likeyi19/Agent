@@ -43,6 +43,10 @@ def operation_sources(step_id, operations, registry=None, *, lineage=False):
             if catalog is not None and catalog.output_available is not None:
                 producers = [p for p in producers if all(catalog.output_available(op.arguments, m.field_name) for m in p.members)]
             ports = {p.lineage_from_port for p in producers if p.lineage_from_port is not None}
+            if not ports and output_key is None:
+                physical = [p for p in semantic.consumer_ports if p.name in tool.source_input_types
+                            and any(op.arguments.get(m.field_name) is not None for m in p.members)]
+                ports = {p.name for p in physical if p.required} or {p.name for p in physical}
             # A consumer receives declarations only on its dataset lineage.
             # Ambiguous/missing lineage is not permission to inherit all inputs.
             if len(ports) != 1:

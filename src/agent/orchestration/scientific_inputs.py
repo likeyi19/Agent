@@ -103,10 +103,10 @@ class OperationPreparationContext:
         properties.update(contract.outputs.get(port.name, {}))
         return properties
 
-    def coordinate_context(self, source, *, observe=True):
+    def coordinate_context(self, source, *, observe=True, reference_roles=()):
         """Use the task's exact source scope and the selected producer's declarations."""
         from agent.schemas import PriorOutputRef, StepOutputRef
-        from agent.application.source_observations import identity_parent
+        from agent.application.source_observations import accepted_scientific_context, identity_parent
         planned = {}
         seen = set()
         while isinstance(source, StepOutputRef) and source.step_id not in seen:
@@ -119,7 +119,14 @@ class OperationPreparationContext:
                 if arguments.get(key) is not None:
                     planned.setdefault(key, arguments[key])
             source = parent
-        values = self.admitted.get('source_coordinates', {}) | planned
+        accepted = {}
+        if observe and self.observe_existing and isinstance(source, PriorOutputRef):
+            store = None if self.sessions is None else self.sessions._application.run_store
+            accepted = accepted_scientific_context(source, self.registry, store=store,
+                                                   reference_roles=reference_roles)
+        values = accepted.get('coordinates', {}) | self.admitted.get('source_coordinates', {}) | planned
+        if accepted:
+            values['accepted_source'] = accepted
         if not observe or values.get('assembly') is not None:
             return values
         from pathlib import Path

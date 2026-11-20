@@ -465,24 +465,143 @@ def test_uploaded_original_column_binding_and_deterministic_choice(tmp_path, mon
     assert sum('turn_schema_version' in c for c in calls)==1
 
 
-def test_reuse_only_follows_selected_dependency_semantics(monkeypatch):
+@pytest.fixture
+def accepted_native_groupings(monkeypatch):
+    """Exercise real lineage traversal with a simulated accepted publication store."""
+    from agent.application import annotation_groups, result_reading
+    from agent.orchestration import verification_authority
+    from agent.orchestration.prior_outputs import accepted_step_digest
+    from agent.schemas import PlanStep, PriorOutputRef, StepExecutionResult, StepStatus
+    from agent.schemas.prior_output import PriorOutputBinding
+    from agent.schemas.verification_authority import AuthorityError
+    from agent.tools.analysis import sequence_prediction
+    from agent.tools.data import cellmarker
+
+    monkeypatch.setattr(sequence_prediction, 'library', lambda: SimpleNamespace(
+        entries=lambda: [dict(kind='cellmarker', id='installed')]))
+    monkeypatch.setattr(cellmarker, 'CellMarkerEvidence', lambda *a: SimpleNamespace(
+        identity={'sha256': 'a'*64}, metadata={'species': ['Human', 'Mouse']}))
+    registry = build_default_tool_registry()
+    tool_name = 'run_scanpy'
+    run_id = 'accepted-run'
+    state = SimpleNamespace(lifecycle_status=SimpleNamespace(value='SUCCEEDED'))
+    rows = {}
+    references = {}
+    for index, (step_id, function, slot, parent, kwargs) in enumerate((
+            ('cluster', 'tl.leiden', 'obs.leiden', None, {'resolution': 1.5}),
+            ('alternative', 'tl.leiden', 'obs.leiden', None, {'resolution': 0.5}),
+            ('umap', 'tl.umap', 'obsm.X_umap', 'cluster', {})), start=1):
+        source_path = '/original.h5ad' if parent is None else rows[parent][0].result['matrix_path']
+        source_sha = 'a'*64 if parent is None else rows[parent][0].result['matrix_sha256']
+        step = StepExecutionResult(step_id, tool_name, StepStatus.SUCCEEDED,
+            result=dict(contract_version='native-scanpy-matrix.v1', function_name='scanpy.' + function,
+                        matrix_path=f'/{step_id}.h5ad', matrix_sha256=str(index)*64, n_cells=4,
+                        n_clusters=2, source_identity={'sha256': source_sha},
+                        parameters={'kwargs': kwargs}, result_slots=[slot]),
+            resolved_arguments={'input_path': source_path, 'input_sha256': source_sha})
+        plan = PlanStep(step_id, tool_name, {'input_path': source_path if parent is None
+                        else StepOutputRef(parent, 'matrix_path')}, () if parent is None else (parent,))
+        rows[step_id] = (step, plan, state)
+        binding = PriorOutputBinding(run_id, step_id, tool_name, 'dataset', 'native_matrix_h5ad.v1',
+            accepted_step_digest(step), 'b'*64, 'c'*64)
+        references[step_id] = PriorOutputRef(binding, 'matrix_path')
+
+    def accepted_step(store, bound_run, step):
+        assert bound_run == run_id
+        return rows[step]
+
+    def validate(binding, **_):
+        if binding != references[binding.step_id].binding:
+            raise AuthorityError('Historical grouping anchor changed')
+
+    monkeypatch.setattr(result_reading, '_accepted_step', accepted_step)
+    monkeypatch.setattr(annotation_groups, '_accepted_step', accepted_step)
+    monkeypatch.setattr(verification_authority, '_accepted', lambda store, rid, step: (
+        None, SimpleNamespace(record={'resources': {'result_metadata': accepted_step(store, rid, step)[0].result}}),
+        None, None))
+    monkeypatch.setattr(annotation_groups, 'validate_binding', validate)
+    monkeypatch.setattr(annotation_groups, 'bind_output', lambda store, reg, rid, step, port: references[step].binding)
+    umap = references['umap'].binding
+    revision = SimpleNamespace(revision_id='revision', outputs=[umap])
+    sessions = SimpleNamespace(_application=SimpleNamespace(run_store=object(), registry=registry),
+        _interaction_session_id='session', load=lambda _: SimpleNamespace(revisions=[revision]))
+    interaction = SimpleNamespace(base_revision_id=revision.revision_id)
+    return sessions, interaction, references
+
+
+@pytest.mark.parametrize('planned', ['umap', 'cluster', None])
+def test_accepted_grouping_offer_binds_the_canonical_producer(accepted_native_groupings, planned):
+    from agent.application import annotation_groups
+    from agent.application.annotation_preparation import preparer
+    from agent.application.raw_handoff import AnnotationDeclaration, declaration_dict
+
+    sessions, interaction, refs = accepted_native_groupings
+    offer, = annotation_groups.choices(sessions, interaction)
+    admitted = dict(annotation=declaration_dict(AnnotationDeclaration(groups_result=offer['handle'])))
+    tool = sessions._application.registry.get('annotate_scATAC_cell_types')
+    args = dict(input_path=refs['umap'], activity_path=StepOutputRef('activity', 'matrix_path'))
+    if planned is not None:
+        args['grouping_path'] = refs[planned]
+    prepare = preparer(sessions, interaction, admitted)
+    bound = prepare(tool, args, {})
+    assert bound['grouping_path'] == refs['cluster']
+    assert bound['input_path'] == args['input_path']
+    assert bound['activity_path'] == args['activity_path']
+    assert prepare(tool, bound, {}) == bound
+
+
+def test_accepted_grouping_rejects_a_different_clustering_on_the_same_source(accepted_native_groupings):
+    from agent.application import annotation_groups
+    from agent.application.annotation_preparation import preparer
+    from agent.application.raw_handoff import AnnotationDeclaration, declaration_dict
+    from agent.application.result_reading import handoff
+    from agent.orchestration.scientific_inputs import ScientificDiagnostic
+
+    sessions, interaction, refs = accepted_native_groupings
+    app = sessions._application
+    offered, = annotation_groups.choices(sessions, interaction)
+    upstream = handoff(app.run_store, offered['run_id'], offered['step_id'])
+    alternative = handoff(app.run_store, offered['run_id'], 'alternative')
+    assert upstream['source'] == alternative['source']
+    assert upstream['groups']['field'] == alternative['groups']['field'] == 'leiden'
+    admitted = dict(annotation=declaration_dict(AnnotationDeclaration(groups_result=offered['handle'])))
+    tool = app.registry.get('annotate_scATAC_cell_types')
+    args = dict(input_path=refs['umap'], grouping_path=refs['alternative'],
+                activity_path=StepOutputRef('activity', 'matrix_path'))
+    with pytest.raises(ScientificDiagnostic, match='clustering conflicts') as caught:
+        preparer(sessions, interaction, admitted)(tool, args, {})
+    assert caught.value.code == 'ANNOTATION_GROUP_SOURCE_CONFLICT'
+
+
+def test_accepted_grouping_requires_the_planned_anchor(accepted_native_groupings):
+    from dataclasses import replace
+    from agent.application import annotation_groups
+    from agent.application.annotation_preparation import preparer
+    from agent.application.raw_handoff import AnnotationDeclaration, declaration_dict
+    from agent.schemas.verification_authority import AuthorityError
+
+    sessions, interaction, refs = accepted_native_groupings
+    offer, = annotation_groups.choices(sessions, interaction)
+    admitted = dict(annotation=declaration_dict(AnnotationDeclaration(groups_result=offer['handle'])))
+    tool = sessions._application.registry.get('annotate_scATAC_cell_types')
+    stale = replace(refs['umap'], binding=replace(refs['umap'].binding, accepted_step_sha256='0'*64))
+    with pytest.raises(AuthorityError, match='anchor changed'):
+        preparer(sessions, interaction, admitted)(tool, dict(input_path=refs['umap'], grouping_path=stale), {})
+
+
+def test_reuse_only_follows_selected_dependency_semantics(accepted_native_groupings):
     from agent.application.annotation_preparation import preparer
     from agent.orchestration.semantic_compiler import ScientificInputRequired
     from agent.application.raw_handoff import AnnotationDeclaration, declaration_dict
-    from agent.schemas import PriorOutputRef
-    from agent.schemas.prior_output import PriorOutputBinding
-    from agent.tools.analysis import sequence_prediction
-    from agent.tools.data import cellmarker
-    monkeypatch.setattr(sequence_prediction,'library',lambda:SimpleNamespace(entries=lambda:[dict(kind='cellmarker',id='installed')]))
-    monkeypatch.setattr(cellmarker,'CellMarkerEvidence',lambda *a:SimpleNamespace(identity={'sha256':'a'*64},metadata={'species':['Human','Mouse']}))
-    binding=PriorOutputBinding('run','groups','run_snapatac2','dataset','native_matrix_h5ad.v1','a'*64,'b'*64,'c'*64)
-    ref=PriorOutputRef(binding,'matrix_path')
-    prepare=preparer(None,None,dict(annotation=declaration_dict(AnnotationDeclaration(grouping_strategy='reuse_only'))))
-    tool=build_default_tool_registry().get('annotate_scATAC_cell_types')
-    args=dict(grouping_path=StepOutputRef('identity','matrix_path'),activity_path=ref)
-    selected={'identity':('run_scanpy',dict(function_name='tl.umap',input_path=ref))}
-    assert prepare(tool,args,selected)['grouping_path']==ref
-    selected['identity'][1]['input_path']=StepOutputRef('new_groups','matrix_path')
-    selected['new_groups']=('run_snapatac2',dict(function_name='tl.leiden',input_path=ref))
-    with pytest.raises(ScientificInputRequired,match='reuse existing groups'):
-        prepare(tool,args,selected)
+
+    sessions, interaction, refs = accepted_native_groupings
+    prepare = preparer(sessions, interaction, dict(
+        annotation=declaration_dict(AnnotationDeclaration(grouping_strategy='reuse_only'))))
+    tool = sessions._application.registry.get('annotate_scATAC_cell_types')
+    args = dict(grouping_path=StepOutputRef('identity', 'matrix_path'), activity_path=refs['umap'])
+    selected = {'identity': ('run_scanpy', dict(function_name='tl.umap', input_path=refs['umap']))}
+    assert prepare(tool, args, selected)['grouping_path'] == refs['cluster']
+    selected['identity'][1]['input_path'] = StepOutputRef('new_groups', 'matrix_path')
+    selected['new_groups'] = ('run_snapatac2', dict(function_name='tl.leiden', input_path=refs['umap']))
+    with pytest.raises(ScientificInputRequired, match='reuse existing groups'):
+        prepare(tool, args, selected)

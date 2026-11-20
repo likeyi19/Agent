@@ -49,6 +49,137 @@ def receipt(tmp_path, *, assembly=None, count=1):
     return dict(catalog=catalog,selected=None,custom={},assembly=assembly,species='human')
 
 
+@pytest.fixture
+def accepted_annotation_context(tmp_path, monkeypatch):
+    """Simulated authority records with real reference projection and byte checks."""
+    from agent.application import result_reading
+    from agent.application.shared_resources import ScientificResourceLibrary
+    from agent.orchestration import prior_outputs, verification_authority
+    from agent.orchestration.scientific_inputs import OperationPreparationContext
+    from agent.schemas import PriorOutputRef, StepOutputRef
+    from agent.schemas.prior_output import PriorOutputBinding
+    from agent.tools.analysis import sequence_prediction
+    from agent.tools.data import cellmarker
+
+    library = ScientificResourceLibrary(tmp_path/'library')
+    genes = []
+    for index in range(2):
+        path = tmp_path/f'qualified-{index}.gtf'
+        path.write_text(f'# reference {index}\n')
+        genes.append(library.install('gene_annotation',
+            dict(species='human', assembly='GRCh38', file=dict(path=str(path), sha256=pin(path))),
+            label=f'Qualified genes {index}', version='1', provenance='Fixture', usage='Testing'))
+    monkeypatch.setattr(sequence_prediction, 'library', lambda: SimpleNamespace(
+        entries=lambda: [dict(kind='cellmarker', id='installed')], choices=library.choices))
+    monkeypatch.setattr(cellmarker, 'CellMarkerEvidence', lambda *args: SimpleNamespace(
+        identity={}, metadata={'species': ['Human', 'Mouse']}))
+
+    counts = source_file(tmp_path, uns={'assembly':'GRCh38'})
+    original = tmp_path/'original.h5ad'
+    other = tmp_path/'other.h5ad'
+    for path in (original, other):
+        path.write_bytes(counts.read_bytes())
+    facts = dict(species='human', assembly='GRCh38', matrix_semantics='paired_insertion_counts')
+    original_metadata = dict(matrix_path=str(original), matrix_sha256=pin(original),
+        source_identity=dict(declarations=facts, references=[dict(role='gene_anno',
+            sha256=genes[0]['resource']['file']['sha256'])]))
+    counts_metadata = dict(matrix_path=str(counts), matrix_sha256=pin(counts),
+        source_identity=dict(sha256=pin(original), declarations=facts))
+    other_metadata = dict(matrix_path=str(other), matrix_sha256=pin(other),
+        source_identity=dict(declarations=facts))
+    state = SimpleNamespace(lifecycle_status=SimpleNamespace(value='SUCCEEDED'))
+    rows = {}
+    for step, metadata, parent in (
+            ('quality', original_metadata, None), ('counts', counts_metadata, 'quality'),
+            ('unrelated', other_metadata, None)):
+        parent_ref = StepOutputRef(parent, 'matrix_path') if parent else '/external-input.h5ad'
+        parent_path = str(original) if parent else parent_ref
+        stored = SimpleNamespace(tool_name='run_snapatac2', result=metadata,
+            resolved_arguments={'input_path': parent_path}, verification=SimpleNamespace(artifact_authority=True))
+        planned = SimpleNamespace(arguments={'input_path': parent_ref}, depends_on=() if parent is None else (parent,))
+        rows[step] = (stored, planned, state)
+
+    def accepted_step(store, run_id, step_id):
+        assert run_id == 'run'
+        return rows[step_id]
+
+    def accepted(store, run_id, step_id, **kwargs):
+        stored, _, _ = accepted_step(store, run_id, step_id)
+        record = dict(schema_version=2, resources=dict(result_metadata=stored.result))
+        return stored, SimpleNamespace(record=record), None, None
+
+    monkeypatch.setattr(verification_authority, '_accepted_step', accepted_step)
+    monkeypatch.setattr(verification_authority, '_accepted', accepted)
+    monkeypatch.setattr(result_reading, '_accepted_step', accepted_step)
+    monkeypatch.setattr(prior_outputs, 'validate_binding',
+        lambda binding, **kwargs: accepted_step(None, binding.run_id, binding.step_id)[0])
+    registry = build_default_tool_registry()
+    tool = registry.get('annotate_scATAC_cell_types')
+    sessions = SimpleNamespace(_application=SimpleNamespace(run_store=object()))
+
+    def prepare(step, declaration, **arguments):
+        binding = PriorOutputBinding('run', step, 'run_snapatac2', 'dataset',
+            'native_matrix_h5ad.v1', 'a'*64, 'b'*64, 'c'*64)
+        context = OperationPreparationContext(tool, 'annotate', registry, {},
+            dict(annotation=declaration_dict(declaration), resource_catalog=[]),
+            {}, [], sessions, None, {})
+        source = PriorOutputRef(binding, 'matrix_path')
+        args = dict(input_path=source, group_column='other_groups', activity_method='episcanpy.tl.geneactivity', **arguments)
+        return tool.preparation_owner(args, context), context.receipts, source
+
+    return prepare, genes
+
+
+def test_accepted_species_and_assembly_inherit_the_qualified_gene_reference(accepted_annotation_context):
+    prepare, genes = accepted_annotation_context
+    arguments, records, source = prepare('counts', AnnotationDeclaration())
+    assert arguments['input_path'] == source
+    assert arguments['species'] == 'human'
+    assert arguments['gene_anno_sha256'] == genes[0]['resource']['file']['sha256']
+    assert arguments['gene_anno_path'] == genes[0]['resource']['file']['path']
+    accepted_source, reference = records
+    assert accepted_source['accepted_source']['binding'] == source.binding.to_dict()
+    assert accepted_source['accepted_source']['coordinates'] == {'species':'human', 'assembly':'GRCh38'}
+    assert reference['resource'] == 'library-' + genes[0]['id']
+    assert reference['reason'] == 'accepted_lineage'
+    assert reference['inherited_reference'] == dict(run_id='run', step_id='quality',
+        sha256=arguments['gene_anno_sha256'])
+
+
+def test_different_accepted_source_does_not_inherit_a_reference_by_equal_content(accepted_annotation_context):
+    prepare, genes = accepted_annotation_context
+    with pytest.raises(ScientificInputRequired) as caught:
+        prepare('unrelated', AnnotationDeclaration())
+    requirement, = caught.value.requirements
+    assert requirement.argument == 'gene_anno_path'
+    assert {offer['handle'] for offer in requirement.offers} == {'resource.library-' + gene['id'] for gene in genes}
+
+
+@pytest.mark.parametrize('selection', ['resource', 'supplied'])
+def test_explicit_scientific_choices_take_precedence_over_accepted_reference(accepted_annotation_context, selection):
+    prepare, genes = accepted_annotation_context
+    alternative = genes[1]
+    declared = AnnotationDeclaration(species='Human', assembly='GRCh38',
+        resource='resource.library-' + alternative['id'] if selection == 'resource' else None)
+    component = alternative['resource']['file']
+    supplied = dict(gene_anno_path=component['path'], gene_anno_sha256=component['sha256']) if selection == 'supplied' else {}
+    arguments, records, _ = prepare('counts', declared, **supplied)
+    assert arguments['species'] == 'Human'
+    assert arguments['gene_anno_sha256'] == component['sha256']
+    assert records[-1]['reason'] == ('explicit' if selection == 'resource' else 'supplied_file')
+    assert 'inherited_reference' not in records[-1]
+
+
+@pytest.mark.parametrize('history', ['missing', 'ambiguous'])
+def test_unavailable_or_ambiguous_accepted_reference_needs_an_explicit_choice(tmp_path, history):
+    rec = receipt(tmp_path, assembly='GRCh38', count=1 if history == 'missing' else 2)
+    hashes = [row['components']['gene_anno']['sha256'] for row in rec['catalog'].values()]
+    rec['inherited_components'] = {'gene_anno': ['f'*64] if history == 'missing' else hashes}
+    with pytest.raises(ScientificInputRequired) as caught:
+        gene_annotation_component(rec, source_file(tmp_path))
+    assert {offer['handle'] for offer in caught.value.options} == {'resource.' + key for key in rec['catalog']}
+
+
 @pytest.mark.parametrize('mode', ['consistent','unknown','mismatch','conflict','mixed','empty'])
 def test_reference_qualification_uses_source_claims_not_species(tmp_path, mode):
     genomes={'mixed':('GRCh38','hg19','GRCh38'),'empty':('',)*3,'unknown':('',)*3}.get(mode,('GRCh38',)*3)

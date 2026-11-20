@@ -2,10 +2,36 @@
 
 No grouping algorithm, source alignment or adapter publication lives here.
 """
-from agent.orchestration.prior_outputs import accepted_step_digest
+from agent.orchestration.prior_outputs import accepted_step_digest, bind_output, validate_binding
 from agent.orchestration.verification_authority import _accepted_step
+from agent.schemas import PriorOutputRef
+from agent.schemas.verification_authority import AuthorityError
 from .session_state import digest
 from .result_reading import handoff
+
+
+def accepted_producer(sessions, reference):
+    """Resolve a planned accepted dataset to its recorded grouping producer."""
+    if not isinstance(reference, PriorOutputRef) or reference.output_key != 'matrix_path':
+        return None
+    app = sessions._application
+    binding = reference.binding
+    validate_binding(binding, store=app.run_store, registry=app.registry)
+    view = handoff(app.run_store, binding.run_id, binding.step_id)
+    return None if view is None else view['groups']
+
+
+def same_producer(grouping, selected):
+    return grouping is not None and all(grouping[key] == selected[key]
+        for key in ('run_id', 'step_id', 'accepted_step_sha256'))
+
+
+def producer_reference(sessions, producer):
+    app = sessions._application
+    binding = bind_output(app.run_store, app.registry, producer['run_id'], producer['step_id'], 'dataset')
+    if binding.accepted_step_sha256 != producer['accepted_step_sha256']:
+        raise AuthorityError('Accepted grouping producer anchor changed.')
+    return PriorOutputRef(binding, 'matrix_path')
 
 
 def choices(sessions, interaction, *, state=None):
@@ -63,8 +89,7 @@ def selected_results(sessions, interaction, handle, *, state=None):
             raise IntentError('unavailable_context')
         view = handoff(sessions._application.run_store, output.run_id, output.step_id)
         lineage = None if view is None else view['groups']
-        if lineage is not None and all(lineage[k] == selected[k]
-                for k in ('run_id', 'step_id', 'accepted_step_sha256')):
+        if same_producer(lineage, selected):
             result.append(group['handle'])
     if not result:
         raise IntentError('unavailable_context')

@@ -76,6 +76,14 @@ class ExistingObject:
         return dict(source_path=self.path, source_sha256=self.sha256)
 
 
+def _lineage_input(semantic, producer, coordinate_lineage):
+    parent = producer.lineage_from_port if coordinate_lineage else producer.identity_from_port
+    if parent is None:
+        return None
+    consumer = next(port for port in semantic.consumer_ports if port.name == parent)
+    return consumer.members[0].field_name
+
+
 def identity_parent(value, selected, registry, *, coordinate_lineage=False):
     if value.step_id not in selected:return None
     tool_name,arguments=selected[value.step_id]
@@ -83,10 +91,74 @@ def identity_parent(value, selected, registry, *, coordinate_lineage=False):
     if semantic is None:return None
     ports=[port for port in semantic.producer_ports if any(member.field_name==value.output_key for member in port.members)]
     if len(ports)!=1:return None
-    parent = ports[0].lineage_from_port if coordinate_lineage else ports[0].identity_from_port
-    if parent is None:return None
-    consumer=next(port for port in semantic.consumer_ports if port.name==parent)
-    return arguments.get(consumer.members[0].field_name)
+    return arguments.get(_lineage_input(semantic, ports[0], coordinate_lineage))
+
+
+def accepted_scientific_context(reference, registry, *, store=None, reference_roles=()):
+    """Read coordinate facts and requested reference pins on the exact accepted source lineage."""
+    from agent.orchestration.prior_outputs import required_store, source_port, validate_binding
+    from agent.orchestration.verification_authority import _accepted, _accepted_step
+    from agent.schemas.verification_authority import AuthorityError
+    from .result_reading import dependency
+
+    if not isinstance(reference, PriorOutputRef):
+        return {}
+    binding = reference.binding
+    if binding.verification_mode != 'scientific-authority.v2':
+        return {}
+    store = required_store() if store is None else store
+    validate_binding(binding, store=store, registry=registry, integrity=True)
+    port = source_port(registry, binding.tool_name, binding.source_port)
+    if reference.output_key not in {member.field_name for member in port.members}:
+        raise AuthorityError('Scientific context member is outside the accepted source port.')
+
+    run_id, step_id = binding.run_id, binding.step_id
+    coordinates, references, seen = {}, {}, set()
+    while (run_id, step_id) not in seen:
+        seen.add((run_id, step_id))
+        stored, planned, state = _accepted_step(store, run_id, step_id)
+        if stored.verification.artifact_authority is None:
+            break
+        _, authority, _, _ = _accepted(store, run_id, step_id, state=state, registry=registry)
+        if authority.record['schema_version'] != 2:
+            break
+        source = authority.record['resources']['result_metadata'].get('source_identity') or {}
+        declared = {**source.get('supplied_declarations', {}), **source.get('declarations', {})}
+        facts = {key: declared[key] for key in ('species', 'assembly')
+                 if isinstance(declared.get(key), str) and declared[key]}
+        if any(key in coordinates and coordinates[key] != value for key, value in facts.items()):
+            break
+        coordinates = facts | coordinates
+        for pin in source.get('references', ()) or ():
+            if pin['role'] in reference_roles:
+                origins = references.setdefault(pin['role'], {})
+                origins.setdefault(pin['sha256'], dict(run_id=run_id, step_id=step_id, sha256=pin['sha256']))
+        if not reference_roles and len(coordinates) == 2:
+            break
+
+        name = _lineage_input(registry.get(stored.tool_name).semantic_planning, port, True)
+        parent = planned.arguments.get(name)
+        if not isinstance(parent, (StepOutputRef, PriorOutputRef)) or not source.get('sha256'):
+            break
+        parent_run, parent_step = dependency(store, run_id, step_id, name)
+        parent_result, _, _ = _accepted_step(store, parent_run, parent_step)
+        if isinstance(parent, PriorOutputRef):
+            parent_port = source_port(registry, parent.binding.tool_name, parent.binding.source_port)
+        else:
+            semantic = registry.get(parent_result.tool_name).semantic_planning
+            ports = [] if semantic is None else [p for p in semantic.producer_ports
+                     if any(member.field_name == parent.output_key for member in p.members)]
+            if len(ports) != 1:
+                break
+            parent_port = ports[0]
+        parent_sha = parent_result.result.get(checksum_field(parent_port))
+        if parent_sha is None:
+            break
+        if parent_sha != source['sha256']:
+            raise AuthorityError('Accepted scientific context source digest changed.')
+        run_id, step_id, port = parent_run, parent_step, parent_port
+    return dict(binding=binding.to_dict(), coordinates=coordinates,
+                references={role: list(origins.values()) for role, origins in references.items()})
 
 
 def identity_source(value, selected, registry):

@@ -498,8 +498,18 @@ def _component(receipt, port, description='The exact reference file for this nat
     preferred = [(k,r) for k,r in candidates if k in selected]
     if port in receipt.get('component_selections', {}) and not preferred:
         raise missing(['The selected reference component conflicts with the current source declarations or is unavailable. Please correct the reference selection.'])
-    if preferred: candidates = preferred
     reason = 'explicit' if preferred else 'automatic'
+    inherited = set(receipt.get('inherited_components', {}).get(port, ()))
+    needs_inherited_choice = False
+    if preferred:
+        candidates = preferred
+    elif inherited:
+        historical = [(key, row) for key, row in candidates if row['components'][port]['sha256'] in inherited]
+        if historical:
+            candidates = historical
+        needs_inherited_choice = len(inherited) != 1 or not historical
+        if not needs_inherited_choice:
+            reason = 'accepted_lineage'
     mapped_fasta = receipt.get('resources',{}).get('reference_sha256')
     if port == 'chrom_sizes' and mapped_fasta is not None:
         candidates = [(k,r) for k,r in candidates if r['components'][port].get('fasta_sha256') == mapped_fasta]
@@ -521,7 +531,7 @@ def _component(receipt, port, description='The exact reference file for this nat
                 recorded_sizes.get(pair[1]['components'][port]['sha256'],pair[1]['components'][port]['sha256'])]),
             order=lambda pair:pair[0])
         needs_coordinate_choice = port == 'peaks' and require_assembly and not receipt.get('assembly') and not preferred
-        if len(options) != 1 or needs_coordinate_choice:
+        if len(options) != 1 or needs_coordinate_choice or needs_inherited_choice:
             label = {'chrom_sizes':'chromosome-size','gene_anno':'gene annotation','peaks':'region feature','reference':'genome FASTA','whitelist':'barcode whitelist'}[port]
             context = ' '.join(str(receipt[key]) for key in ('species', 'assembly') if receipt.get(key) is not None) or 'the supplied source'
             if port == 'gene_anno':
@@ -530,14 +540,15 @@ def _component(receipt, port, description='The exact reference file for this nat
                 raise missing([f'This operation requires {description} No applicable {label} resource is available for {context}.'])
             descriptions = [row['label'] + (f" ({row['components'][port]['contig_count']} contigs; names, lengths or ordering differ)"
                 if 'contig_count' in row['components'][port] else ' (distinct reference component)') for _,row in options]
-            message = ('Select the applicable region feature set and its coordinate system: ' if needs_coordinate_choice else
+            message = ('Confirm the applicable reference for this accepted source: ' if needs_inherited_choice else
+                       'Select the applicable region feature set and its coordinate system: ' if needs_coordinate_choice else
                        f'There are distinct {label} references for {context}. Please identify the reference matching the source data or the requested feature set: ')
             raise missing([message + ' / '.join(descriptions)],
                 options=[dict(handle='resource.' + key, label=row['label'], description=description, port=port)
                          for (key, row), description in zip(options, descriptions)])
         chosen,row = options[0]
         component = row['components'][port]
-        if reason != 'explicit' and (not require_assembly or not receipt.get('assembly')) and row['default']:
+        if reason == 'automatic' and (not require_assembly or not receipt.get('assembly')) and row['default']:
             reason = 'configured_default'
     return component, chosen, reason
 

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from agent.schemas import PriorOutputRef, StepOutputRef
 from agent.schemas.orchestration import _serialize
+from . import annotation_groups
 from .session_state import digest
 from agent.orchestration.semantic_compiler import ScientificInputRequired, ScientificInputRequirement
 
@@ -228,7 +229,7 @@ def validate(interaction, preceding):
             raise ValueError('Annotation prerequisite lost its exact pending scope.')
 
 def _native_grouping_reference(reference, selected):
-    """Resolve retained groups to their actual native producer; no field inference."""
+    """Follow selected native steps until a grouping producer or accepted input."""
     from agent.tools.analysis.cell_result import NATIVE, grouping_key, planned_count_preservation
     seen = set()
     while isinstance(reference, StepOutputRef):
@@ -246,8 +247,6 @@ def _native_grouping_reference(reference, selected):
         if not planned_count_preservation(tool, arguments):
             return None
         reference = arguments.get('input_path')
-    # Accepted grouping selections already use annotation_groups' shared
-    # lineage handoff and keep their captured binding/integrity owner.
     return reference if isinstance(reference, PriorOutputRef) else None
 
 
@@ -294,6 +293,10 @@ def preparer(sessions, interaction, admitted, *, requirement_bindings=None, bind
             if species_name(values.get('species', declared.species)) != species_name(declared.species):
                 raise ValueError('Selected annotation species differs from the captured declaration')
             values['species'] = declared.species
+        source_coordinates = admitted.get('source_coordinates', {})
+        accepted_source = source_coordinates.get('accepted_source', {})
+        if 'species' not in values and source_coordinates.get('species') is not None:
+            values['species'] = source_coordinates['species']
         entries = [entry for entry in lib.entries() if entry['kind'] == 'cellmarker'
                    and ('cellmarker_id' not in values or entry['id'] == values['cellmarker_id'])]
         if len(entries) != 1:
@@ -313,25 +316,28 @@ def preparer(sessions, interaction, admitted, *, requirement_bindings=None, bind
                     value=species) for i, species in enumerate(evidence.metadata['species'])]
                 raise missing('species', 'species', (str(exc) + '. Select the sample species from the pinned CellMarker reference.',), options) from exc
         if declared.groups_result is not None:
-            from .annotation_groups import choices
-            from agent.orchestration.prior_outputs import bind_output
-            rows = [row for row in choices(sessions, interaction) if row['handle'] == declared.groups_result]
+            rows = [row for row in annotation_groups.choices(sessions, interaction)
+                    if row['handle'] == declared.groups_result]
             if len(rows) != 1:
                 raise missing('groups', 'grouping_path', ('Select the compatible accepted initial clustering.',))
-            row = rows[0]
-            binding = bind_output(sessions._application.run_store, sessions._application.registry,
-                                  row['run_id'], row['step_id'], 'dataset')
-            ref = PriorOutputRef(binding, 'matrix_path')
-            if 'grouping_path' in values and values['grouping_path'] != ref:
-                raise ValueError('Selected initial clustering conflicts with the planned source')
-            values['grouping_path'] = ref
+            producer = rows[0]
+            if 'grouping_path' in values:
+                planned = _native_grouping_reference(values['grouping_path'], selected)
+                if not annotation_groups.same_producer(annotation_groups.accepted_producer(sessions, planned), producer):
+                    raise ScientificDiagnostic('ANNOTATION_GROUP_SOURCE_CONFLICT',
+                        'Selected initial clustering conflicts with the planned source')
+            values['grouping_path'] = annotation_groups.producer_reference(sessions, producer)
         supplied = values.get('group_column')
         if supplied is not None and values.get('grouping_path') == values.get('input_path'):
             values.pop('grouping_path', None)
         if supplied is not None and 'grouping_path' in values:
             raise ScientificDiagnostic('ANNOTATION_GROUP_SOURCE_CONFLICT', 'An explicit source grouping must be reused directly; do not plan another initial clustering')
-        if supplied is None and isinstance(values.get('grouping_path'), (StepOutputRef, PriorOutputRef)):
+        if (supplied is None and declared.groups_result is None
+                and isinstance(values.get('grouping_path'), (StepOutputRef, PriorOutputRef))):
             grouping = _native_grouping_reference(values['grouping_path'], selected)
+            if isinstance(grouping, PriorOutputRef):
+                producer = annotation_groups.accepted_producer(sessions, grouping)
+                grouping = None if producer is None else annotation_groups.producer_reference(sessions, producer)
             if grouping is None:
                 raise missing('groups', 'grouping_path', ('Select compatible accepted native clustering or plan its registered prerequisites.',))
             values['grouping_path'] = grouping
@@ -348,18 +354,21 @@ def preparer(sessions, interaction, admitted, *, requirement_bindings=None, bind
                 raise missing('activity_method', 'activity_method', ('Select compatible accepted Gene Activity or its applicable native construction.',))
             from .input_sets import ScientificInputSet
             from .native_raw_handoff import resource_evidence
-            catalog = resource_evidence(tuple(ScientificInputSet(**_serialize(row))
-                for row in admitted.get('resource_catalog', ())))
+            configured = tuple(ScientificInputSet(**_serialize(row)) for row in admitted.get('resource_catalog', ()))
+            captured_ids = {choice.input_set_id for choice in configured}
+            installed = tuple(choice for choice in lib.choices()
+                              if choice.input_set_id not in captured_ids) if accepted_source else ()
+            catalog = resource_evidence(configured + installed)
             reference_species=values.get('species', declared.species)
             if reference_species is not None:
                 reference_species=next((key for key in ('human','mouse')
                     if species_name(reference_species)==species_name(key)),reference_species)
             receipt = dict(catalog=catalog, custom={}, species=reference_species,
-                assembly=declared.assembly or admitted.get('source_coordinates', {}).get('assembly'),
+                assembly=declared.assembly or source_coordinates.get('assembly'),
                 selected=None if declared.resource is None else declared.resource.removeprefix('resource.'))
             raw = next((admitted.get(field + '_context', {}) for field in ('fastq', 'fragments', 'bam')
                 if admitted.get(field + '_context', {}).get('adapter') == 'native-inputs.v1'), {})
-            receipt['source_assembly'] = raw.get('assembly')
+            receipt['source_assembly'] = raw.get('assembly') or accepted_source.get('coordinates', {}).get('assembly')
             if raw.get('source_reference') is not None:
                 receipt['source_reference'] = _serialize(raw['source_reference'])
                 receipt['resources'] = _serialize(raw.get('resources', {}))
@@ -369,6 +378,9 @@ def preparer(sessions, interaction, admitted, *, requirement_bindings=None, bind
                 receipt['selected'] = raw.get('selected')
                 if raw.get('component_selections'):
                     receipt['component_selections'] = _serialize(raw['component_selections'])
+            inherited = accepted_source.get('references', {}).get('gene_anno', ())
+            if inherited:
+                receipt['inherited_components'] = {'gene_anno': [pin['sha256'] for pin in inherited]}
             # Read claims only from this consumer's exact source (or its
             # identity-preserving inspection handoff), never another upload.
             source = values.get('input_path')
@@ -391,8 +403,10 @@ def preparer(sessions, interaction, admitted, *, requirement_bindings=None, bind
             if bindings is not None:
                 bindings.append(dict(tool=tool.name, port='gene_anno', resource=chosen, reason=reason,
                     path=resource['path'], sha256=resource['sha256'], assembly=assembly,
-                    source_declared_assembly=raw.get('assembly'),
-                    source_observations=observations))
+                    source_declared_assembly=receipt['source_assembly'],
+                    source_observations=observations,
+                    **({'inherited_reference': next(pin for pin in inherited if pin['sha256'] == resource['sha256'])}
+                       if reason == 'accepted_lineage' else {})))
             if (values['activity_method'] == 'snapatac2.pp.make_gene_matrix'
                     and not values.get('activity_kwargs', {}).get('use_x') and 'activity_source_path' not in values):
                 raise missing('activity_source', 'activity_source_path', ('Select the accepted fragment/insertion source for native SnapATAC2 Gene Activity.',))
@@ -402,7 +416,12 @@ def preparer(sessions, interaction, admitted, *, requirement_bindings=None, bind
 
 def prepare_operation(arguments, context):
     source = arguments.get('input_path')
-    admitted = dict(context.admitted, source_coordinates=context.coordinate_context(source))
-    arguments = context.coordinate_arguments(arguments, source)
+    coordinates = context.coordinate_context(source,
+        reference_roles=() if arguments.get('activity_path') is not None else ('gene_anno',))
+    admitted = dict(context.admitted, source_coordinates=coordinates)
+    accepted = coordinates.get('accepted_source')
+    if accepted is not None and (accepted['coordinates'] or accepted['references']):
+        context.receipts.append(dict(tool=context.tool.name, step_id=context.step_id, port='source',
+                                     accepted_source=accepted))
     return preparer(context.sessions, context.interaction, admitted,
         requirement_bindings=context.answers, bindings=context.receipts)(context.tool, arguments, context.selected)

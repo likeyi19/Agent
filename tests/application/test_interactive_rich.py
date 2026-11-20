@@ -3,6 +3,7 @@ from dataclasses import replace
 import hashlib
 import io
 import json
+from pathlib import Path
 
 import pytest
 
@@ -160,26 +161,81 @@ def test_existing_supported_detail_owner_is_reused_without_science(app, monkeypa
     assert files(app) == before
 
 
-def test_real_report_delivery_is_labeled_safe_projection_and_pins_both_digests(tmp_path):
+@pytest.fixture
+def report_delivery(tmp_path):
     calls = []
     facade, models = boundary(tmp_path, registry=_counting_registry(calls))
     source = _tiny_h5ad(tmp_path / 'tiny.h5ad')
     facade.create_session('session')
     result = first(facade, source)
-    handle = facade.artifact_handles('session', result.revision_id)[0]
+    return facade, result, calls, models
+
+
+@pytest.mark.parametrize('large_source', [False, True], ids=['small', 'over-16-mib'])
+def test_real_report_delivery_is_labeled_safe_projection_and_pins_both_digests(
+        tmp_path, report_delivery, large_source):
+    facade, result, calls, models = report_delivery
+    revision_id = result.revision_id
+    if large_source:
+        sessions = facade._application.sessions
+        state = sessions.load('session')
+        turn = state.turn('first')
+        report = next(file for file in turn.completion_files if file.path.endswith('.md'))
+        path = Path(report.path)
+        private_source = b'/private/server/technical-report-source\n'
+        with path.open('ab') as stream:
+            for _ in range(17):
+                stream.write(private_source.ljust(1024 * 1024, b' '))
+        assert path.stat().st_size > 16 * 1024 * 1024
+        with path.open('rb') as stream:
+            pinned = replace(report, sha256=hashlib.file_digest(stream, 'sha256').hexdigest())
+        updated_turn = replace(turn, completion_files=tuple(
+            pinned if file == report else file for file in turn.completion_files))
+        sessions._store._write(replace(state, turns=tuple(
+            updated_turn if item.turn_id == turn.turn_id else item for item in state.turns)))
+
+    handle = facade.artifact_handles('session', revision_id)[0]
     before = files(facade._application)
-    content = facade.artifact_content('session', result.revision_id, handle.handle)
+    content = facade.artifact_content('session', revision_id, handle.handle)
     assert content.reference == handle and content.reference.sha256 == handle.sha256
-    assert content.content_type == 'text/plain; charset=utf-8' and content.filename.endswith('.txt')
+    assert content.content_type == 'text/plain; charset=utf-8'
+    assert content.filename == f'agent-report-{handle.handle[:16]}.txt'
     assert content.presentation == 'client_safe_report_projection'
     assert content.data.startswith(b'Client-safe report projection\n')
+    assert f'Session: session\nRevision: {revision_id}\nRun: {result.run_id}\n'.encode() in content.data
     assert handle.sha256.encode() in content.data
     assert b'n_cells [available]: 2' in content.data
     assert str(tmp_path).encode() not in content.data and b'input_path [omitted]' in content.data
+    assert b'/private/server/technical-report-source' not in content.data
     assert hashlib.sha256(content.data).hexdigest() == content.content_sha256 != handle.sha256
     assert calls == ['inspect_scATAC'] and len(models) == 1
     assert files(facade._application) == before
-    assert facade.artifact_content('session', result.revision_id, handle.handle) == content
+    assert facade.artifact_content('session', revision_id, handle.handle) == content
+
+    if large_source:
+        with path.open('r+b') as stream:
+            stream.seek(-1, 2)
+            stream.write(b'!')
+        with pytest.raises(InteractiveBoundaryError) as caught:
+            facade.artifact_content('session', revision_id, handle.handle)
+        assert caught.value.error.code == 'INTERACTIVE_ARTIFACT_UNAVAILABLE'
+        assert str(caught.value.__cause__) == 'Changed report source bytes.'
+
+
+def test_report_delivery_enforces_projection_byte_bound(report_delivery, monkeypatch):
+    facade, result, _, _ = report_delivery
+    revision_id = result.revision_id
+    handle = facade.artifact_handles('session', revision_id)[0]
+    revision = facade.revision('session', revision_id)
+    group = revision.result_groups[0]
+    evidence = dict(group['evidence'], limitations=['é' * 524_288])
+    projection = replace(revision, result_groups=(dict(group, evidence=evidence),))
+    monkeypatch.setattr(facade, 'revision', lambda *args: projection)
+
+    with pytest.raises(InteractiveBoundaryError) as caught:
+        facade.artifact_content('session', revision_id, handle.handle)
+    assert caught.value.error.code == 'INTERACTIVE_ARTIFACT_UNAVAILABLE'
+    assert str(caught.value.__cause__) == 'Report projection exceeds the byte bound.'
 
 
 def accepted_png(app, *, text_metadata=False, valid=True):

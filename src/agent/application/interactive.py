@@ -26,7 +26,7 @@ from .interactive_schemas import (
 )
 from .service import RESERVED_APPLICATION_INPUTS, ResearchAgentApplication
 from .session_state import SessionConflictError, SessionError, canonical, digest
-from .matrix_delivery import MATRIX_CONTRACTS as _MATRIX_CONTRACTS
+from .matrix_delivery import MATRIX_CONTRACTS as _MATRIX_CONTRACTS, _open_matrix_source
 from .dialogue_evidence import _unsafe_fact_field, _unsafe_fact_value, public_citation_source, figure_inventory
 from .local_resources import (LocalResourceAdmission, RegisteredInput, RegisteredInputCollection, RegisteredInputGroup, ResourceAdmissionError,
     qualified_epizoo_resources)
@@ -1313,12 +1313,17 @@ class InteractiveAgentApplication:
             raise _fail('INTERACTIVE_ARTIFACT_UNAVAILABLE')
         try:
             reference, file = matches[0]
-            return reference, self._read_presentation_file(Path(file.path), file.sha256)
+            path = Path(file.path)
+            if reference.artifact_type == 'analysis_report':
+                with _open_matrix_source(path, self._application._workspace.root) as stream:
+                    if hashlib.file_digest(stream, 'sha256').hexdigest() != file.sha256:
+                        raise ValueError('Changed report source bytes.')
+                return reference, None
+            return reference, self._read_presentation_file(path, file.sha256)
         except (ValueError, RuntimeError, OSError) as exc:
             raise _fail('INTERACTIVE_ARTIFACT_UNAVAILABLE') from exc
 
     def _read_presentation_file(self, path, sha256):
-        from .matrix_delivery import _open_matrix_source
         with _open_matrix_source(path, self._application._workspace.root) as stream:
             data = stream.read(16 * 1024 * 1024 + 1)
         if len(data) > 16 * 1024 * 1024 or hashlib.sha256(data).hexdigest() != sha256:
@@ -1360,7 +1365,7 @@ class InteractiveAgentApplication:
             if reference.artifact_type != 'analysis_report':
                 raise ValueError('Unsupported artifact delivery.')
             revision = self.revision(session_id, revision_id)
-            lines = ['Client-safe report projection', '', f'Revision: {revision_id}',
+            lines = ['Client-safe report projection', '', f'Session: {session_id}', f'Revision: {revision_id}',
                 f'Run: {revision.run_id}', f'Turn: {revision.turn_id}',
                 f'Original accepted report SHA-256: {reference.sha256}', '',
                 'This text projects accepted revision output evidence. It is not the original Markdown report.',

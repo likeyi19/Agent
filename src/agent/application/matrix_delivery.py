@@ -4,6 +4,7 @@ import json
 import re
 from collections.abc import Mapping
 import hashlib
+import io
 import os
 from pathlib import Path
 import shutil
@@ -581,6 +582,20 @@ class VerifiedMatrixSnapshot:
             self.close()
 
 
+class _ReservedProjectionWriter(io.RawIOBase):
+    def __init__(self, stream, admit):
+        self._stream = stream
+        self._admit = admit
+
+    def writable(self):
+        return True
+
+    def write(self, data):
+        size = memoryview(data).nbytes
+        self._admit(size)
+        return self._stream.write(data)
+
+
 class MatrixDownloadPreparer:
     """One bounded snapshot/transfer capacity shared by every approved file role.
 
@@ -615,7 +630,7 @@ class MatrixDownloadPreparer:
             self._reserved_bytes -= size
 
     def _reserve_growth(self, size):
-        """Admit measured growth of an already held snapshot, without a new slot."""
+        """Admit extra temporary bytes under an existing transfer slot."""
         with self._lock:
             if (size + self._reserved_bytes > self.policy.temporary_bytes
                     or shutil.disk_usage(tempfile.gettempdir()).free < size + self._reserved_bytes + _DISK_MARGIN_BYTES):
@@ -636,6 +651,7 @@ class MatrixDownloadPreparer:
         native = native_delivery.for_artifact(artifact)
         native_h5ad = native is not None and artifact.role in native.h5ad_roles
         native_projection = native is not None and artifact.role in native.projected_roles
+        native_text = native_projection and artifact.role.endswith(('.tsv', '.xls'))
         sequence = artifact.contract in sequence_delivery.CONTRACTS and getattr(artifact, 'role', None) in sequence_delivery.FILES
         statistical = artifact.contract == statistical_delivery.CONTRACT and getattr(artifact, 'role', None) == statistical_delivery.ROLE
         model_role = getattr(artifact, 'role', None)
@@ -654,7 +670,8 @@ class MatrixDownloadPreparer:
                 raise MatrixDeliveryError('MATRIX_DOWNLOAD_UNAVAILABLE')
             filename, content_type = 'matrix.h5ad', 'application/octet-stream'
         elif native is not None:
-            filename, content_type = artifact.role, native.file_definitions(artifact.manifest)[artifact.role][1]
+            filename, _, content_type = native_delivery.download_format(
+                artifact.role, native.file_definitions(artifact.manifest)[artifact.role])
         elif sequence:
             filename, content_type = artifact.role, sequence_delivery.FILES[artifact.role][1]
         elif model:
@@ -691,6 +708,8 @@ class MatrixDownloadPreparer:
         if type(artifact.sha256) is not str or re.fullmatch('[0-9a-f]{64}', artifact.sha256) is None:
             raise MatrixDeliveryError(prefix + '_DOWNLOAD_UNAVAILABLE')
         delivered_limit = min(size + h5ad_delivery.DESTINATION_OVERHEAD_BYTES, self.policy.delivered_bytes)
+        if native_text:
+            delivered_limit = self.policy.delivered_bytes
         original = artifact.manifest['original_source'] if integrated else None
         original_size = 0 if original is None else original['size_bytes']
         if integrated:
@@ -748,9 +767,19 @@ class MatrixDownloadPreparer:
                 delivered_size = len(data); checksum = hashlib.sha256(data)
             elif model:
                 pass  # Exact accepted state-dict bytes; never deserialize weights for delivery.
-            elif export:
+            elif export or native_text:
                 derivative = tempfile.TemporaryFile(mode='w+b')
-                if composed:
+                if native_text:
+                    def admit(projected_bytes):
+                        nonlocal reservation
+                        if reservation - size + projected_bytes > delivered_limit:
+                            raise MatrixDeliveryError('SCIENTIFIC_DOWNLOAD_LIMIT')
+                        self._reserve_growth(projected_bytes)
+                        reservation += projected_bytes
+
+                    with io.BufferedWriter(_ReservedProjectionWriter(derivative, admit), MATRIX_CHUNK_BYTES) as target:
+                        native.prepare(snapshot, artifact.role, destination=target)
+                elif composed:
                     for source in extra_sources:
                         stream = tempfile.TemporaryFile(mode='w+b')
                         extra_snapshots.append(stream)
@@ -782,7 +811,7 @@ class MatrixDownloadPreparer:
                     if delivered_size > delivered_limit:
                         raise ValueError('Export exceeds the delivery bound.')
                     checksum.update(chunk)
-                if delivered_size < 1:
+                if export and delivered_size < 1:
                     raise ValueError('Empty scientific export.')
                 snapshot.close()
                 snapshot, derivative = derivative, None

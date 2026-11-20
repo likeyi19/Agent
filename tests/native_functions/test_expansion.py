@@ -137,7 +137,10 @@ def test_chromvar_assay_meaning_and_group_order_follow_native_function(tmp_path,
 def test_bed_strands_survive_delivery_without_admitting_formulas():
     import io
     from agent.application.native_delivery import prepare, PRIVATE_LABEL
-    text=prepare(io.BytesIO(b'chr1\t0\t10\t.\t.\t+\nchr1\t20\t30\t.\t.\t-\nchr1\t40\t50\t=SUM(A1)\t.\t+\n'), 'result.tsv').decode()
+    target = io.BytesIO()
+    prepare(io.BytesIO(b'chr1\t0\t10\t.\t.\t+\nchr1\t20\t30\t.\t.\t-\nchr1\t40\t50\t=SUM(A1)\t.\t+\n'),
+        'result.tsv', destination=target)
+    text = target.getvalue().decode()
     assert text.splitlines()[0].endswith('\t+') and text.splitlines()[1].endswith('\t-')
     assert '=SUM' not in text and PRIVATE_LABEL in text
 

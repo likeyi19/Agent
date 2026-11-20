@@ -131,6 +131,10 @@ File inputs use captured source roles and exact checksums. Native chromosome
 sizes, annotation, peaks, whitelist, reference and index inputs have separate ports.
 Plain fragments, gzip/BGZF and Zstandard are passed directly to native ingestion.
 There is no compulsory Agent sorting, canonicalization, recompression or indexing.
+A plain native BAM-derived fragments publication downloads as `fragments.tsv.gz`.
+This ordinary gzip derivative follows the existing field privacy rules and preserves
+record order. It is not BGZF and does not include a Tabix index. The accepted native
+file and its checksum are unchanged; the download has its own content checksum.
 A supplied TBI remains provenance; SnapATAC2 import does not consume it, so its
 coordinate convention is not an import eligibility gate. The separate bounded
 `inspect_scATAC_fragments` operation may describe a TBI header but establishes no

@@ -1,6 +1,6 @@
 """Actual compiler and scientific owners, bounded before Session reservation."""
 from dataclasses import replace
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 import pytest
 from agent.application import preparation_state as records
 from agent.application.scientific_preparation import scoped_source_admission, _owner_requirements
@@ -8,8 +8,10 @@ from agent.application.annotation_preparation import preparer
 from agent.application.raw_handoff import AnnotationDeclaration, declaration_dict
 from agent.application.input_sets import ScientificInputSet
 from agent.application.session_state import Interaction
-from agent.schemas import AgentRequest
+from agent.schemas import AgentRequest, PlanStep, PriorOutputBinding, PriorOutputRef
+from agent.schemas.orchestration import _serialize
 from agent.orchestration import build_default_tool_registry
+from agent.orchestration.preparation_dependencies import accepted_source_identity
 from agent.orchestration.semantic_compiler import (SemanticPlanCandidate, SemanticPlanStep,
     SemanticRequestInputSource as Input, SemanticStepOutputSource as Output,
     SemanticRegisteredChoiceSource as Choice, analyze_candidate, ScientificInputRequired, AnalysisDisposition)
@@ -98,3 +100,24 @@ def test_raw_context_is_removed_before_other_source_annotation():
         downstream_annotation=dict(species='Human'),raw_resource_choice='human')
     scoped,applies=scoped_source_admission(raw,'bam',{}, {'/B'})
     assert not applies and scoped=={}
+
+
+def test_reconstructed_interaction_matches_the_compiler_accepted_source():
+    binding = PriorOutputBinding('已接受运行', 'compute_umap', 'run_snapatac2', 'dataset',
+        'native_matrix_h5ad.v1', 'a'*64, 'b'*64, 'c'*64)
+    origin = Interaction('annotation', 'Annotate the selected groups', 'revision', 1, {})
+    record = records.start('session', origin, origin.utterance,
+        sources={'accepted_results': [binding.to_dict()]}, context={'intake_owner': 'annotation'})
+    captured = Interaction(**_serialize(vars(replace(origin, preparation=record))))
+    source = captured.preparation['task']['sources']
+    frozen = source['accepted_results'][0]
+    assert isinstance(frozen, MappingProxyType)
+    operations = (PlanStep('annotate', 'annotate_scATAC_cell_types',
+        {'input_path': PriorOutputRef(binding, 'matrix_path')}),)
+    registry = build_default_tool_registry()
+    paths = records.operation_sources('annotate', operations, registry, lineage=True)
+    assert paths == [accepted_source_identity(binding.to_dict())] == [accepted_source_identity(_serialize(frozen))]
+    admitted = {'annotation': {'species': 'Human'}, 'inputs': {}}
+    assert scoped_source_admission(admitted, 'annotation', source, paths) == (admitted, True)
+    assert scoped_source_admission(admitted, 'annotation', source, {'/other.h5ad'}) == ({'inputs': {}}, False)
+    assert _serialize(captured.preparation) == record

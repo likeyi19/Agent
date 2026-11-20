@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from agent.schemas import AgentRequest
 from agent.schemas.orchestration import _serialize
 from agent.orchestration.active_context import ActivePlanningContext, planning_context
+from agent.orchestration.preparation_dependencies import accepted_source_identity
 from agent.orchestration.semantic_compiler import (
     analyze_candidate, compile_analysis, AnalysisDisposition, ScientificRequirement, ScientificInputRequired, ScientificInputRequirement,
 )
@@ -136,7 +137,8 @@ def scoped_source_admission(admitted, intake_owner, captured_source, paths):
         if not declared_paths and captured_source.get('source_path'):
             declared_paths.add(captured_source['source_path'])
         if not declared_paths:
-            declared_paths.update('accepted:' + digest(binding) for binding in captured_source.get('accepted_results', ()))
+            declared_paths.update(accepted_source_identity(_serialize(binding))
+                                  for binding in captured_source.get('accepted_results', ()))
         applies = bool(set(paths) & declared_paths)
         if not applies:
             for key in tuple(scoped):

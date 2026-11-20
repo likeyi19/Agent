@@ -60,7 +60,9 @@ def test_all_new_ports_offered_and_bind_exact_private_attachments(source, tmp_pa
 
 def test_headerless_first_row_is_privacy_projected():
     from agent.application.native_delivery import prepare
-    data = prepare(io.BytesIO(b'/private/chrom\t0\t10\t-2\nchr2\t0\t10\t3\n'), 'result.tsv')
+    target = io.BytesIO()
+    prepare(io.BytesIO(b'/private/chrom\t0\t10\t-2\nchr2\t0\t10\t3\n'), 'result.tsv', destination=target)
+    data = target.getvalue()
     assert b'/private/' not in data and b'\t-2' in data
 
 

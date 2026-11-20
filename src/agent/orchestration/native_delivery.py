@@ -13,13 +13,11 @@ def delivery_spec(owner, artifact_type, *, h5ad_roles=(), figure=None):
             raise ValueError('Scientific delivery differs from its exact producing request')
         return value, sha
 
-    def prepare(stream, role):
+    def prepare(stream, role, *, destination=None):
         if role not in owner.DELIVERY_FILES:
             raise ValueError('Unreviewed scientific file')
         from agent.application.native_delivery import prepare as shared_prepare
-        if role.endswith('.xls'):
-            return b''.join(line for line in stream.read().splitlines(keepends=True) if not line.startswith(b'#'))
-        return shared_prepare(stream, role)
+        return shared_prepare(stream, role, destination=destination)
 
     return ScientificDeliverySpec(owner.CONTRACT, artifact_type, owner.DELIVERY_FILES, publication, prepare,
         projected_roles=tuple(name for name in owner.DELIVERY_FILES if name.endswith(('.json','.tsv','.xls'))),

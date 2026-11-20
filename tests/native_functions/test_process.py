@@ -40,7 +40,7 @@ def test_native_tsv_projection_can_grow_by_more_than_fixed_h5ad_overhead(tmp_pat
         assert len(data)-len(raw)>65536
         assert output.size_bytes==len(data) and output.sha256==hashlib.sha256(data).hexdigest()
         assert output.source_sha256==sha
-        assert preparer._reserved_bytes==max(len(raw),len(data))
+        assert preparer._reserved_bytes==len(raw)+len(data)
         assert preparer.active_count==1
     finally:output.close()
     assert preparer._reserved_bytes==0 and preparer.active_count==0
@@ -55,12 +55,14 @@ def test_projection_admits_only_actual_growth_and_releases_on_failure(tmp_path,m
     from agent.tools.analysis import chromvar_native
     import io
     raw=b'source_id\n'+b'=\n'*1000
-    expected=prepare(io.BytesIO(raw),'result.tsv')
+    target=io.BytesIO()
+    prepare(io.BytesIO(raw),'result.tsv',destination=target)
+    expected=target.getvalue()
     p=tmp_path/'result.tsv';p.write_bytes(raw)
     artifact=SimpleNamespace(contract=chromvar_native.CONTRACT,manifest={'tool_name':chromvar_native.TOOL},role='result.tsv',
         size_bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest(),path=p,managed_root=tmp_path)
     # The old worst-case multiplier would unnecessarily reject the exact case.
-    free=(len(raw) if capacity=='growth_denied' else len(expected))+delivery._DISK_MARGIN_BYTES
+    free=len(raw)+(0 if capacity=='growth_denied' else len(expected))+delivery._DISK_MARGIN_BYTES
     monkeypatch.setattr(delivery.shutil,'disk_usage',lambda _:SimpleNamespace(free=free))
     if capacity=='output_limit':monkeypatch.setattr(delivery,'MAX_MATRIX_BYTES',len(expected)-1)
     preparer=delivery.MatrixDownloadPreparer()
@@ -68,7 +70,7 @@ def test_projection_admits_only_actual_growth_and_releases_on_failure(tmp_path,m
         result=preparer.prepare(artifact)
         try:
             assert b''.join(result.iter_chunks())==expected
-            assert preparer._reserved_bytes==len(expected) and preparer.active_count==1
+            assert preparer._reserved_bytes==len(raw)+len(expected) and preparer.active_count==1
         finally:result.close()
     else:
         with pytest.raises(delivery.MatrixDeliveryError) as error:preparer.prepare(artifact)

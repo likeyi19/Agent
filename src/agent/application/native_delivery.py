@@ -1,6 +1,8 @@
 """Registry-declared native files use the existing accepted/private snapshot path."""
 import csv
+import gzip
 import io
+from contextlib import nullcontext
 from pathlib import Path
 from agent.schemas.orchestration import _serialize
 
@@ -27,6 +29,10 @@ def for_artifact(artifact):
                and artifact.manifest.get('contract') == macs3.LEGACY_CONTRACT)
                and name == artifact.manifest.get('tool_name') and artifact.role in spec.file_definitions(artifact.manifest)]
     return matches[0] if len(matches) == 1 else None
+
+
+def download_format(role, definition):
+    return ('fragments.tsv.gz', 'Native BAM-derived fragments (gzip download)', 'application/gzip') if role == 'fragments.tsv' else (role, *definition)
 
 
 def _publication(app, revision, origin, output, step_id=None):
@@ -72,8 +78,9 @@ def accepted_artifacts(app, session_id, revision, origin, output, *, step_id=Non
         identity = dict(session_id=session_id, revision_id=revision.revision_id, turn_id=origin.turn_id, run_id=run_id,
             step_id=step_id, accepted_step_sha256=accepted_step_digest(step), authority_sha256=authority.identity_sha256,
             manifest_sha256=sha, payload=pin)
+        filename, description, _ = download_format(name, definitions[name])
         ref = ScientificArtifactHandle(digest(identity), spec.artifact_type, pin['sha256'], revision.revision_id,
-            origin.turn_id, pin['size_bytes'], name, _label(step, name, definitions[name][0]))
+            origin.turn_id, pin['size_bytes'], filename, _label(step, name, description))
         delivery = dict(manifest, tool_name=step.tool_name, accepted_step_sha256=accepted_step_digest(step))
         items.append(_ScientificMatrixArtifact(ref, path, root, pin['sha256'], pin['size_bytes'], manifest['contract'], delivery, name, sha))
     if _accepted(store, run_id, step_id)[3] != anchor:
@@ -98,8 +105,8 @@ def _label(step, name, default):
     return default
 
 
-def prepare(stream, role):
-    """Common JSON/TSV privacy projection; original publication bytes stay pinned."""
+def prepare(stream, role, *, destination=None):
+    """Project reviewed fields without changing the accepted publication."""
     if role.endswith('.json'):
         import json
         from .sequence_delivery import metadata_bytes
@@ -109,22 +116,40 @@ def prepare(stream, role):
             if isinstance(value.get('receipt'), dict):
                 value['receipt'].pop('session', None)
         return metadata_bytes(value)
-    raw = stream.read()
-    if role.endswith('.tsv'):
-        from .dialogue_evidence import _unsafe_fact_value
-        rows = list(csv.reader(io.StringIO(raw.decode()), delimiter='\t'))
-        # Native tables include both headered statistics and headerless genomic
-        # tracks. Project every cell; a first row is not necessarily a header.
-        for row in rows:
-            for i, text in enumerate(row):
-                try:
-                    float(text); numeric = True
-                except ValueError:
-                    numeric = False
-                if _unsafe_fact_value(text) or not numeric and text not in ('+', '-') and text.startswith(('=', '+', '-', '@')):
-                    row[i] = PRIVATE_LABEL
-        target = io.StringIO(); csv.writer(target, delimiter='\t').writerows(rows); raw = target.getvalue().encode()
-    return raw
+    if role.endswith('.xls'):
+        source = io.TextIOWrapper(stream, encoding='latin-1', newline='')
+        try:
+            for line in source:
+                if not line.startswith('#'):
+                    destination.write(line.encode('latin-1'))
+        finally:
+            source.detach()
+        return
+    if not role.endswith('.tsv'):
+        raise ValueError('Unreviewed native text projection')
+    from .dialogue_evidence import _unsafe_fact_value
+    compression = (gzip.GzipFile(fileobj=destination, mode='wb', filename='', mtime=0, compresslevel=1)
+                   if role == 'fragments.tsv' else nullcontext(destination))
+    source = io.TextIOWrapper(stream, encoding='utf-8', newline='\n')
+    try:
+        with compression as output:
+            target = io.TextIOWrapper(output, encoding='utf-8', newline='')
+            try:
+                writer = csv.writer(target, delimiter='\t')
+                for row in csv.reader(source, delimiter='\t'):
+                    for index, text in enumerate(row):
+                        if _unsafe_fact_value(text):
+                            row[index] = PRIVATE_LABEL
+                        elif text.startswith(('=', '+', '-', '@')) and text not in ('+', '-'):
+                            try:
+                                float(text)
+                            except ValueError:
+                                row[index] = PRIVATE_LABEL
+                    writer.writerow(row)
+            finally:
+                target.detach()
+    finally:
+        source.detach()
 
 
 def accepted_figures(app, turn, revision):

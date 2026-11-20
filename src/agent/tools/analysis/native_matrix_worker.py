@@ -1,4 +1,5 @@
 """Isolated, repository-controlled Python package dispatch; no user code."""
+from collections import defaultdict
 from collections.abc import Mapping
 import hashlib
 import importlib.metadata
@@ -52,6 +53,23 @@ def _receipt_default(value):
     raise TypeError('Unsupported native receipt value: ' + type(value).__name__)
 
 
+def _episcanpy_peak_intervals(adata):
+    """Keep epiScanpy's intervals and ordinals with either peak ID syntax."""
+    from intervaltree import IntervalTree
+
+    peaks = defaultdict(dict)
+    for index, name in enumerate(adata.var_names.tolist()):
+        if ':' in name:
+            chrom, coordinates = name.rsplit(':', 1)
+            start, end = coordinates.split('-')
+        else:
+            chrom, start, end = name.rsplit('_', 2)
+        if chrom not in peaks:
+            peaks[chrom] = IntervalTree()
+        peaks[chrom].addi(int(start), int(end) + 1, index)
+    return peaks
+
+
 def main(request_path):
     started = time.perf_counter()
     raw = Path(request_path).read_bytes(); req = json.loads(raw)
@@ -74,6 +92,7 @@ def main(request_path):
         from cell_result import grouping_key, matrix_transform, representation_key
         function = functions(package)[name]
         activity = package == 'episcanpy' and name == 'tl.geneactivity'
+        correct_peak_parser = activity and version == '0.4.0'
         call_kwargs = kwargs
         activity_source = None
         if activity:
@@ -108,6 +127,9 @@ def main(request_path):
                 a.obsm[key] = values.astype(np.float64)
                 adaptation = dict(slot='obsm.' + key, source_dtype='float32', execution_dtype='float64',
                     conversion='lossless widening for native KD-tree FFI; original representation restored')
+        if correct_peak_parser:
+            native_peak_parser = function.__globals__['_peaks_to_IntervalTree']
+            function.__globals__['_peaks_to_IntervalTree'] = _episcanpy_peak_intervals
         try:
             invoking = time.perf_counter()
             native_started_at = datetime.now(timezone.utc).isoformat()
@@ -117,6 +139,8 @@ def main(request_path):
             invoked = time.perf_counter()
             native_finished_at = datetime.now(timezone.utc).isoformat()
         finally:
+            if correct_peak_parser:
+                function.__globals__['_peaks_to_IntervalTree'] = native_peak_parser
             if restored_rep is not None:
                 a.obsm[restored_rep[0]] = restored_rep[1]
         native_type = type(result).__module__ + '.' + type(result).__name__
@@ -227,6 +251,8 @@ def main(request_path):
             receipt['gene_activity_source'] = activity_source
             receipt['inherited_slots'] = activity_source['slots']
             receipt['implementation'] = [activity_implementation]
+            if correct_peak_parser:
+                receipt['gene_activity_peak_parser'] = _episcanpy_peak_intervals.__name__
         if selection is not None:
             if package=='episcanpy' and name=='tl.louvain' and kwargs.get('flavor','vtraag')=='vtraag' and selection['selected_value'] is None:
                 from louvain import RBConfigurationVertexPartition

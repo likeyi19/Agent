@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 
 import anndata as ad
 import numpy as np
@@ -150,6 +151,22 @@ def test_native_epi_supplied_measurement_dense_axis_and_inherited_slots(native, 
     np.testing.assert_array_equal(b.X, [[1, 0], [0, 1]] if binary else [[2, 0], [0, 3]])
     assert b.obs_names.tolist() == a.obs_names.tolist() and b.var_names.tolist() == ['Alpha', 'Beta']
     assert b.var.gene_id.tolist() == ['G1', 'G2']
+    from agent.tools.analysis.native_matrix import library
+    executable = os.environ.get('AGENT_EPISCANPY_PYTHON') or str(
+        library().root.parent / 'runtimes' / EPISCANPY.runtime / 'env/bin/python')
+    reference_path = sample['root'] / 'unmodified-epi.h5ad'
+    subprocess.run([executable, '-I', '-B', '-c', """
+import sys
+import anndata as ad
+import episcanpy
+
+source, gtf, target = sys.argv[1:]
+episcanpy.tl.geneactivity(ad.read_h5ad(source), gtf_file=gtf, upstream=0).write_h5ad(target)
+""", str(sample['peaks']), str(sample['gtf']), str(reference_path)], check=True)
+    reference = ad.read_h5ad(reference_path)
+    np.testing.assert_array_equal(b.X, reference.X)
+    pd.testing.assert_frame_equal(b.var, reference.var, check_like=True)
+    pd.testing.assert_frame_equal(b.obs, reference.obs)
     desc = out['parameters']['gene_activity']
     assert desc['source_measurement'] == a.uns['matrix_semantics']
     assert desc['axes'] == axis_identity(out['matrix_path'])
@@ -158,6 +175,52 @@ def test_native_epi_supplied_measurement_dense_axis_and_inherited_slots(native, 
     np.testing.assert_array_equal(b.obsm['X_peak'], a.obsm['X_peak'])
     assert (b.obsp['peak_graph'] != a.obsp['peak_graph']).nnz == 0
     assert sha(sample['peaks']) == before
+
+
+def test_native_epi_underscore_contigs_preserve_ordinals_and_endpoints(native, sample):
+    chrom = 'chr11_gl000202_random'
+    a = ad.AnnData(sparse.csr_matrix([[4, 1, 16, 8, 2, 32], [3, 2, 5, 7, 11, 13]]),
+        obs=pd.DataFrame(index=['A', 'B']), var=pd.DataFrame(index=[
+            f'{chrom}:7202-7547', 'chr1:100-200', f'{chrom}:7201-7201',
+            f'{chrom}_7202_7547', 'chr1_100_200', f'{chrom}:7548-7550',
+        ]))
+    a.write_h5ad(sample['peaks'])
+    before = sha(sample['peaks'])
+    sample['gtf'].write_text(''.join(
+        f'{contig}\tHAVANA\tgene\t{position}\t{position}\t.\t+\t.\tgene_id "{gene}"; gene_name "{gene}";\n'
+        for contig, position, gene in (
+            ('chr1', 200, 'Ordinary'), (chrom, 7202, 'Start'),
+            (chrom, 7547, 'End'), (chrom, 7548, 'After'),
+        )))
+    out = activity(sample, EPISCANPY, sample['peaks'], 'epi-underscore-contigs', upstream=0)
+    result = ad.read_h5ad(out['matrix_path'])
+    assert result.obs_names.tolist() == ['A', 'B']
+    assert result.var_names.tolist() == ['Ordinary', 'Start', 'End', 'After']
+    np.testing.assert_array_equal(result.X, [[3, 12, 12, 32], [13, 10, 10, 13]])
+    assert sha(sample['peaks']) == before
+    assert out['source_identity']['sha256'] == before
+    root = Path(out['matrix_path']).parent
+    receipt = json.loads((root / 'native-receipt.json').read_text())
+    assert receipt['gene_activity_peak_parser'] == '_episcanpy_peak_intervals'
+    worker = next(pin for pin in receipt['implementation'] if Path(pin['path']).name == 'native_matrix_worker.py')
+    assert worker['sha256'] == sha(worker['path'])
+    manifest = json.loads((root / 'manifest.json').read_text())
+    assert worker in manifest['sources']
+
+
+@pytest.mark.parametrize('feature,error', [
+    ('chr1:missing-200', 'invalid literal for int'),
+    ('chr11_gl000202_random:7202', 'not enough values to unpack'),
+    ('chr1_200_100', 'Null Interval'),
+])
+def test_native_epi_malformed_coordinates_fail_without_publication(native, sample, feature, error):
+    a = ad.read_h5ad(sample['peaks'])
+    a.var_names = [feature, a.var_names[1]]
+    a.write_h5ad(sample['peaks'])
+    with pytest.raises(NativeInvocationError, match=error):
+        activity(sample, EPISCANPY, sample['peaks'], 'malformed', upstream=0)
+    assert not (sample['root'] / 'malformed/manifest.json').exists()
+    assert 'ValueError' in (sample['root'] / 'malformed/native-failure.log').read_text()
 
 
 def test_native_epi_strand_windows_annotation_defaults_and_duplicate_names(native, sample):
